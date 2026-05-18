@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Binance AI Copilot",
+  "description": "AI overlay, order book analytics, and one-click trade actions for Binance",
+  "version": "0.3.1",
+  "permissions": ["storage", "notifications"],
+  "host_permissions": [
+    "https://www.binance.com/*",
+    "https://fapi.binance.com/*",
+    "http://127.0.0.1:8000/*",
+    "http://127.0.0.1:8020/*",
+    "http://127.0.0.1:8021/*",
+    "http://127.0.0.1:8022/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.binance.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "binance-autotrend-copilot",
+  "version": "0.1.0",
+  "description": "AI Copilot overlay for Binance built with Plasmo",
+  "author": "KGB008",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "build:plasmo": "plasmo build",
+    "dev": "plasmo dev"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.314",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "esbuild": "^0.28.0",
+    "plasmo": "0.90.5",
+    "typescript": "5.6.3"
+  },
+  "manifest": {
+    "manifest_version": 3,
+    "name": "Binance AI Copilot",
+    "description": "AI overlay, order book analytics, and one-click trade actions for Binance",
+    "version": "0.2.0",
+    "permissions": [
+      "storage",
+      "notifications"
+    ],
+    "host_permissions": [
+      "https://www.binance.com/*",
+      "https://fapi.binance.com/*",
+      "http://127.0.0.1:8000/*",
+      "http://127.0.0.1:8020/*",
+      "http://127.0.0.1:8021/*",
+      "http://127.0.0.1:8022/*"
+    ],
+    "content_scripts": [
+      {
+        "matches": [
+          "https://www.binance.com/*"
+        ],
+        "js": [
+          "contents/binance-overlay.js"
+        ],
+        "run_at": "document_idle"
+      }
+    ]
+  }
+}

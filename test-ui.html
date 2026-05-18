@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>Binance AI Copilot — UI Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; font-family: system-ui; display: flex; min-height: 100vh; }
+    .mock-binance { flex: 1; padding: 40px; color: #ccc; }
+    .mock-binance h1 { color: #f0b90b; margin-bottom: 10px; }
+    .mock-binance p { color: #666; }
+  </style>
+</head>
+<body>
+  <div class="mock-binance">
+    <h1>Binance Futures (Mock)</h1>
+    <p>BTCUSDT — this area simulates the Binance trading page.</p>
+    <p style="margin-top:20px;color:#444">The sidebar on the right is the AI Copilot extension →</p>
+  </div>
+  <script>
+    // Mock environment for testing
+    window.chrome = { storage: { local: { get: (k,cb) => cb({}), set: (o,cb) => cb && cb(), remove: (k,cb) => cb && cb() } } };
+    window.__MOCK_FUTURES__ = true;
+
+    // Mock fetch to simulate backend responses
+    const _origFetch = window.fetch;
+    window.fetch = async (url, opts) => {
+      const u = typeof url === 'string' ? url : url.url;
+      
+      if (u.includes('/intel/analyze')) {
+        return new Response(JSON.stringify({
+          symbol: "BTCUSDT", signal: "LONG", confidence: 0.78,
+          setup: "Order flow skewed to bids with momentum confirmation",
+          notes: ["Momentum 0.15% | VolRatio 1.32", "Confluence soft-confirm LONG", "Confluence score L/S = 6/2"],
+          precision: { rsi14: 62.3, atrPct: 0.0042, trendUp: true, trendDown: false, breakoutUp: true, breakoutDown: false, longScore: 6, shortScore: 2 },
+          momentum: { momentumPct: 0.1523, volumeRatio: 1.32, divergence: "NONE" },
+          execution: { bid: 104250, ask: 104252, mark: 104251, spreadBps: 1.9, lastFundingRate: 0.0001 }
+        }));
+      }
+      if (u.includes('/risk-alerts')) {
+        return new Response(JSON.stringify({ alerts: ["ควรตรวจข่าวแรงก่อนเพิ่มเลเวอเรจ", "Funding rate อาจแกว่งแรงช่วงเปลี่ยนเซสชัน"] }));
+      }
+      if (u.includes('/symbol-meta')) {
+        return new Response(JSON.stringify({ symbol: "BTCUSDT", stepSize: 0.001, minQty: 0.001, tickSize: 0.1, markPrice: 104251, minUsdtApprox: 104.251 }));
+      }
+      if (u.includes('/autotrade/status')) {
+        return new Response(JSON.stringify({
+          running: true, sessionId: "test-123",
+          config: { symbol: "BTCUSDT", executionMode: "PAPER", leverage: 5 },
+          tradesLastHour: 2,
+          paper: { wins: 5, losses: 2, winRatePct: 71.4, realizedPnl: 12.35, history: [] },
+          activePosition: { mode: "PAPER", paper: { side: "LONG", qty: 0.048, notionalUsdtApprox: 5004.05 } },
+          log: [{ ts: Date.now()/1000, msg: "LONG BTCUSDT conf=0.78 qty=0.048" }],
+          lastSkip: null, consecutiveErrors: 0, liveGuardian: null
+        }));
+      }
+      if (u.includes('/risk-config')) {
+        return new Response(JSON.stringify({ killSwitch: false, maxNotionalUSDT: 200, maxLeverage: 5, maxDailyLossUSDT: 50, dailyRealizedPnlUSDT: 12.35 }));
+      }
+      if (u.includes('/trade')) {
+        return new Response(JSON.stringify({ status: "ok", quantity: 0.048 }));
+      }
+      if (u.includes('/autotrade/start')) {
+        return new Response(JSON.stringify({ sessionId: "test-456", status: "started" }));
+      }
+      if (u.includes('/autotrade/stop') || u.includes('/autotrade/reset')) {
+        return new Response(JSON.stringify({ status: "stopped" }));
+      }
+      // Fallback
+      return new Response(JSON.stringify({}));
+    };
+  </script>
+  <script src="./content.js"></script>
+</body>
+</html>
