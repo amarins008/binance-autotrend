@@ -11,6 +11,7 @@
   const MODE_PREF_KEY = "binance_copilot_auto_mode_pref_v1";
   const AUTOTRADE_STATE_KEY = "binance_copilot_autotrade_state_v1";
   const TAB_KEY = "binance_copilot_tab_v1";
+  const PERF_MODE_KEY = "binance_copilot_perf_mode_v1";
   let autoSessionId = null;
   let symbolSyncInProgress = false;
   let lastSymbolSyncTs = 0;
@@ -18,6 +19,21 @@
   let refreshSignalInFlight = false;
   let refreshAutoInFlight = false;
   let autoRunningState = false;
+  let lastFullAutoStatusAt = 0;
+  const AUTO_STATUS_FULL_EVERY_MS = 60000;
+  const AUTO_STATUS_POLL_VISIBLE_MS = 9000;
+  const AUTO_STATUS_POLL_HIDDEN_MS = 18000;
+  const AUTO_STATUS_POLL_ECO_VISIBLE_MS = 15000;
+  const AUTO_STATUS_POLL_ECO_HIDDEN_MS = 30000;
+  const HEALTH_POLL_MS = 10000;
+  const HEALTH_POLL_ECO_MS = 20000;
+  const SYMBOL_POLL_MS = 3000;
+  const SYMBOL_POLL_ECO_MS = 6000;
+  let perfEcoMode = true;
+  let healthPollTimer = null;
+  let symbolPollTimer = null;
+  let lastAutoLiteSig = "";
+  let lastAutoFullSig = "";
 
   /* ── Storage helpers ── */
   const storageGet = (keys) => new Promise((r) => { try { if (typeof chrome !== "undefined" && chrome.storage?.local) chrome.storage.local.get(keys, r); else r({}); } catch { r({}); } });
@@ -108,7 +124,6 @@
 #${id} .tab-pane{display:none}
 #${id} .tab-pane.active{display:flex;flex-direction:column;gap:10px}
 #${id} #pane-auto.active .card{border-color:rgba(59,130,246,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 0 0 1px rgba(59,130,246,.08)}
-#${id} #pane-scan.active .card{border-color:rgba(16,185,129,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 0 0 1px rgba(16,185,129,.08)}
 
 /* Signal Badge */
 #${id} .sig-badge{text-align:center;padding:16px 12px}
@@ -209,6 +224,18 @@
 #${id} .a-badge.run{background:rgba(16,185,129,.15);border-color:rgba(16,185,129,.4);color:#86efac}
 #${id} .a-badge.run::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--long);margin-right:5px;animation:bc-pulse 1.5s infinite}
 #${id} .a-badge.stop{background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.3);color:var(--text2)}
+#${id} .a-badge.regime-trend{background:rgba(16,185,129,.14);border-color:rgba(16,185,129,.45);color:#86efac}
+#${id} .a-badge.regime-range{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.45);color:#fcd34d}
+#${id} .a-badge.regime-volatile{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.45);color:#fca5a5}
+#${id} .a-badge.regime-normal{background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.45);color:#67e8f9}
+#${id} .regime-card{margin-top:8px;border-radius:var(--radius-s);padding:10px;border:1px solid var(--border);background:linear-gradient(135deg,rgba(2,6,23,.8),rgba(15,23,42,.86))}
+#${id} .regime-card.trend{border-color:rgba(16,185,129,.45);box-shadow:0 0 0 1px rgba(16,185,129,.12) inset}
+#${id} .regime-card.range{border-color:rgba(245,158,11,.45);box-shadow:0 0 0 1px rgba(245,158,11,.12) inset}
+#${id} .regime-card.volatile{border-color:rgba(239,68,68,.45);box-shadow:0 0 0 1px rgba(239,68,68,.12) inset}
+#${id} .regime-card.normal{border-color:rgba(6,182,212,.45);box-shadow:0 0 0 1px rgba(6,182,212,.12) inset}
+#${id} .regime-title{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em}
+#${id} .regime-value{font-size:18px;font-weight:900;line-height:1.1;margin-top:3px}
+#${id} .regime-desc{font-size:11px;color:var(--text2);margin-top:4px;line-height:1.35}
 
 /* Guardian */
 #${id} .guard{margin-top:8px;background:linear-gradient(135deg,rgba(6,182,212,.12),rgba(15,23,42,.9));
@@ -398,6 +425,15 @@
           <div><div class="lbl">Hybrid Min Edge</div><input id="autoHybridMinEdge" class="inp mn" type="number" step="0.01" min="0" max="1.0" value="0.06"></div>
         </div>
         <div><div class="lbl">เพดานจำนวน Position สูงสุด</div><input id="autoMaxOpenPositions" class="inp mn" type="number" step="1" min="1" max="20" value="6"></div>
+        <label class="chk"><input id="autoVolTargetEnabled" type="checkbox" checked> เปิด Vol-Target Position Sizing</label>
+        <div class="row">
+          <div><div class="lbl">Vol Target %</div><input id="autoVolTargetPct" class="inp mn" type="number" step="0.01" min="0.05" max="3.0" value="0.22"></div>
+          <div><div class="lbl">Vol Lookback (แท่ง 1m)</div><input id="autoVolLookback" class="inp mn" type="number" step="1" min="10" max="240" value="30"></div>
+        </div>
+        <div class="row">
+          <div><div class="lbl">Vol Size Min Mult</div><input id="autoVolSizeMinMult" class="inp mn" type="number" step="0.05" min="0.2" max="1.2" value="0.6"></div>
+          <div><div class="lbl">Vol Size Max Mult</div><input id="autoVolSizeMaxMult" class="inp mn" type="number" step="0.05" min="0.8" max="3.0" value="1.4"></div>
+        </div>
         <div><div class="lbl">ข้ามเมื่อ funding ต่อต้าน (0=ปิด)</div><input id="autoSkipFunding" class="inp mn" type="number" step="0.0001" min="0" max="0.02" value="0"></div>
         <label class="chk"><input id="autoFlip" type="checkbox"> อนุญาตกลับฝั่ง (Flip)</label>
       </div>
@@ -410,11 +446,25 @@
     <div class="card">
       <div class="card-t">สถานะ</div>
       <div id="autoStatus" class="a-badges"><span class="a-badge stop">หยุดทำงาน</span></div>
+      <div id="orphanBox" class="log" style="margin-top:8px">
+        Orphan LIVE: —
+        <div class="g3" style="margin-top:6px">
+          <button id="orphanCheckBtn" class="btn btn-ghost btn-sm">เช็ก Orphan</button>
+          <button id="orphanCloseBtn" class="btn btn-warn btn-sm">Close All LIVE</button>
+          <button id="orphanAdoptBtn" class="btn btn-close btn-sm">Adopt LIVE</button>
+        </div>
+      </div>
       <div id="overallStats" class="kpis" style="margin-top:8px">
         <div class="kpi"><div class="kpi-l">Primary</div><div class="kpi-v mn">—</div></div>
         <div class="kpi"><div class="kpi-l">Active</div><div class="kpi-v mn">—</div></div>
         <div class="kpi"><div class="kpi-l">Hybrid Switch</div><div class="kpi-v mn">—</div></div>
         <div class="kpi"><div class="kpi-l">Top Candidate</div><div class="kpi-v mn">—</div></div>
+      </div>
+      <div id="regimeCard" class="regime-card normal">
+        <div class="regime-title">Market Regime</div>
+        <div id="regimeValue" class="regime-value mn">UNKNOWN</div>
+        <div id="regimeDesc" class="regime-desc">รอสัญญาณจากระบบ…</div>
+        <div id="regimeImpact" class="regime-desc mn">MinConf +0.00 | Size x1.00 | strictness normal</div>
       </div>
       <div id="paperStats" class="kpis">
         <div class="kpi"><div class="kpi-l">Win / Loss</div><div class="kpi-v">—</div></div>
@@ -427,52 +477,6 @@
         <div id="guardianBody" class="guard-r">—</div>
       </div>
       <div id="autoLog" class="log">Log: —</div>
-    </div>
-  </div>
-
-  <!-- ═══ SCAN TAB ═══ -->
-  <div id="pane-scan" class="tab-pane">
-    <div class="card">
-      <div class="card-t">AutoTrade Scan (หลายเหรียญ)</div>
-      <div class="stack">
-        <div class="row">
-          <div><div class="lbl">โหมด</div><select id="scanMode" class="sel"><option value="PAPER">PAPER (จำลอง)</option><option value="LIVE">LIVE (จริง)</option></select></div>
-        </div>
-        <div class="row">
-          <div><div class="lbl">Min Confidence</div><input id="scanMinConf" class="inp mn" type="number" step="0.05" min="0.4" max="0.95" value="0.65"></div>
-          <div><div class="lbl">Max Spread (bps)</div><input id="scanMaxSpread" class="inp mn" type="number" step="0.5" min="1" max="200" value="22"></div>
-        </div>
-        <div class="row">
-          <div><div class="lbl">Max Slippage (bps)</div><input id="scanMaxSlip" class="inp mn" type="number" step="0.5" min="1" max="300" value="28"></div>
-          <div><div class="lbl">Trailing Stop %</div><input id="scanTrail" class="inp mn" type="number" step="0.1" min="0" max="10" value="0.6"></div>
-        </div>
-        <div class="row">
-          <div><div class="lbl">สแกนสภาพคล่องสูงสุด</div><input id="autoScanTopLiquid" class="inp mn" type="number" step="1" min="5" max="120" value="30"></div>
-          <div><div class="lbl">วิเคราะห์ลึกสูงสุด</div><input id="autoScanAnalyzeTop" class="inp mn" type="number" step="1" min="3" max="30" value="8"></div>
-        </div>
-        <div><div class="lbl">Whitelist เหรียญ (คั่นด้วย ,)</div><input id="autoWhitelist" class="inp" type="text" placeholder="BTCUSDT,ETHUSDT,SOLUSDT"></div>
-        <div class="g3">
-          <button id="wlMajor" class="btn btn-ghost btn-sm">Major</button>
-          <button id="wlAlt" class="btn btn-ghost btn-sm">Alt</button>
-          <button id="wlMeme" class="btn btn-ghost btn-sm">Meme</button>
-        </div>
-        <label class="chk"><input id="autoAdaptiveSizing" type="checkbox" checked> ปรับขนาดไม้ตามคุณภาพสัญญาณอัตโนมัติ</label>
-        <div><div class="lbl">เพิ่มขนาดไม้สูงสุด (%)</div><input id="autoAdaptiveBoost" class="inp mn" type="number" step="1" min="0" max="150" value="35"></div>
-        <div><div class="lbl">ข้ามเมื่อ funding ต่อต้าน (0=ปิด)</div><input id="scanSkipFunding" class="inp mn" type="number" step="0.0001" min="0" max="0.02" value="0"></div>
-        <label class="chk"><input id="scanFlip" type="checkbox"> อนุญาตกลับฝั่ง (Flip)</label>
-      </div>
-      <div class="g3" style="margin-top:10px">
-        <button id="scanStart" class="btn btn-long btn-sm">▶ เริ่ม Scan</button>
-        <button id="scanStop" class="btn btn-short btn-sm">■ หยุด</button>
-        <button id="scanReset" class="btn btn-wait btn-sm">↺ รีเซ็ต</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-t">สถานะ Scan</div>
-      <div id="scanStatus" class="a-badges"><span class="a-badge stop">หยุดทำงาน</span></div>
-      <div id="scanLog" class="log">Log: —</div>
-      <div class="card-t" style="margin-top:8px">Scan Leaderboard</div>
-      <div id="scanBoard" class="log">—</div>
     </div>
   </div>
 
@@ -492,6 +496,7 @@
         <code id="backendCmd" class="backend-cmd" style="display:none"></code>
       </div>
       <button id="backendCheckNow" class="btn btn-ghost btn-block btn-sm" type="button">↻ ตรวจสอบสถานะ</button>
+      <label class="chk" style="margin-top:8px"><input id="perfEcoMode" type="checkbox" checked> โหมดประหยัดทรัพยากร (ลดภาระ Chrome)</label>
     </div>
     <div class="card">
       <div class="card-t">⛨ Risk Guardian</div>
@@ -516,7 +521,7 @@
 
   /* ── Tab System ── */
   const switchTab = (t) => {
-    if (t === "scan") t = "auto";
+    if (!["signal","trade","auto","config"].includes(String(t))) t = "signal";
     root.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
     root.querySelectorAll(".tab-pane").forEach(p => p.classList.toggle("active", p.id === `pane-${t}`));
     try { localStorage.setItem(TAB_KEY, t); } catch {}
@@ -536,15 +541,14 @@
   const saveFlipPref = (c) => { try { localStorage.setItem(FLIP_PREF_KEY, c?"1":"0"); } catch {} };
   const loadModePref = () => { try { const r = localStorage.getItem(MODE_PREF_KEY); if (r==="LIVE"||r==="PAPER") return r; } catch {} return "PAPER"; };
   const saveModePref = (m) => { try { if (m==="LIVE"||m==="PAPER") localStorage.setItem(MODE_PREF_KEY, m); } catch {} };
+  const loadPerfMode = () => { try { return localStorage.getItem(PERF_MODE_KEY) !== "normal"; } catch {} return true; };
+  const savePerfMode = (eco) => { try { localStorage.setItem(PERF_MODE_KEY, eco ? "eco" : "normal"); } catch {} };
+  perfEcoMode = loadPerfMode();
 
   const flipEl = root.querySelector("#autoFlip");
   if (flipEl) { flipEl.checked = loadFlipPref(); flipEl.addEventListener("change", () => saveFlipPref(!!flipEl.checked)); }
   const modeEl = root.querySelector("#autoMode");
   if (modeEl) { modeEl.value = loadModePref(); modeEl.addEventListener("change", () => saveModePref(modeEl.value)); }
-  const scanModeEl0 = root.querySelector("#scanMode");
-  if (scanModeEl0) { scanModeEl0.value = loadModePref(); scanModeEl0.addEventListener("change", () => saveModePref(scanModeEl0.value)); }
-  const scanFlipEl = root.querySelector("#scanFlip");
-  if (scanFlipEl) { scanFlipEl.checked = loadFlipPref(); scanFlipEl.addEventListener("change", () => saveFlipPref(!!scanFlipEl.checked)); }
 
   /* ── R:R ratio ── */
   const updateRR = () => {
@@ -559,14 +563,28 @@
   /* ── Button sync ── */
   const syncAutoButtons = (running) => {
     const sa = root.querySelector("#autoStart"), so = root.querySelector("#autoStop");
-    const ss = root.querySelector("#scanStart"), sx = root.querySelector("#scanStop");
     if (sa && so) {
       if (running) { sa.disabled=true;so.disabled=false;sa.style.opacity=".5";so.style.opacity="1";sa.textContent="🔄 กำลังรัน"; if(!so.classList.contains("is-loading")) so.textContent="■ หยุด"; }
       else { sa.disabled=false;so.disabled=true;sa.style.opacity="1";so.style.opacity=".5"; if(!sa.classList.contains("is-loading")) sa.textContent="▶ เริ่ม"; so.textContent="ยังไม่เริ่ม"; }
     }
-    if (ss && sx) {
-      if (running) { ss.disabled=true;sx.disabled=false;ss.style.opacity=".5";sx.style.opacity="1";ss.textContent="🔄 กำลังรัน"; if(!sx.classList.contains("is-loading")) sx.textContent="■ หยุด"; }
-      else { ss.disabled=false;sx.disabled=true;ss.style.opacity="1";sx.style.opacity=".5"; if(!ss.classList.contains("is-loading")) ss.textContent="▶ เริ่ม Scan"; sx.textContent="ยังไม่เริ่ม"; }
+  };
+
+  const refreshOrphanBox = async () => {
+    const box = root.querySelector("#orphanBox");
+    if (!box) return;
+    try {
+      const res = await fetch(`${BASE}/autotrade/orphan-check`);
+      const data = await res.json();
+      const n = Number(data?.count||0);
+      if (n <= 0) {
+        box.childNodes[0].textContent = "Orphan LIVE: ไม่มีโพซิชันค้าง";
+        return;
+      }
+      const p = (Array.isArray(data.positions) && data.positions.length) ? data.positions[0] : null;
+      const txt = p ? `Orphan LIVE: ${n} | ${p.symbol} ${p.side} qty ${Number(p.qty||0).toFixed(6)} | uPnL ${Number(p.unRealizedProfit||0).toFixed(6)}` : `Orphan LIVE: ${n}`;
+      box.childNodes[0].textContent = txt;
+    } catch {
+      box.childNodes[0].textContent = "Orphan LIVE: ตรวจสอบไม่สำเร็จ";
     }
   };
   const forceUnlockAutoControls = () => {
@@ -574,6 +592,21 @@
     if (sa) { sa.disabled = false; sa.style.opacity = "1"; if(!sa.classList.contains("is-loading")) sa.textContent = "▶ เริ่ม"; }
     if (so) { so.disabled = true; so.style.opacity = ".5"; if(!so.classList.contains("is-loading")) so.textContent = "ยังไม่เริ่ม"; }
     if (sr) { sr.disabled = false; sr.style.opacity = "1"; if(!sr.classList.contains("is-loading")) sr.textContent = "↺ รีเซ็ต"; }
+  };
+  const getCurrentTab = () => {
+    const active = root.querySelector(".tab.active");
+    return active?.getAttribute("data-tab") || "signal";
+  };
+  const autoStatusPollIntervalMs = () => {
+    const visible = document.visibilityState === "visible";
+    if (perfEcoMode) return visible ? AUTO_STATUS_POLL_ECO_VISIBLE_MS : AUTO_STATUS_POLL_ECO_HIDDEN_MS;
+    return visible ? AUTO_STATUS_POLL_VISIBLE_MS : AUTO_STATUS_POLL_HIDDEN_MS;
+  };
+  const symbolPollIntervalMs = () => perfEcoMode ? SYMBOL_POLL_ECO_MS : SYMBOL_POLL_MS;
+  const healthPollIntervalMs = () => perfEcoMode ? HEALTH_POLL_ECO_MS : HEALTH_POLL_MS;
+  const updatePerfModeUI = () => {
+    const el = root.querySelector("#perfEcoMode");
+    if (el) el.checked = !!perfEcoMode;
   };
   const syncFocusLayout = (running) => {
     ["pane-signal","pane-trade"].forEach(pid => { const el = root.querySelector(`#${pid}`); if(el) el.style.pointerEvents = running?"none":""; });
@@ -749,7 +782,7 @@
           if (await waitForBackend()) {
             setAlerts(["Backend กลับมาออนไลน์แล้ว"]);
             refreshSignal();
-            await refreshAutoStatus();
+            await refreshAutoStatus(true);
             refreshRisk();
           } else {
             setAlerts(["รีสตาร์ทแล้วแต่ยังไม่ตอบ — ลอง launcher หรือรัน uvicorn ด้วยมือ"]);
@@ -763,7 +796,7 @@
         if (await waitForBackend()) {
           setAlerts(["Backend กลับมาออนไลน์แล้ว"]);
           refreshSignal();
-          await refreshAutoStatus();
+          await refreshAutoStatus(true);
           refreshRisk();
           return;
         }
@@ -783,7 +816,7 @@
         if (await waitForBackend()) {
           setAlerts(["Backend กลับมาออนไลน์แล้ว"]);
           refreshSignal();
-          await refreshAutoStatus();
+          await refreshAutoStatus(true);
           refreshRisk();
         } else {
           setAlerts([
@@ -802,7 +835,7 @@
         if (await waitForBackend()) {
           setAlerts(["Backend กลับมาออนไลน์แล้ว"]);
           refreshSignal();
-          await refreshAutoStatus();
+          await refreshAutoStatus(true);
           refreshRisk();
           return;
         }
@@ -950,7 +983,7 @@
         const data = await res.json();
         if(!res.ok) throw new Error(data?.detail?.message || (typeof data?.detail==="string"?data.detail:JSON.stringify(data)));
         setAlerts([`ปิดโพซิชันฉุกเฉินแล้ว (${payload.symbol})`]);
-        await refreshAutoStatus();
+        await refreshAutoStatus(true);
       });
     } catch(e) { setAlerts([`ปิด Guardian ไม่สำเร็จ: ${e.message||e}`]); }
   });
@@ -974,104 +1007,227 @@
     updateRR();
   };
   root.querySelectorAll("button[data-preset]").forEach(b => { b.onclick = () => applyPreset(b.getAttribute("data-preset")); });
-  const applyWhitelistPreset = (name) => {
-    const map = {
-      MAJOR: ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"],
-      ALT: ["ADAUSDT","LINKUSDT","AVAXUSDT","DOGEUSDT","LTCUSDT","DOTUSDT","UNIUSDT","ATOMUSDT"],
-      MEME: ["DOGEUSDT","SHIBUSDT","PEPEUSDT","WIFUSDT","BONKUSDT","FLOKIUSDT"]
-    };
-    const wl = root.querySelector("#autoWhitelist");
-    if(!wl) return;
-    wl.value = (map[name] || []).join(",");
-    setAlerts([`ตั้งค่า Whitelist Preset: ${name}`]);
-  };
-  root.querySelector("#wlMajor")?.addEventListener("click", () => applyWhitelistPreset("MAJOR"));
-  root.querySelector("#wlAlt")?.addEventListener("click", () => applyWhitelistPreset("ALT"));
-  root.querySelector("#wlMeme")?.addEventListener("click", () => applyWhitelistPreset("MEME"));
 
+  const syncAutoConfigFromBackend = (cfg, sessionRunning) => {
+    if(sessionRunning && cfg.executionMode && modeEl){
+      modeEl.value = cfg.executionMode;
+      saveModePref(cfg.executionMode);
+    }
+    const hyEl = root.querySelector("#autoHybridScan");
+    if (hyEl && typeof cfg.hybridScan === "boolean") hyEl.checked = !!cfg.hybridScan;
+    const hsEl = root.querySelector("#autoHybridMinScore");
+    if (hsEl && Number.isFinite(Number(cfg.hybridMinScore))) hsEl.value = String(Number(cfg.hybridMinScore));
+    const heEl = root.querySelector("#autoHybridMinEdge");
+    if (heEl && Number.isFinite(Number(cfg.hybridMinEdge))) heEl.value = String(Number(cfg.hybridMinEdge));
+    const mopEl = root.querySelector("#autoMaxOpenPositions");
+    if (mopEl) {
+      if (sessionRunning && Number.isFinite(Number(cfg.maxOpenPositions))) mopEl.value = String(Number(cfg.maxOpenPositions));
+      else mopEl.value = "6";
+    }
+    const vteEl = root.querySelector("#autoVolTargetEnabled");
+    if (vteEl && typeof cfg.volTargetEnabled === "boolean") vteEl.checked = !!cfg.volTargetEnabled;
+    const vtpEl = root.querySelector("#autoVolTargetPct");
+    if (vtpEl && Number.isFinite(Number(cfg.volTargetPct))) vtpEl.value = String(Number(cfg.volTargetPct));
+    const vlbEl = root.querySelector("#autoVolLookback");
+    if (vlbEl && Number.isFinite(Number(cfg.volLookback))) vlbEl.value = String(Number(cfg.volLookback));
+    const vminEl = root.querySelector("#autoVolSizeMinMult");
+    if (vminEl && Number.isFinite(Number(cfg.volSizeMinMult))) vminEl.value = String(Number(cfg.volSizeMinMult));
+    const vmaxEl = root.querySelector("#autoVolSizeMaxMult");
+    if (vmaxEl && Number.isFinite(Number(cfg.volSizeMaxMult))) vmaxEl.value = String(Number(cfg.volSizeMaxMult));
+  };
+
+  const buildRegimeView = (d) => {
+    const regimeName = String(d?.currentRegime?.name || d?.lastDecision?.regime?.name || "UNKNOWN").toUpperCase();
+    const regimeObj = d?.currentRegime || d?.lastDecision?.regime || {};
+    const confidenceBoost = Number(regimeObj?.confidenceBoost ?? 0);
+    const sizeMultiplier = Number(regimeObj?.sizeMultiplier ?? 1);
+    const strictness = String(regimeObj?.strictness || "normal");
+    const regimeClass = regimeName==="TREND" ? "regime-trend" : regimeName==="RANGE" ? "regime-range" : regimeName==="VOLATILE" ? "regime-volatile" : "regime-normal";
+    const regimeTone = regimeName==="TREND" ? "trend" : regimeName==="RANGE" ? "range" : regimeName==="VOLATILE" ? "volatile" : "normal";
+    const regimeDesc = regimeName==="TREND"
+      ? "แนวโน้มชัดเจน ระบบผ่อนเกณฑ์เล็กน้อยเพื่อเกาะเทรนด์"
+      : regimeName==="RANGE"
+        ? "ตลาดแกว่งในกรอบ ระบบเพิ่มความระวังและลดขนาดไม้"
+        : regimeName==="VOLATILE"
+          ? "ผันผวนสูง ระบบเข้มงวดขึ้นและลดความเสี่ยงอัตโนมัติ"
+          : "สมดุลปกติ ใช้เกณฑ์มาตรฐานของระบบ";
+    return { regimeName, confidenceBoost, sizeMultiplier, strictness, regimeClass, regimeTone, regimeDesc };
+  };
+
+  const renderAutoTop = (cfg, cfgSym, curSym, sessionRunning, d, regime) => {
+    const otherHint = sessionRunning && cfgSym && cfgSym!==curSym
+      ? `<span class="a-badge" style="border-color:rgba(245,158,11,.4);color:#fde68a">รันที่ ${cfgSym}</span>`
+      : "";
+    root.querySelector("#autoStatus").innerHTML = `
+      <span class="a-badge ${sessionRunning?"run":"stop"}">${sessionRunning?"กำลังทำงาน":"หยุดทำงาน"}</span>
+      <span class="a-badge">โหมด ${cfg.executionMode||"-"}</span>
+      <span class="a-badge ${regime.regimeClass}">Regime ${regime.regimeName}</span>
+      <span class="a-badge">เทรด/ชม. ${d.tradesLastHour??0}</span>
+      ${otherHint}`;
+  };
+
+  const renderOverallAndRegime = (cfg, cfgSym, curSym, d, regime) => {
+    const primarySym = (cfg.primarySymbol || cfgSym || curSym || "-").toUpperCase();
+    const activeSym = (cfgSym || curSym || "-").toUpperCase();
+    const logsAll = Array.isArray(d.log) ? d.log : [];
+    const switchCount = logsAll.filter(x => /HYBRID switch/i.test(String(x?.msg||""))).length;
+    const topC = Array.isArray(d.scanBoard) && d.scanBoard.length ? d.scanBoard[0] : null;
+    const scanSkip = d.scanStatus || d.lastSkip || null;
+    const scanCode = String(scanSkip?.code || "").toUpperCase();
+    const scanMsg = String(scanSkip?.msg || "");
+    const scanRelevant = /SCAN|TIMEOUT|ANALYZE|INTEL/i.test(`${scanCode} ${scanMsg}`);
+    const scanFallback = scanRelevant && (scanCode || scanMsg)
+      ? `${scanCode || "SCAN"}${scanMsg ? ` · ${scanMsg.replace(/^Skip:\s*/i, "")}` : ""}`
+      : "—";
+    const overallEl = root.querySelector("#overallStats");
+    if(overallEl){
+      overallEl.innerHTML = `
+        <div class="kpi"><div class="kpi-l">Primary</div><div class="kpi-v mn">${primarySym}</div></div>
+        <div class="kpi"><div class="kpi-l">Active</div><div class="kpi-v mn">${activeSym}</div></div>
+        <div class="kpi"><div class="kpi-l">Regime</div><div class="kpi-v mn">${regime.regimeName}</div><div class="kpi-s">ตลาดปัจจุบัน</div></div>
+        <div class="kpi"><div class="kpi-l">Hybrid Switch</div><div class="kpi-v mn">${switchCount}</div></div>
+        <div class="kpi"><div class="kpi-l">Top Candidate</div><div class="kpi-v mn">${topC?`${topC.symbol} ${topC.signal}`:scanFallback}</div></div>`;
+    }
+    const regimeCard = root.querySelector("#regimeCard");
+    const regimeValueEl = root.querySelector("#regimeValue");
+    const regimeDescEl = root.querySelector("#regimeDesc");
+    const regimeImpactEl = root.querySelector("#regimeImpact");
+    if (regimeCard) regimeCard.className = `regime-card ${regime.regimeTone}`;
+    if (regimeValueEl) regimeValueEl.textContent = regime.regimeName;
+    if (regimeDescEl) regimeDescEl.textContent = regime.regimeDesc;
+    if (regimeImpactEl) {
+      const boostSign = regime.confidenceBoost >= 0 ? "+" : "";
+      regimeImpactEl.textContent = `MinConf ${boostSign}${regime.confidenceBoost.toFixed(2)} | Size x${regime.sizeMultiplier.toFixed(2)} | strictness ${regime.strictness}`;
+    }
+  };
+
+  const renderPaperAndLog = (cfg, d, sessionRunning) => {
+    const p = d.paper||{};
+    const liveToday = d.kpiTodayAllSymbols?.live || d.kpiToday?.live || {};
+    const lv = d.liveStatsAll || d.liveStats || {};
+    const ap = d.activePosition||{};
+    const mode = ap.mode || cfg.executionMode || "PAPER";
+    const pos = mode==="LIVE" ? (ap.live||{}) : (ap.paper||{});
+    const st = mode==="LIVE" ? (liveToday.wins!=null || liveToday.losses!=null ? liveToday : lv) : p;
+    const posSide = pos.side||"FLAT";
+    const posQty = Number(pos.qty||0);
+    const posUsdt = Number(pos.notionalUsdtApprox||0);
+    const posLev = Number(pos.leverage || cfg.leverage || 0);
+    const posLevText = posLev > 0 ? ` · x${Math.floor(posLev)}` : "";
+    const pnl = Number(st.realizedPnl??0);
+    const statLabel = mode==="LIVE" ? "Today LIVE · all symbols" : "Paper Trades";
+    root.querySelector("#paperStats").innerHTML = `
+      <div class="kpi"><div class="kpi-l">Win / Loss</div><div class="kpi-v mn">${st.wins??0} / ${st.losses??0}</div><div class="kpi-s">${statLabel}</div></div>
+      <div class="kpi"><div class="kpi-l">Win Rate</div><div class="kpi-v mn">${st.winRatePct??0}%</div></div>
+      <div class="kpi"><div class="kpi-l">Realized PnL</div><div class="kpi-v mn ${pnl>=0?"pnl-p":"pnl-m"}">${pnl} USDT</div></div>
+      <div class="kpi"><div class="kpi-l">Position</div><div class="kpi-v">${posSide}${posLevText}</div><div class="kpi-s">${mode} · ${posQty.toFixed(6)} (~${posUsdt.toFixed(2)} USDT)</div></div>`;
+
+    const logs = Array.isArray(d.log) ? d.log : [];
+    const startedAt = Number(d.startedAt||0);
+    const isHistoryMsg = (m) => /Snapshot restored|auto-resume/i.test(String(m||""));
+    const pickLog = (() => {
+      if (!logs.length) return null;
+      if (sessionRunning) {
+        const liveNow = logs.find(x => Number(x?.ts||0) >= startedAt && !isHistoryMsg(x?.msg));
+        if (liveNow) return liveNow;
+      }
+      const nonHistory = logs.find(x => !isHistoryMsg(x?.msg));
+      return nonHistory || logs[0];
+    })();
+    const logTag = pickLog && isHistoryMsg(pickLog.msg) ? "[HISTORY]" : "[LIVE]";
+    const lg = pickLog ? `${logTag} ${new Date((pickLog.ts||0)*1000).toLocaleTimeString()} ${pickLog.msg}` : "—";
+    const skip = d.lastSkip;
+    const skipPart = skip && skip.msg && (!pickLog || String(pickLog.msg)!==String(skip.msg)) ? ` | ข้าม [${skip.code||"?"}]: ${skip.msg}` : "";
+    const errN = Number(d.consecutiveErrors)||0;
+    const errPart = errN>0 ? ` | ผิดพลาดต่อเนื่อง: ${errN}` : "";
+    const cont = d.continuity||{};
+    const hStr = Array.isArray(cont.hints)&&cont.hints.length ? cont.hints.join(" · ") : "";
+    const rStr = cont.recoveredLog ? String(cont.recoveredLog) : "";
+    const contP = [hStr,rStr].filter(Boolean).join(" | ");
+    root.querySelector("#autoLog").textContent = `Log: ${lg}${skipPart}${errPart}${contP?` | ${contP}`:""}`;
+  };
+
+  const renderGuardian = (d) => {
+    const guardian = d.liveGuardian||null;
+    const gCard = root.querySelector("#guardianCard");
+    const gBody = root.querySelector("#guardianBody");
+    if(!(gCard && gBody)) return;
+    if(!guardian){ gCard.style.display="none"; gBody.textContent="—"; return; }
+    const tp=Number(guardian.tp||0),sl2=Number(guardian.sl||0),entry=Number(guardian.entryMark||0);
+    const armTs = guardian.armedAt ? new Date(Number(guardian.armedAt)*1000).toLocaleTimeString() : "—";
+    const active = guardian.active;
+    gBody.innerHTML = `
+      <div class="guard-r">สถานะ: <b style="color:${active?"var(--cyan)":"var(--text3)"}">${active?"กำลังเฝ้าราคา":`หยุดแล้ว (${guardian.closedBy||"ปิด"})`}</b></div>
+      <div class="guard-r">คู่: ${guardian.symbol||"—"} | ฝั่ง: ${guardian.side||"—"}</div>
+      <div class="guard-r">เข้า: <span class="mn">${entry?entry.toFixed(6):"—"}</span></div>
+      <div class="guard-r">TP: <span class="mn" style="color:var(--long)">${tp?tp.toFixed(6):"—"}</span> | SL: <span class="mn" style="color:var(--short)">${sl2?sl2.toFixed(6):"—"}</span></div>
+      <div class="guard-r">เริ่มเฝ้า: ${armTs}</div>
+      ${active?`<button id="guardianCloseNow" class="guard-btn">✕ ปิด Guardian ตอนนี้</button>`:""}`;
+    gCard.style.display = "block";
+  };
 
   /* ── Auto Status Refresh ── */
-  const refreshAutoStatus = async () => {
+  const refreshAutoStatus = async (forceFull = false) => {
     if (refreshAutoInFlight) return;
     refreshAutoInFlight = true;
     const curSym = symbol();
     try {
-      const r = await fetch(`${BASE}/autotrade/status?symbol=${encodeURIComponent(curSym)}`);
+      const now = Date.now();
+      const needFull = !!forceFull || (now - lastFullAutoStatusAt >= AUTO_STATUS_FULL_EVERY_MS);
+      const statusPath = needFull ? "autotrade/status" : "autotrade/status-lite";
+      const r = await fetch(`${BASE}/${statusPath}?symbol=${encodeURIComponent(curSym)}`);
       const d = await r.json();
+      if (needFull && r.ok) lastFullAutoStatusAt = now;
+      const liteSig = JSON.stringify({
+        running: !!d.running,
+        sid: d.sessionId || null,
+        trades: d.tradesLastHour || 0,
+        skip: d.lastSkip?.msg || "",
+        err: d.consecutiveErrors || 0,
+        mode: d.activePosition?.mode || "",
+        liveSide: d.activePosition?.live?.side || "",
+        paperSide: d.activePosition?.paper?.side || "",
+        signal: d.lastDecision?.signal || "",
+        conf: d.lastDecision?.confidence || 0,
+        regime: d.currentRegime?.name || d.lastDecision?.regime?.name || "",
+      });
+      if (!needFull && liteSig === lastAutoLiteSig) return;
+      lastAutoLiteSig = liteSig;
+      if (needFull) {
+        const fullSig = JSON.stringify({
+          cfg: d.config || {},
+          board: d.scanBoard || [],
+          liveStats: d.liveStats || {},
+          paper: d.paper || {},
+          guardian: d.liveGuardian || null,
+          continuity: d.continuity || {},
+        });
+        if (fullSig === lastAutoFullSig) {
+          syncAutoButtons(!!d.running);
+          return;
+        }
+        lastAutoFullSig = fullSig;
+      }
       const cfg = d.config || {};
       const cfgSym = (cfg.symbol||"").toUpperCase();
+      const cfgScanMode = !!cfg.marketScan || cfgSym === "AUTO" || cfgSym === "SCAN";
       const sessionRunning = !!d.running;
       autoRunningState = sessionRunning;
 
       if(sessionRunning && d.sessionId){ autoSessionId = d.sessionId; await persistAutotradeState({ sessionId:d.sessionId, symbol:cfgSym||curSym, running:true, ts:Date.now() }); }
       else { autoSessionId = null; await clearPersistedAutotradeState(); }
 
-      const scanMode = !!cfg.marketScan || cfgSym==="AUTO" || cfgSym==="SCAN";
-      const samePair = sessionRunning && (scanMode || !cfgSym || cfgSym===curSym);
+      const samePair = sessionRunning && (!cfgSym || cfgSym===curSym);
       syncAutoButtons(sessionRunning);
       syncFocusLayout(samePair);
-
-      // Only sync mode from backend while session is actively running.
-      // When stopped, keep user's last chosen mode from local preference.
-      if(sessionRunning && cfg.executionMode && modeEl && !scanMode){
-        modeEl.value = cfg.executionMode;
-        saveModePref(cfg.executionMode);
-      }
-      const scanModeEl = root.querySelector("#scanMode");
-      if(cfg.executionMode && scanModeEl && scanMode){ scanModeEl.value = cfg.executionMode; }
-      const wlEl = root.querySelector("#autoWhitelist");
-      if (wlEl && Array.isArray(cfg.whitelistSymbols)) wlEl.value = cfg.whitelistSymbols.join(",");
-      const asEl = root.querySelector("#autoAdaptiveSizing");
-      if (asEl && typeof cfg.adaptiveSizing === "boolean") asEl.checked = !!cfg.adaptiveSizing;
-      const abEl = root.querySelector("#autoAdaptiveBoost");
-      if (abEl && Number.isFinite(Number(cfg.adaptiveSizeBoostMaxPct))) abEl.value = String(Number(cfg.adaptiveSizeBoostMaxPct));
-      const hyEl = root.querySelector("#autoHybridScan");
-      if (hyEl && typeof cfg.hybridScan === "boolean") hyEl.checked = !!cfg.hybridScan;
-      const hsEl = root.querySelector("#autoHybridMinScore");
-      if (hsEl && Number.isFinite(Number(cfg.hybridMinScore))) hsEl.value = String(Number(cfg.hybridMinScore));
-      const heEl = root.querySelector("#autoHybridMinEdge");
-      if (heEl && Number.isFinite(Number(cfg.hybridMinEdge))) heEl.value = String(Number(cfg.hybridMinEdge));
-      const mopEl = root.querySelector("#autoMaxOpenPositions");
-      if (mopEl) {
-        if (sessionRunning && Number.isFinite(Number(cfg.maxOpenPositions))) {
-          mopEl.value = String(Number(cfg.maxOpenPositions));
-        } else {
-          // When idle, keep product default at 6 instead of stale previous session config.
-          mopEl.value = "6";
-        }
-      }
-
-      const otherHint = sessionRunning && scanMode
-        ? `<span class="a-badge" style="border-color:rgba(56,189,248,.45);color:#a5f3fc">โหมดสแกนทั้งตลาด</span>`
-        : sessionRunning && cfgSym && cfgSym!==curSym
-          ? `<span class="a-badge" style="border-color:rgba(245,158,11,.4);color:#fde68a">รันที่ ${cfgSym}</span>`
-          : "";
-
-      root.querySelector("#autoStatus").innerHTML = `
-        <span class="a-badge ${sessionRunning?"run":"stop"}">${sessionRunning?"กำลังทำงาน":"หยุดทำงาน"}</span>
-        <span class="a-badge">โหมด ${cfg.executionMode||"-"}</span>
-        <span class="a-badge">เทรด/ชม. ${d.tradesLastHour??0}</span>
-        ${otherHint}`;
-      const primarySym = (cfg.primarySymbol || cfgSym || curSym || "-").toUpperCase();
-      const activeSym = (cfgSym || curSym || "-").toUpperCase();
-      const logsAll = Array.isArray(d.log) ? d.log : [];
-      const switchCount = logsAll.filter(x => /HYBRID switch/i.test(String(x?.msg||""))).length;
-      const topC = Array.isArray(d.scanBoard) && d.scanBoard.length ? d.scanBoard[0] : null;
-      const overallEl = root.querySelector("#overallStats");
-      if(overallEl){
-        overallEl.innerHTML = `
-          <div class="kpi"><div class="kpi-l">Primary</div><div class="kpi-v mn">${primarySym}</div></div>
-          <div class="kpi"><div class="kpi-l">Active</div><div class="kpi-v mn">${activeSym}</div></div>
-          <div class="kpi"><div class="kpi-l">Hybrid Switch</div><div class="kpi-v mn">${switchCount}</div></div>
-          <div class="kpi"><div class="kpi-l">Top Candidate</div><div class="kpi-v mn">${topC?`${topC.symbol} ${topC.signal}`:"—"}</div></div>`;
-      }
-      const scanStatusEl = root.querySelector("#scanStatus");
-      if (scanStatusEl) scanStatusEl.innerHTML = root.querySelector("#autoStatus").innerHTML;
-
+      syncAutoConfigFromBackend(cfg, sessionRunning);
+      const regime = buildRegimeView(d);
+      renderAutoTop(cfg, cfgSym, curSym, sessionRunning, d, regime);
+      renderOverallAndRegime(cfg, cfgSym, curSym, d, regime);
       // Keep running symbol aligned with the currently opened chart symbol.
       if (
         sessionRunning &&
-        !scanMode &&
+        !cfgScanMode &&
         cfgSym &&
         cfgSym !== curSym &&
         !symbolSyncInProgress &&
@@ -1110,82 +1266,13 @@
           setAlerts([`ซิงก์เหรียญอัตโนมัติไม่สำเร็จ: ${e.message || e}`]);
         } finally {
           symbolSyncInProgress = false;
-          setTimeout(() => refreshAutoStatus(), 1200);
+          setTimeout(() => refreshAutoStatus(true), 1200);
         }
       }
 
-      const p = d.paper||{};
-      const lv = d.liveStats||{};
-      const ap = d.activePosition||{};
-      const mode = ap.mode || cfg.executionMode || "PAPER";
-      const pos = mode==="LIVE" ? (ap.live||{}) : (ap.paper||{});
-      const st = mode==="LIVE" ? lv : p;
-      const posSide = pos.side||"FLAT";
-      const posQty = Number(pos.qty||0);
-      const posUsdt = Number(pos.notionalUsdtApprox||0);
-      const pnl = Number(st.realizedPnl??0);
-      const statLabel = mode==="LIVE" ? "Live Trades" : "Paper Trades";
-
-      root.querySelector("#paperStats").innerHTML = `
-        <div class="kpi"><div class="kpi-l">Win / Loss</div><div class="kpi-v mn">${st.wins??0} / ${st.losses??0}</div><div class="kpi-s">${statLabel}</div></div>
-        <div class="kpi"><div class="kpi-l">Win Rate</div><div class="kpi-v mn">${st.winRatePct??0}%</div></div>
-        <div class="kpi"><div class="kpi-l">Realized PnL</div><div class="kpi-v mn ${pnl>=0?"pnl-p":"pnl-m"}">${pnl} USDT</div></div>
-        <div class="kpi"><div class="kpi-l">Position</div><div class="kpi-v">${posSide}</div><div class="kpi-s">${mode} · ${posQty.toFixed(6)} (~${posUsdt.toFixed(2)} USDT)</div></div>`;
-
-      // Log
-      const logs = Array.isArray(d.log) ? d.log : [];
-      const startedAt = Number(d.startedAt||0);
-      const isHistoryMsg = (m) => /Snapshot restored|auto-resume/i.test(String(m||""));
-      const pickLog = (() => {
-        if (!logs.length) return null;
-        if (sessionRunning) {
-          const liveNow = logs.find(x => Number(x?.ts||0) >= startedAt && !isHistoryMsg(x?.msg));
-          if (liveNow) return liveNow;
-        }
-        const nonHistory = logs.find(x => !isHistoryMsg(x?.msg));
-        return nonHistory || logs[0];
-      })();
-      const logTag = pickLog && isHistoryMsg(pickLog.msg) ? "[HISTORY]" : "[LIVE]";
-      const lg = pickLog ? `${logTag} ${new Date((pickLog.ts||0)*1000).toLocaleTimeString()} ${pickLog.msg}` : "—";
-      const skip = d.lastSkip;
-      const skipPart = skip && skip.msg && (!pickLog || String(pickLog.msg)!==String(skip.msg)) ? ` | ข้าม [${skip.code||"?"}]: ${skip.msg}` : "";
-      const errN = Number(d.consecutiveErrors)||0;
-      const errPart = errN>0 ? ` | ผิดพลาดต่อเนื่อง: ${errN}` : "";
-      const cont = d.continuity||{};
-      const hStr = Array.isArray(cont.hints)&&cont.hints.length ? cont.hints.join(" · ") : "";
-      const rStr = cont.recoveredLog ? String(cont.recoveredLog) : "";
-      const contP = [hStr,rStr].filter(Boolean).join(" | ");
-      root.querySelector("#autoLog").textContent = `Log: ${lg}${skipPart}${errPart}${contP?` | ${contP}`:""}`;
-      const scanLogEl = root.querySelector("#scanLog");
-      if (scanLogEl) scanLogEl.textContent = root.querySelector("#autoLog").textContent;
-      const board = Array.isArray(d.scanBoard) ? d.scanBoard : [];
-      const boardEl = root.querySelector("#scanBoard");
-      if(boardEl){
-        if(!board.length){ boardEl.textContent = "—"; }
-        else{
-          boardEl.innerHTML = board.slice(0,8).map((x,i)=>`${i+1}. ${x.symbol} | ${x.signal} | conf ${x.confidence} | score ${x.score}`).join("<br>");
-        }
-      }
-
-      // Guardian
-      const guardian = d.liveGuardian||null;
-      const gCard = root.querySelector("#guardianCard");
-      const gBody = root.querySelector("#guardianBody");
-      if(gCard && gBody){
-        if(guardian){
-          const tp=Number(guardian.tp||0),sl2=Number(guardian.sl||0),entry=Number(guardian.entryMark||0);
-          const armTs = guardian.armedAt ? new Date(Number(guardian.armedAt)*1000).toLocaleTimeString() : "—";
-          const active = guardian.active;
-          gBody.innerHTML = `
-            <div class="guard-r">สถานะ: <b style="color:${active?"var(--cyan)":"var(--text3)"}">${active?"กำลังเฝ้าราคา":`หยุดแล้ว (${guardian.closedBy||"ปิด"})`}</b></div>
-            <div class="guard-r">คู่: ${guardian.symbol||"—"} | ฝั่ง: ${guardian.side||"—"}</div>
-            <div class="guard-r">เข้า: <span class="mn">${entry?entry.toFixed(6):"—"}</span></div>
-            <div class="guard-r">TP: <span class="mn" style="color:var(--long)">${tp?tp.toFixed(6):"—"}</span> | SL: <span class="mn" style="color:var(--short)">${sl2?sl2.toFixed(6):"—"}</span></div>
-            <div class="guard-r">เริ่มเฝ้า: ${armTs}</div>
-            ${active?`<button id="guardianCloseNow" class="guard-btn">✕ ปิด Guardian ตอนนี้</button>`:""}`;
-          gCard.style.display = "block";
-        } else { gCard.style.display="none"; gBody.textContent="—"; }
-      }
+      renderPaperAndLog(cfg, d, sessionRunning);
+      renderGuardian(d);
+      if (needFull) await refreshOrphanBox();
     } catch {
       // If status API is unreachable/stale, do not hard-lock "Start" button by old cache.
       autoSessionId = null;
@@ -1205,18 +1292,23 @@
       setAlerts(["กำลังเริ่ม AutoTrade..."]);
       await withBtnFeedback(btn, async () => {
         const payload = {
-          symbol:symbol(), usdtAmount:Number(root.querySelector("#usdtAmount").value||"5"),
+          symbol:"AUTO", primarySymbol:symbol(), usdtAmount:Number(root.querySelector("#usdtAmount").value||"5"),
           leverage:Number(root.querySelector("#lev").value||"5"), marginType:root.querySelector("#marginType").value,
           takeProfitPct:Number(root.querySelector("#tp").value||"1.8"), stopLossPct:Number(root.querySelector("#sl").value||"0.8"),
           minConfidence:Number(root.querySelector("#autoMinConf").value||"0.65"), allowFlip:!!root.querySelector("#autoFlip").checked,
           executionMode:root.querySelector("#autoMode").value, maxSpreadBps:Number(root.querySelector("#autoMaxSpread").value||"22"),
           maxSlippageBps:Number(root.querySelector("#autoMaxSlip").value||"28"), trailingStopPct:Number(root.querySelector("#autoTrail").value||"0.6"),
           skipFundingAgainst:Number(root.querySelector("#autoSkipFunding").value||"0"),
-          marketScan:false,
+          marketScan:true,
           hybridScan:!!root.querySelector("#autoHybridScan")?.checked,
           hybridMinScore:Number(root.querySelector("#autoHybridMinScore")?.value||"0.72"),
           hybridMinEdge:Number(root.querySelector("#autoHybridMinEdge")?.value||"0.06"),
           maxOpenPositions:Number(root.querySelector("#autoMaxOpenPositions")?.value||"6"),
+          volTargetEnabled:!!root.querySelector("#autoVolTargetEnabled")?.checked,
+          volTargetPct:Number(root.querySelector("#autoVolTargetPct")?.value||"0.22"),
+          volLookback:Number(root.querySelector("#autoVolLookback")?.value||"30"),
+          volSizeMinMult:Number(root.querySelector("#autoVolSizeMinMult")?.value||"0.6"),
+          volSizeMaxMult:Number(root.querySelector("#autoVolSizeMaxMult")?.value||"1.4"),
           noTradeWindows:[],
           intervalSec:20, cooldownSec:120, maxTradesPerHour:6
         };
@@ -1227,7 +1319,7 @@
         autoSessionId = d?.sessionId||null;
         await persistAutotradeState({ sessionId:autoSessionId, symbol:(payload.symbol||"").toUpperCase(), running:true, ts:Date.now() });
         setAlerts([`เริ่ม AutoTrade: ${payload.symbol} ${payload.usdtAmount} USDT`]);
-        syncAutoButtons(true); syncFocusLayout(true); await refreshAutoStatus();
+        syncAutoButtons(true); syncFocusLayout(true); await refreshAutoStatus(true);
       });
     } catch(e) { syncAutoButtons(false); setAlerts([`AutoTrade error: ${e.message||e}`]); }
   };
@@ -1269,14 +1361,14 @@
     try {
       const btn = root.querySelector("#autoStop");
       await withBtnFeedback(btn, async () => {
-        if(!autoSessionId) await refreshAutoStatus();
+        if(!autoSessionId) await refreshAutoStatus(true);
         const postStop = async (body) => { const r = await fetch(`${BASE}/autotrade/stop`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); return {r, d:await r.json()}; };
         let {r,d} = await postStop({sessionId:autoSessionId});
-        if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ await refreshAutoStatus(); ({r,d}=await postStop({sessionId:autoSessionId})); }
+        if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ await refreshAutoStatus(true); ({r,d}=await postStop({sessionId:autoSessionId})); }
         if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ ({r,d}=await postStop({force:true})); }
         if(!r.ok) throw new Error(d?.detail||"หยุด AutoTrade ไม่สำเร็จ");
         autoSessionId=null; await clearPersistedAutotradeState();
-        setAlerts(["หยุด AutoTrade แล้ว"]); syncAutoButtons(false); syncFocusLayout(false); forceUnlockAutoControls(); refreshAutoStatus();
+        setAlerts(["หยุด AutoTrade แล้ว"]); syncAutoButtons(false); syncFocusLayout(false); forceUnlockAutoControls(); refreshAutoStatus(true);
       });
     } catch(e) { forceUnlockAutoControls(); setAlerts([`หยุด AutoTrade ไม่สำเร็จ: ${e.message||e}`]); }
   };
@@ -1286,52 +1378,48 @@
     try {
       const btn = root.querySelector("#autoReset");
       await withBtnFeedback(btn, async () => {
-        if(!autoSessionId) await refreshAutoStatus();
+        if(!autoSessionId) await refreshAutoStatus(true);
         const postReset = async (body) => { const r = await fetch(`${BASE}/autotrade/reset`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); return {r, d:await r.json()}; };
         let {r,d} = await postReset({sessionId:autoSessionId});
-        if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ await refreshAutoStatus(); ({r,d}=await postReset({sessionId:autoSessionId})); }
+        if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ await refreshAutoStatus(true); ({r,d}=await postReset({sessionId:autoSessionId})); }
         if(d?.ignored && d?.reason==="SESSION_MISMATCH"){ ({r,d}=await postReset({force:true})); }
         if(!r.ok) throw new Error(d?.detail||"รีเซ็ตไม่สำเร็จ");
         autoSessionId=null; await clearPersistedAutotradeState();
-        setAlerts(["รีเซ็ตเซสชัน AutoTrade แล้ว"]); syncAutoButtons(false); syncFocusLayout(false); forceUnlockAutoControls(); refreshAutoStatus();
+        setAlerts(["รีเซ็ตเซสชัน AutoTrade แล้ว"]); syncAutoButtons(false); syncFocusLayout(false); forceUnlockAutoControls(); refreshAutoStatus(true);
       });
     } catch(e) { forceUnlockAutoControls(); setAlerts([`รีเซ็ตไม่สำเร็จ: ${e.message||e}`]); }
   };
 
-  /* ── Scan Start/Stop/Reset ── */
-  root.querySelector("#scanStart").onclick = async () => {
+  root.querySelector("#orphanCheckBtn")?.addEventListener("click", async () => {
+    await refreshOrphanBox();
+    setAlerts(["อัปเดตสถานะ Orphan LIVE แล้ว"]);
+  });
+  root.querySelector("#orphanCloseBtn")?.addEventListener("click", async () => {
     try {
-      const btn = root.querySelector("#scanStart");
-      await withBtnFeedback(btn, async () => {
-        const payload = {
-          symbol:"AUTO", usdtAmount:Number(root.querySelector("#usdtAmount").value||"5"),
-          leverage:Number(root.querySelector("#lev").value||"5"), marginType:root.querySelector("#marginType").value,
-          takeProfitPct:Number(root.querySelector("#tp").value||"1.8"), stopLossPct:Number(root.querySelector("#sl").value||"0.8"),
-          minConfidence:Number(root.querySelector("#scanMinConf").value||"0.65"), allowFlip:!!root.querySelector("#scanFlip").checked,
-          executionMode:root.querySelector("#scanMode").value, maxSpreadBps:Number(root.querySelector("#scanMaxSpread").value||"22"),
-          maxSlippageBps:Number(root.querySelector("#scanMaxSlip").value||"28"), trailingStopPct:Number(root.querySelector("#scanTrail").value||"0.6"),
-          skipFundingAgainst:Number(root.querySelector("#scanSkipFunding").value||"0"),
-          marketScan:true,
-          scanTopLiquid:Number(root.querySelector("#autoScanTopLiquid")?.value||"30"),
-          scanAnalyzeTop:Number(root.querySelector("#autoScanAnalyzeTop")?.value||"8"),
-          whitelistSymbols:String(root.querySelector("#autoWhitelist")?.value||"").split(",").map(x=>x.trim().toUpperCase()).filter(Boolean),
-          adaptiveSizing:!!root.querySelector("#autoAdaptiveSizing")?.checked,
-          adaptiveSizeBoostMaxPct:Number(root.querySelector("#autoAdaptiveBoost")?.value||"35"),
-          noTradeWindows:[],
-          intervalSec:20, cooldownSec:120, maxTradesPerHour:6
-        };
-        const r = await fetch(`${BASE}/autotrade/start`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
-        const d = await r.json();
-        if(!r.ok) throw new Error(d?.detail?.message||d?.detail||"เริ่ม Auto Scan ไม่สำเร็จ");
-        autoSessionId = d?.sessionId||null;
-        await persistAutotradeState({ sessionId:autoSessionId, symbol:"AUTO", running:true, ts:Date.now() });
-        setAlerts([`เริ่ม Auto Scan: ${payload.usdtAmount} USDT`]);
-        syncAutoButtons(true); syncFocusLayout(true); await refreshAutoStatus();
-      });
-    } catch(e) { setAlerts([`Auto Scan error: ${e.message||e}`]); }
-  };
-  root.querySelector("#scanStop").onclick = () => root.querySelector("#autoStop").click();
-  root.querySelector("#scanReset").onclick = () => root.querySelector("#autoReset").click();
+      const r = await fetch(`${BASE}/autotrade/close-orphan`, { method:"POST" });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(d?.detail || "ปิด Orphan ไม่สำเร็จ");
+      await refreshOrphanBox();
+      await refreshAutoStatus(true);
+      setAlerts([`Close All LIVE เสร็จแล้ว (${d?.count||0} คู่)`]);
+    } catch(e) {
+      setAlerts([`Close All LIVE ไม่สำเร็จ: ${e.message||e}`]);
+    }
+  });
+  root.querySelector("#orphanAdoptBtn")?.addEventListener("click", async () => {
+    try {
+      const r = await fetch(`${BASE}/autotrade/adopt-live`, { method:"POST" });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok || !d?.ok) throw new Error(d?.detail?.message || d?.detail || d?.reason || "Adopt ไม่สำเร็จ");
+      autoSessionId = d?.sessionId || null;
+      await persistAutotradeState({ sessionId:autoSessionId, symbol:(d?.config?.symbol||"").toUpperCase(), running:true, ts:Date.now() });
+      await refreshOrphanBox();
+      await refreshAutoStatus(true);
+      setAlerts([`Adopt LIVE สำเร็จ: ${d?.config?.symbol||"-"}`]);
+    } catch(e) {
+      setAlerts([`Adopt LIVE ไม่สำเร็จ: ${e.message||e}`]);
+    }
+  });
 
   /* ── Risk Config ── */
   const refreshRisk = async () => {
@@ -1348,10 +1436,34 @@
 
   /* ── Symbol change detection ── */
   let lastSymbol = symbol();
-  setInterval(() => {
-    const cur = symbol();
-    if(cur !== lastSymbol){ lastSymbol=cur; root.querySelector("#sym").textContent=cur; refreshSignal(); refreshAutoStatus(); }
-  }, 3000);
+
+  let autoStatusPollTimer = null;
+  const scheduleAutoStatusPoll = () => {
+    if (autoStatusPollTimer) clearTimeout(autoStatusPollTimer);
+    const interval = autoStatusPollIntervalMs();
+    autoStatusPollTimer = setTimeout(async () => {
+      const force = getCurrentTab() === "auto";
+      await refreshAutoStatus(force);
+      scheduleAutoStatusPoll();
+    }, interval);
+  };
+  const scheduleHealthPoll = () => {
+    if (healthPollTimer) clearTimeout(healthPollTimer);
+    healthPollTimer = setTimeout(async () => {
+      await refreshBackendHealth();
+      scheduleHealthPoll();
+    }, healthPollIntervalMs());
+  };
+  const scheduleSymbolPoll = () => {
+    if (symbolPollTimer) clearTimeout(symbolPollTimer);
+    symbolPollTimer = setTimeout(async () => {
+      if (document.visibilityState === "visible") {
+        const cur = symbol();
+        if(cur !== lastSymbol){ lastSymbol=cur; root.querySelector("#sym").textContent=cur; refreshSignal(); refreshAutoStatus(true); }
+      }
+      scheduleSymbolPoll();
+    }, symbolPollIntervalMs());
+  };
 
   /* ── Boot ── */
   const boot = async () => {
@@ -1360,17 +1472,30 @@
     if(snap?.running && snap.sessionId) autoSessionId = snap.sessionId;
     await refreshBackendHealth();
     if (backendOnline) refreshSignal();
-    await refreshAutoStatus();
+    await refreshAutoStatus(true);
+    await refreshOrphanBox();
     refreshRisk();
-    setInterval(refreshAutoStatus, 8000);
-    setInterval(refreshBackendHealth, 10000);
+    scheduleAutoStatusPoll();
+    scheduleHealthPoll();
+    scheduleSymbolPoll();
+    updatePerfModeUI();
   };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       refreshBackendHealth();
-      refreshAutoStatus();
+      refreshAutoStatus(true);
+      refreshOrphanBox();
     }
+    scheduleAutoStatusPoll();
   });
-  window.addEventListener("pageshow", (ev) => { if(ev.persisted) refreshAutoStatus(); });
+  window.addEventListener("pageshow", (ev) => { if(ev.persisted) refreshAutoStatus(true); });
+  root.querySelector("#perfEcoMode")?.addEventListener("change", (ev) => {
+    perfEcoMode = !!ev.target.checked;
+    savePerfMode(perfEcoMode);
+    scheduleAutoStatusPoll();
+    scheduleHealthPoll();
+    scheduleSymbolPoll();
+    setAlerts([perfEcoMode ? "เปิดโหมดประหยัดทรัพยากรแล้ว" : "ปิดโหมดประหยัดทรัพยากรแล้ว"]);
+  });
   boot();
 })();

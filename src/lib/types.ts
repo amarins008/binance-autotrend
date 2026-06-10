@@ -99,6 +99,44 @@ export interface AutoTradeStatus {
       closedAt?: number
     }>
   }
+  liveStats?: {
+    symbol?: string
+    wins: number
+    losses: number
+    winRatePct: number
+    realizedPnl: number
+    winsToday?: number
+    lossesToday?: number
+    winRatePctToday?: number
+    realizedPnlToday?: number
+  }
+  liveStatsAll?: {
+    wins: number
+    losses: number
+    winRatePct: number
+    realizedPnl: number
+    winsToday?: number
+    lossesToday?: number
+    winRatePctToday?: number
+    realizedPnlToday?: number
+  }
+  kpiTodayAllSymbols?: {
+    live?: {
+      wins: number
+      losses: number
+      winRatePct: number
+      realizedPnl: number
+    }
+  }
+  kpiToday?: {
+    live?: {
+      wins: number
+      losses: number
+      winRatePct: number
+      realizedPnl: number
+    }
+  }
+  liveDailyPnl?: number
   lastDecision: {
     signal: string
     confidence: number
@@ -127,7 +165,7 @@ export interface AutoTradeStatus {
   activePosition: {
     mode: string
     paper: { side: string; qty: number; notionalUsdtApprox: number }
-    live: { side: string; qty: number; notionalUsdtApprox: number }
+    live: { side: string; qty: number; notionalUsdtApprox: number; leverage?: number }
   }
   continuity?: {
     snapshotFile?: string

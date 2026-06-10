@@ -2,17 +2,23 @@
 
 ## Performance
 - Wins: 0
-- Losses: 2
-- Trades: 2
+- Losses: 0
+- Trades: 0
 - WinRate: 0.0%
-- RealizedPnL: -0.016321
-- AvgPnL/Trade: -0.00816
+- RealizedPnL: 0.0
+- AvgPnL/Trade: 0.0
+- RewardScore: 0.0
+- RewardDelta: 0.0
+- RewardBehaviorDelta: 0.0
+- RewardWinStreak: 0
+- RewardLossStreak: 0
+- LearningRankScore: 0.0
 
 ## Scan Behavior
-- Observations: 1153
-- PickedCount: 130
-- PickRate: 11.27%
-- LastSignal: LONG
-- LastConfidence: 0.62
-- LastScanScore: 0.614103
-- UpdatedAt: 1779087647
+- Observations: 20
+- PickedCount: 1
+- PickRate: 5.0%
+- LastSignal: SHORT
+- LastConfidence: 0.64
+- LastScanScore: 0.632226
+- UpdatedAt: 1781060233

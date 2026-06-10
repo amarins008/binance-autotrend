@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Binance autotrend** (1397 symbols, 1791 relationships, 25 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Binance autotrend-standalone-final** (3103 symbols, 6572 relationships, 232 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **Binance autotrend** (1397 symbols, 1791
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/Binance autotrend/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Binance autotrend/clusters` | All functional areas |
-| `gitnexus://repo/Binance autotrend/processes` | All execution flows |
-| `gitnexus://repo/Binance autotrend/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/Binance autotrend-standalone-final/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Binance autotrend-standalone-final/clusters` | All functional areas |
+| `gitnexus://repo/Binance autotrend-standalone-final/processes` | All execution flows |
+| `gitnexus://repo/Binance autotrend-standalone-final/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

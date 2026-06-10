@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
-import { CopilotPanel, PANEL_WIDTH, PANEL_COLLAPSED_W } from "~components/CopilotPanel"
+import { CopilotPanel, PANEL_WIDTH, PANEL_COLLAPSED_W, PANEL_MOBILE_BREAKPOINT } from "~components/CopilotPanel"
 import {
   analyzeChartVision, analyzeIntel, checkHealth, evaluateStrategy,
   fetchAutoTradeStatus, fetchRiskAlerts, listMonitors, parseStrategyCommand,
@@ -384,6 +384,10 @@ function injectBodyPadding(open: boolean) {
   el.textContent = `
     body { padding-right: ${pad}px !important; box-sizing: border-box !important; }
     #__APP, [class*="layout"], [class*="Layout"], main { max-width: calc(100% - ${pad}px) !important; }
+    @media (max-width: ${PANEL_MOBILE_BREAKPOINT}px) {
+      body { padding-right: 0 !important; }
+      #__APP, [class*="layout"], [class*="Layout"], main { max-width: 100% !important; }
+    }
   `
 }
 

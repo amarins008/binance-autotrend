@@ -1,18 +1,24 @@
 # XRPUSDT
 
 ## Performance
-- Wins: 1
+- Wins: 0
 - Losses: 0
-- Trades: 1
-- WinRate: 100.0%
+- Trades: 0
+- WinRate: 0.0%
 - RealizedPnL: 0.0
 - AvgPnL/Trade: 0.0
+- RewardScore: 0.0
+- RewardDelta: 0.0
+- RewardBehaviorDelta: 0.0
+- RewardWinStreak: 0
+- RewardLossStreak: 0
+- LearningRankScore: 0.0
 
 ## Scan Behavior
-- Observations: 919
-- PickedCount: 91
-- PickRate: 9.9%
-- LastSignal: WAIT
-- LastConfidence: 0.5
-- LastScanScore: 0.246386
-- UpdatedAt: 1779085200
+- Observations: 26
+- PickedCount: 0
+- PickRate: 0.0%
+- LastSignal: SHORT
+- LastConfidence: 0.77
+- LastScanScore: 0.765521
+- UpdatedAt: 1781060436

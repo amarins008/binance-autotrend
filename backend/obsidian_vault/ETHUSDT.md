@@ -2,17 +2,25 @@
 
 ## Performance
 - Wins: 0
-- Losses: 2
-- Trades: 2
+- Losses: 4
+- Trades: 4
 - WinRate: 0.0%
-- RealizedPnL: -0.198856
-- AvgPnL/Trade: -0.099428
+- RealizedPnL: -0.464254
+- AvgPnL/Trade: -0.116064
 
 ## Scan Behavior
-- Observations: 1199
-- PickedCount: 175
-- PickRate: 14.6%
+- Observations: 1865
+- PickedCount: 273
+- PickRate: 14.64%
 - LastSignal: LONG
-- LastConfidence: 0.62
-- LastScanScore: 0.619764
-- UpdatedAt: 1779087647
+- LastConfidence: 0.76
+- LastScanScore: 0.759766
+- UpdatedAt: 1779175690
+
+## Last Trade
+- Side: LONG
+- Entry: 2138.51
+- Exit: 2138.04
+- PnL: -0.01692
+- Reason: LIVE_CLOSE
+- ClosedAt: 1779175690

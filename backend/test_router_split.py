@@ -7,6 +7,7 @@ import main
 class TestRouterSplit(unittest.TestCase):
     def test_router_modules_register_core_routes(self):
         import routers.analysis_routes  # noqa: F401
+        import routers.autotrade_routes  # noqa: F401
         import routers.system_routes  # noqa: F401
 
         paths = {getattr(route, "path", None) for route in main.app.routes}
@@ -20,8 +21,13 @@ class TestRouterSplit(unittest.TestCase):
             "/analyze",
             "/analyze-vision",
             "/intel/analyze",
+            "/intel/rank",
             "/risk-alerts",
             "/strategy/parse",
+            "/autotrade/start",
+            "/autotrade/stop",
+            "/autotrade/reset",
+            "/autotrade/status",
         }
         self.assertTrue(expected.issubset(paths))
 

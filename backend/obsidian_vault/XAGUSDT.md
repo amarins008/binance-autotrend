@@ -9,10 +9,10 @@
 - AvgPnL/Trade: 0.0
 
 ## Scan Behavior
-- Observations: 312
-- PickedCount: 45
-- PickRate: 14.42%
-- LastSignal: LONG
-- LastConfidence: 0.775
-- LastScanScore: 0.768433
-- UpdatedAt: 1779087647
+- Observations: 876
+- PickedCount: 108
+- PickRate: 12.33%
+- LastSignal: SHORT
+- LastConfidence: 0.8
+- LastScanScore: 0.793415
+- UpdatedAt: 1779175470

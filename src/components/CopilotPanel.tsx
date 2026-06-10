@@ -113,13 +113,13 @@ const ScoreBar = ({ long, short }: { long: number; short: number }) => {
 }
 
 const Card = ({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) => (
-  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 8, ...style }}>
+  <div className="copilot-card" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", marginBottom: 7, ...style }}>
     {children}
   </div>
 )
 
 const CardTitle = ({ children }: { children: React.ReactNode }) => (
-  <div style={{ fontSize: 11, fontWeight: 700, color: C.subtle, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+  <div className="copilot-card-title" style={{ fontSize: 10, fontWeight: 700, color: C.subtle, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 7 }}>
     {children}
   </div>
 )
@@ -138,8 +138,8 @@ const Btn = ({ children, onClick, color, disabled, style }: {
   }
   const t = map[color ?? "ghost"]
   return (
-    <button onClick={onClick} disabled={disabled} style={{
-      padding: "7px 12px", borderRadius: 8, border: `1px solid ${t.border}`,
+    <button className="copilot-btn" onClick={onClick} disabled={disabled} style={{
+      minHeight: 34, padding: "7px 10px", borderRadius: 7, border: `1px solid ${t.border}`,
       background: t.bg, color: C.text, fontWeight: 700, fontSize: 12,
       cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
       transition: "opacity .2s", ...style,
@@ -203,8 +203,8 @@ const BtnFx = ({ children, onClick, color, disabled, style, toast }: {
     finally { setBusy(false) }
   }
   return (
-    <button onClick={handleClick} disabled={disabled || busy} style={{
-      padding: "7px 12px", borderRadius: 8,
+    <button className="copilot-btn" onClick={handleClick} disabled={disabled || busy} style={{
+      minHeight: 34, padding: "7px 10px", borderRadius: 7,
       border: `1px solid ${pressed ? C.text : t.border}`,
       background: pressed ? t.active : t.bg,
       color: C.text, fontWeight: 700, fontSize: 12,
@@ -229,10 +229,11 @@ const Input = ({ label, value, onChange, type = "text", step, min, max, style }:
   <div style={{ display: "flex", flexDirection: "column", gap: 2, ...style }}>
     <label style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</label>
     <input
+      className="copilot-field"
       type={type} value={value} step={step} min={min} max={max}
       onChange={e => onChange(e.target.value)}
       style={{
-        padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`,
+        minHeight: 32, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`,
         background: C.surface, color: C.text, fontSize: 12, width: "100%", boxSizing: "border-box",
       }}
     />
@@ -246,9 +247,9 @@ const Select = ({ label, value, onChange, options }: {
 }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
     <label style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</label>
-    <select value={value} onChange={e => onChange(e.target.value)} style={{
-      padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`,
-      background: C.surface, color: C.text, fontSize: 12,
+    <select className="copilot-field" value={value} onChange={e => onChange(e.target.value)} style={{
+      minHeight: 32, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`,
+      background: C.surface, color: C.text, fontSize: 12, width: "100%",
     }}>
       {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
@@ -291,9 +292,9 @@ const TabData = memo(({ intel, orderBook, vision, loading, onRefresh, onAnalyzeV
   return (
     <div>
       {/* Signal hero */}
-      <Card style={{ textAlign: "center", padding: "14px 12px" }}>
+      <Card style={{ textAlign: "center", padding: "12px 10px" }}>
         <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Signal</div>
-        <div style={{ fontSize: 36, fontWeight: 900, color: sigColor(sig), letterSpacing: 2, lineHeight: 1 }}>
+        <div className="copilot-signal" style={{ fontSize: 32, fontWeight: 900, color: sigColor(sig), letterSpacing: 0.8, lineHeight: 1 }}>
           {sig ?? "—"}
         </div>
         {intel && (
@@ -317,8 +318,8 @@ const TabData = memo(({ intel, orderBook, vision, loading, onRefresh, onAnalyzeV
         <BtnFx onClick={onRefresh} disabled={loading} color="ghost" style={{ flex: 1 }} toast="Analysis refreshed">
           {loading ? "⏳ Analyzing…" : "🔄 Refresh"}
         </BtnFx>
-        <select value={autoRefreshSec} onChange={e => onSetAutoRefresh(Number(e.target.value))}
-          style={{ padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 11 }}>
+        <select className="copilot-field" value={autoRefreshSec} onChange={e => onSetAutoRefresh(Number(e.target.value))}
+          style={{ minHeight: 34, padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 11 }}>
           <option value={0}>Manual</option>
           <option value={15}>15s</option>
           <option value={30}>30s</option>
@@ -440,11 +441,11 @@ const TabTrade = memo(({ symbol, strategyPlan, monitor, alerts, onParseCommand, 
             Qty
           </button>
           {useUsdt ? (
-            <input type="number" min={1} step={1} value={usdtAmt} onChange={e => setUsdtAmt(Number(e.target.value))}
-              style={{ flex: 1, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12 }} />
+            <input className="copilot-field" type="number" min={1} step={1} value={usdtAmt} onChange={e => setUsdtAmt(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 0, minHeight: 34, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12 }} />
           ) : (
-            <input type="number" min={0.001} step={0.001} value={qty} onChange={e => setQty(Number(e.target.value))}
-              style={{ flex: 1, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12 }} />
+            <input className="copilot-field" type="number" min={0.001} step={0.001} value={qty} onChange={e => setQty(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 0, minHeight: 34, padding: "5px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12 }} />
           )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
@@ -458,7 +459,7 @@ const TabTrade = memo(({ symbol, strategyPlan, monitor, alerts, onParseCommand, 
       {/* Jarvis command */}
       <Card>
         <CardTitle>Jarvis Command</CardTitle>
-        <textarea value={command} onChange={e => setCommand(e.target.value)} rows={2}
+        <textarea className="copilot-field" value={command} onChange={e => setCommand(e.target.value)} rows={2}
           style={{ width: "100%", padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12, resize: "vertical", boxSizing: "border-box", marginBottom: 6 }} />
         <BtnFx onClick={() => onParseCommand(command)} color="ghost" style={{ width: "100%" }} toast="Command parsed">Parse Command</BtnFx>
 
@@ -524,12 +525,15 @@ const TabAuto = memo(({ symbol, autoTradeStatus, onStartAutoTrade, onStopAutoTra
   useEffect(() => { if (!running) setSym(symbol) }, [symbol, running])
   const paper = autoTradeStatus?.paper
   const cfg = autoTradeStatus?.config
-  const total = (paper?.wins ?? 0) + (paper?.losses ?? 0)
+  const liveToday = autoTradeStatus?.kpiTodayAllSymbols?.live ?? autoTradeStatus?.kpiToday?.live
+  const liveStats = liveToday ?? autoTradeStatus?.liveStatsAll ?? autoTradeStatus?.liveStats
+  const statSource = cfg?.executionMode === "LIVE" ? liveStats : paper
+  const total = (statSource?.wins ?? 0) + (statSource?.losses ?? 0)
   // Use backend-provided winRatePct if available, else calculate
-  const winRatePct = paper?.winRatePct != null && total > 0
-    ? paper.winRatePct.toFixed(0)
-    : total > 0 ? ((paper!.wins / total) * 100).toFixed(0) : null
-  const pnl = paper?.realizedPnl ?? 0
+  const winRatePct = statSource?.winRatePct != null && total > 0
+    ? statSource.winRatePct.toFixed(0)
+    : total > 0 ? (((statSource?.wins ?? 0) / total) * 100).toFixed(0) : null
+  const pnl = statSource?.realizedPnl ?? 0
   const activePos = autoTradeStatus?.activePosition
   const livePos = activePos?.live
   const paperPos = paper?.position
@@ -596,6 +600,7 @@ const TabAuto = memo(({ symbol, autoTradeStatus, onStartAutoTrade, onStopAutoTra
                 <>
                   <KV k="Live Qty" v={livePos.qty.toFixed(4)} />
                   <KV k="Notional" v={`~${livePos.notionalUsdtApprox.toFixed(2)} USDT`} />
+                  {livePos.leverage ? <KV k="Leverage" v={`x${livePos.leverage}`} /> : null}
                 </>
               )}
             </div>
@@ -604,8 +609,8 @@ const TabAuto = memo(({ symbol, autoTradeStatus, onStartAutoTrade, onStopAutoTra
           {/* Stats */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4, marginBottom: 8 }}>
             {[
-              { label: "WIN",    value: String(paper?.wins ?? 0),  color: C.green },
-              { label: "LOSS",   value: String(paper?.losses ?? 0), color: C.red },
+              { label: "WIN",    value: String(statSource?.wins ?? 0),  color: C.green },
+              { label: "LOSS",   value: String(statSource?.losses ?? 0), color: C.red },
               { label: "W-RATE", value: winRatePct ? `${winRatePct}%` : "—", color: winRatePct && Number(winRatePct) >= 50 ? C.green : C.red },
               { label: "PnL",    value: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(3)}`, color: pnl >= 0 ? C.green : C.red },
             ].map(s => (
@@ -685,8 +690,8 @@ const TabAuto = memo(({ symbol, autoTradeStatus, onStartAutoTrade, onStopAutoTra
           <CardTitle>Last Session</CardTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4, marginBottom: 6 }}>
             {[
-              { label: "WIN", value: String(paper?.wins ?? 0), color: C.green },
-              { label: "LOSS", value: String(paper?.losses ?? 0), color: C.red },
+              { label: "WIN", value: String(statSource?.wins ?? 0), color: C.green },
+              { label: "LOSS", value: String(statSource?.losses ?? 0), color: C.red },
               { label: "W-RATE", value: winRatePct ? `${winRatePct}%` : "—", color: winRatePct && Number(winRatePct) >= 50 ? C.green : C.red },
               { label: "PnL", value: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(3)}`, color: pnl >= 0 ? C.green : C.red },
             ].map(s => (
@@ -714,7 +719,7 @@ const TabAuto = memo(({ symbol, autoTradeStatus, onStartAutoTrade, onStopAutoTra
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
             <Input label="Symbol" value={sym} onChange={v => setSym(v.toUpperCase())} style={{ gridColumn: "1 / -1" }} />
             <Input label="USDT Amount" value={usdt} onChange={setUsdt} type="number" min={1} />
-            <Input label="Leverage" value={lev} onChange={setLev} type="number" min={1} max={125} />
+          <Input label="Leverage" value={lev} onChange={setLev} type="number" min={1} max={25} />
             <Select label="Margin Type" value={margin} onChange={setMargin}
               options={[{ value: "ISOLATED", label: "ISOLATED" }, { value: "CROSSED", label: "CROSSED" }]} />
             <Select label="Execution Mode" value={mode} onChange={v => setMode(v as "PAPER" | "LIVE")}
@@ -938,7 +943,7 @@ const TabSettings = memo(({ alerts, backendStatus, onStartBackend }: {
         <CardTitle>Risk Limits</CardTitle>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
           <Input label="Max Notional USDT" value={maxNotional} onChange={setMaxNotional} type="number" />
-          <Input label="Max Leverage" value={maxLeverage} onChange={setMaxLeverage} type="number" />
+          <Input label="Max Leverage" value={maxLeverage} onChange={setMaxLeverage} type="number" min={1} max={25} />
           <Input label="Max Daily Loss USDT" value={maxDailyLoss} onChange={setMaxDailyLoss} type="number" style={{ gridColumn: "1 / -1" }} />
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: killSwitch ? C.red : C.subtle, cursor: "pointer", marginBottom: 10 }}>
@@ -975,6 +980,7 @@ const TabSettings = memo(({ alerts, backendStatus, onStartBackend }: {
 // Width constants — exported so overlay.tsx can inject body padding
 export const PANEL_WIDTH = 332   // panel open width px
 export const PANEL_COLLAPSED_W = 36  // collapsed tab strip width px
+export const PANEL_MOBILE_BREAKPOINT = 520
 
 export const CopilotPanel = memo(({
   symbol, loading, backendStatus, insight, intel, orderBook, vision,
@@ -1007,7 +1013,7 @@ export const CopilotPanel = memo(({
   if (!open) {
     return (
       <ToastProvider>
-      <div style={{
+      <div className="copilot-collapsed" style={{
         position: "fixed", top: 0, right: 0, bottom: 0,
         width: PANEL_COLLAPSED_W, zIndex: 2147483647,
         background: C.surface, borderLeft: `1px solid ${C.border}`,
@@ -1060,7 +1066,29 @@ export const CopilotPanel = memo(({
           </button>
         ))}
 
-        <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
+        <style>{`
+          @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+          @media (max-width: ${PANEL_MOBILE_BREAKPOINT}px) {
+            .copilot-collapsed {
+              top: auto !important;
+              left: 8px !important;
+              right: 8px !important;
+              bottom: 8px !important;
+              width: auto !important;
+              height: 42px !important;
+              flex-direction: row !important;
+              justify-content: center !important;
+              padding: 5px 6px !important;
+              border: 1px solid ${C.border} !important;
+              border-radius: 8px !important;
+              box-shadow: 0 10px 30px rgba(0,0,0,.45) !important;
+            }
+            .copilot-collapsed button,
+            .copilot-collapsed > div {
+              margin-bottom: 0 !important;
+            }
+          }
+        `}</style>
       </div>
       </ToastProvider>
     )  }
@@ -1068,9 +1096,9 @@ export const CopilotPanel = memo(({
   // ── Full panel ──────────────────────────────────────────────────────────────
   return (
     <ToastProvider>
-    <div style={{
+    <div className="copilot-panel" style={{
       position: "fixed", top: 0, right: 0, bottom: 0,
-      width: PANEL_WIDTH, zIndex: 2147483647,
+      width: PANEL_WIDTH, maxWidth: "100vw", zIndex: 2147483647,
       background: C.bg, color: C.text,
       borderLeft: `1px solid ${C.border}`,
       boxShadow: "-8px 0 32px rgba(0,0,0,0.5)",
@@ -1078,16 +1106,16 @@ export const CopilotPanel = memo(({
       display: "flex", flexDirection: "column",
     }}>
       {/* ── Header (sticky) ── */}
-      <div style={{
-        padding: "10px 12px 0",
+      <div className="copilot-header" style={{
+        padding: "8px 10px 0",
         background: `linear-gradient(180deg, ${C.surface} 0%, ${C.bg} 100%)`,
         borderBottom: `1px solid ${C.border}`,
         flexShrink: 0,
       }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+        <div className="copilot-headline" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 5, gap: 8 }}>
           <div>
-            <div style={{ fontSize: 9, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase" }}>AI Copilot</div>
-            <div style={{ fontSize: 20, fontWeight: 900, letterSpacing: 0.5, lineHeight: 1.1 }}>{symbol}</div>
+            <div style={{ fontSize: 9, color: C.muted, letterSpacing: 0.8, textTransform: "uppercase" }}>AI Copilot</div>
+            <div className="copilot-symbol" style={{ fontSize: 19, fontWeight: 900, letterSpacing: 0.2, lineHeight: 1.05 }}>{symbol}</div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1111,10 +1139,10 @@ export const CopilotPanel = memo(({
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: "flex", gap: 1 }}>
+        <div className="copilot-tabs" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1 }}>
           {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              flex: 1, padding: "6px 2px", border: "none",
+            <button className="copilot-tab" key={t.id} onClick={() => setTab(t.id)} style={{
+              minWidth: 0, padding: "6px 2px", border: "none",
               borderBottom: `2px solid ${tab === t.id ? C.blue : "transparent"}`,
               background: "transparent",
               color: tab === t.id ? C.text : C.muted,
@@ -1135,8 +1163,8 @@ export const CopilotPanel = memo(({
       </div>
 
       {/* ── Scrollable content ── */}
-      <div style={{
-        flex: 1, overflowY: "auto", padding: "10px 10px 16px",
+      <div className="copilot-content" style={{
+        flex: 1, overflowY: "auto", padding: "8px 8px 12px",
         scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
       }}>
         {tab === "data" && (
@@ -1168,11 +1196,51 @@ export const CopilotPanel = memo(({
 
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
         @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
         ::-webkit-scrollbar { width: 4px }
         ::-webkit-scrollbar-track { background: transparent }
         ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px }
+        .copilot-panel,
+        .copilot-panel * { box-sizing: border-box; }
+        .copilot-panel button,
+        .copilot-panel input,
+        .copilot-panel select,
+        .copilot-panel textarea {
+          font-family: ui-sans-serif, 'Segoe UI', system-ui, sans-serif;
+        }
+        @media (max-width: ${PANEL_MOBILE_BREAKPOINT}px) {
+          .copilot-panel {
+            left: 0 !important;
+            width: 100vw !important;
+            border-left: none !important;
+            box-shadow: none !important;
+          }
+          .copilot-header {
+            padding: 7px 8px 0 !important;
+          }
+          .copilot-content {
+            padding: 7px 7px 10px !important;
+          }
+          .copilot-card {
+            padding: 8px !important;
+            margin-bottom: 6px !important;
+            border-radius: 7px !important;
+          }
+          .copilot-card-title {
+            margin-bottom: 6px !important;
+          }
+          .copilot-tab {
+            min-height: 34px !important;
+            font-size: 10px !important;
+          }
+          .copilot-signal {
+            font-size: 28px !important;
+          }
+          .copilot-btn,
+          .copilot-field {
+            min-height: 34px !important;
+          }
+        }
       `}</style>
     </div>
     </ToastProvider>
