@@ -135,3 +135,124 @@ def _cvd_delta(buy_vols: list[float], sell_vols: list[float]) -> float:
     recent_sell = sum(sell_vols[-10:])
     total = recent_buy + recent_sell
     return (recent_buy - recent_sell) / max(total, 1e-9)
+
+
+def _detect_pre_reversal(closes: list[float], highs: list[float], lows: list[float],
+                         rsi_period: int = 14, lookback: int = 5) -> dict:
+    """
+    Heuristic pre-reversal detector for short-horizon entries.
+
+    Returns a dict describing how close the current bar is to a probable
+    short-term reversal — used to BLOCK entries that are about to reverse
+    rather than continue.
+
+    Fields:
+      score           : 0.0..1.0 — higher = more likely reversal is imminent
+      side_at_risk    : "LONG" | "SHORT" | None — which side would reverse
+      reason          : short string explaining the strongest signal
+      rsi             : last RSI value
+      stoch_k, stoch_d: last stochastic-RSI values
+      bb_pct_b        : last Bollinger %b
+      atr_pct         : last ATR as % of close
+    """
+    out = {
+        "score": 0.0,
+        "side_at_risk": None,
+        "reason": "",
+        "rsi": 50.0,
+        "stoch_k": 50.0,
+        "stoch_d": 50.0,
+        "bb_pct_b": 0.5,
+        "atr_pct": 0.0,
+    }
+    if not closes or len(closes) < 20:
+        return out
+
+    last = float(closes[-1])
+    out["atr_pct"] = round((_atr_series(highs, lows, closes, 14)[-1] / max(last, 1e-9)) * 100.0, 4)
+
+    rsi_val = _rsi(closes, rsi_period)
+    out["rsi"] = round(rsi_val, 2)
+    k, d = _stochastic_rsi(closes, rsi_period, 14)
+    out["stoch_k"] = round(k, 2)
+    out["stoch_d"] = round(d, 2)
+
+    bb_upper, bb_mid, bb_lower, bb_pct_b, bb_bw = _bollinger(closes, 20, 2.0)
+    out["bb_pct_b"] = round(bb_pct_b, 4)
+
+    score = 0.0
+    reason_bits = []
+    side_at_risk = None
+
+    # 1) RSI overbought/oversold extremes → mean-reversion risk for longs/shorts.
+    if rsi_val >= 75:
+        score += 0.35
+        side_at_risk = "LONG"
+        reason_bits.append(f"rsi_overbought={rsi_val:.1f}")
+    elif rsi_val <= 25:
+        score += 0.35
+        side_at_risk = "SHORT"
+        reason_bits.append(f"rsi_oversold={rsi_val:.1f}")
+
+    # 2) Bollinger %b stretch — price riding the band is a classic chase signal.
+    if bb_pct_b >= 0.95:
+        score += 0.30
+        side_at_risk = side_at_risk or "LONG"
+        reason_bits.append(f"bb_pct_b_high={bb_pct_b:.2f}")
+    elif bb_pct_b <= 0.05:
+        score += 0.30
+        side_at_risk = side_at_risk or "SHORT"
+        reason_bits.append(f"bb_pct_b_low={bb_pct_b:.2f}")
+
+    # 3) Bearish/Bullish RSI divergence over the lookback window.
+    if len(closes) >= lookback + 2:
+        recent_closes = closes[-lookback - 1:]
+        recent_lows = lows[-lookback - 1:] if lows else recent_closes
+        recent_highs = highs[-lookback - 1:] if highs else recent_closes
+
+        price_hh = recent_highs[-1] > max(recent_highs[:-1])
+        rsi_hh = _rsi(recent_closes, rsi_period) < _rsi(recent_closes[:-1], rsi_period)
+        if price_hh and rsi_hh:
+            score += 0.35
+            side_at_risk = side_at_risk or "LONG"
+            reason_bits.append("bearish_divergence")
+
+        price_ll = recent_lows[-1] < min(recent_lows[:-1])
+        rsi_ll = _rsi(recent_closes, rsi_period) > _rsi(recent_closes[:-1], rsi_period)
+        if price_ll and rsi_ll:
+            score += 0.35
+            side_at_risk = side_at_risk or "SHORT"
+            reason_bits.append("bullish_divergence")
+
+    # 4) Stochastic RSI overbought/oversold cross setup.
+    if k >= 90 and d >= 90:
+        score += 0.15
+        side_at_risk = side_at_risk or "LONG"
+        reason_bits.append(f"stoch_top={k:.0f}")
+    elif k <= 10 and d <= 10:
+        score += 0.15
+        side_at_risk = side_at_risk or "SHORT"
+        reason_bits.append(f"stoch_bottom={k:.0f}")
+
+    # 5) Wick-rejection on the last bar (open vs close near extremes).
+    try:
+        if highs and lows and len(closes) >= 2:
+            last_open = float(closes[-2])
+            rng = max(highs[-1] - lows[-1], 1e-9)
+            upper_wick = (highs[-1] - max(last, last_open)) / rng
+            lower_wick = (min(last, last_open) - lows[-1]) / rng
+            if upper_wick > 0.55 and last < last_open:
+                score += 0.20
+                side_at_risk = side_at_risk or "LONG"
+                reason_bits.append(f"upper_wick={upper_wick:.2f}")
+            if lower_wick > 0.55 and last > last_open:
+                score += 0.20
+                side_at_risk = side_at_risk or "SHORT"
+                reason_bits.append(f"lower_wick={lower_wick:.2f}")
+    except Exception:
+        pass
+
+    out["score"] = round(min(score, 1.0), 3)
+    out["side_at_risk"] = side_at_risk
+    out["reason"] = ",".join(reason_bits)
+    return out

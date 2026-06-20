@@ -12,6 +12,7 @@ from indicators import (
     _bollinger,
     _cvd_delta,
     _detect_market_session,
+    _detect_pre_reversal,
     _ema,
     _ema_series,
     _macd,
@@ -2249,6 +2250,8 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
         wr = (int(pr.get("wins", 0)) / max(n, 1)) * 100.0 if n > 0 else 0.0
     if n < 6:
         return base_min_conf
+    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
+    recent_score = float(weighted.get("score", 0.0) or 0.0)
     # Conservative adaptive rule: good symbol => slightly easier, weak symbol => stricter.
     if wr >= 60:
         out = max(0.43, base_min_conf - 0.06)
@@ -2256,8 +2259,6 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
         out = min(0.88, base_min_conf + 0.08)
     else:
         out = base_min_conf
-    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
-    recent_score = float(weighted.get("score", 0.0) or 0.0)
     reward_delta = float(pr.get("rewardDelta", 0.0) or 0.0)
     reward_behavior = float(pr.get("rewardBehaviorDelta", 0.0) or 0.0)
     win_streak = int(pr.get("rewardWinStreak", 0) or 0)
@@ -3207,6 +3208,34 @@ async def _lifespan(app: FastAPI):
         except Exception:
             pass
     asyncio.create_task(_warmup())
+
+    # Pre-warm klines cache for the active scan symbol so the pre-reversal
+    # guard never has to block on a network round-trip during main cycle.
+    async def _klines_prewarm_loop():
+        while True:
+            try:
+                cfg = AUTO_TRADE.get("config") or {}
+                sym = str(cfg.get("symbol", "AUTO") or "AUTO").upper()
+                if sym in ("AUTO", "SCAN", ""):
+                    syms = [
+                        s for s in (cfg.get("whitelistSymbols") or [])
+                        if isinstance(s, str) and s
+                    ]
+                    if not syms:
+                        syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+                else:
+                    syms = [sym]
+                for s in syms:
+                    try:
+                        await asyncio.wait_for(
+                            _cached_klines(s, "5m", 60), timeout=4.0
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            await asyncio.sleep(20)
+    asyncio.create_task(_klines_prewarm_loop())
     try:
         yield
     finally:
@@ -8527,6 +8556,93 @@ async def _autotrade_loop():
                 _autotrade_skip("late_short_chase", f"Skip: late SHORT chase (bb={bb:.2f} vwapDist={vwap_dist:.3f}%)")
                 await asyncio.sleep(cfg["intervalSec"])
                 continue
+            # Pre-reversal guard: block entries that look likely to reverse
+            # before they have a chance to run (RSI extremes, divergence, wick rejection).
+            try:
+                pre_rev_thr = float(cfg.get("preReversalScoreBlock", 0.55) or 0.55)
+                pre_rev_thr_marg = float(cfg.get("preReversalScoreSoftener", 0.20) or 0.20)
+                _autotrade_log(f"pre-reversal: start check for {cfg['symbol']} side={signal} thr={pre_rev_thr:.2f}")
+                # Prefer any cached klines for this symbol to avoid blocking the cycle.
+                kl = None
+                try:
+                    key = (cfg["symbol"], "5m", 60)
+                    cached = _KLINES_CACHE.get(key)
+                    if cached:
+                        _fetched_at, kl = cached
+                        # Use cached if it is at most 5 minutes old — far less than the 20s cache TTL
+                        # for stale-tolerant reversal analysis, but we still want fresh data when possible.
+                        if time.time() - _fetched_at > 300:
+                            kl = None
+                except Exception:
+                    kl = None
+                if not (isinstance(kl, list) and len(kl) >= 25):
+                    try:
+                        kl = await asyncio.wait_for(
+                            _cached_klines(cfg["symbol"], "5m", 60),
+                            timeout=4.5,
+                        )
+                    except Exception as e:
+                        _autotrade_log(f"pre-reversal: klines fetch failed: {type(e).__name__}: {e}")
+                        kl = None
+                _autotrade_log(
+                    f"pre-reversal: klines for {cfg['symbol']} got={type(kl).__name__} len={len(kl) if hasattr(kl,'__len__') else 0}"
+                )
+                if not (isinstance(kl, list) and kl and len(kl) >= 25):
+                    _autotrade_log(
+                        f"pre-reversal check skipped: klines insufficient for {cfg['symbol']} (got={type(kl).__name__} len={len(kl) if hasattr(kl,'__len__') else 0})"
+                    )
+                else:
+                    closes = [float(k[4]) for k in kl]
+                    highs = [float(k[2]) for k in kl]
+                    lows = [float(k[3]) for k in kl]
+                    pre = _detect_pre_reversal(closes, highs, lows)
+                    if isinstance(pre, dict):
+                        AUTO_TRADE.setdefault("preReversalSamples", []).append({
+                            "ts": int(time.time()),
+                            "symbol": cfg["symbol"],
+                            "side": signal,
+                            **pre,
+                        })
+                        if len(AUTO_TRADE["preReversalSamples"]) > 50:
+                            AUTO_TRADE["preReversalSamples"] = AUTO_TRADE["preReversalSamples"][-50:]
+                        AUTO_TRADE["lastPreReversal"] = {
+                            "symbol": cfg["symbol"],
+                            "ts": int(time.time()),
+                            **pre,
+                        }
+                        side_at_risk = pre.get("side_at_risk")
+                        # Block only when the detected reversal side matches our entry side
+                        # and the confidence is high enough.
+                        block_score = pre_rev_thr
+                        if (conf or 0) < adaptive_min_conf + 0.05:
+                            block_score = max(0.30, pre_rev_thr - pre_rev_thr_marg)
+                        if (
+                            pre.get("score", 0) >= block_score
+                            and side_at_risk == signal
+                        ):
+                            _agent_mark(
+                                "strategy_builder",
+                                "blocked",
+                                "pre reversal detected",
+                                f"score={pre.get('score'):.2f} reason={pre.get('reason')}",
+                            )
+                            _autotrade_skip(
+                                "pre_reversal",
+                                f"Skip: pre-reversal {signal} (score={pre.get('score'):.2f} {pre.get('reason')})",
+                            )
+                            AUTO_TRADE.setdefault("preReversalBlocks", []).append({
+                                "ts": int(time.time()),
+                                "symbol": cfg["symbol"],
+                                "side": signal,
+                                "score": pre.get("score"),
+                                "reason": pre.get("reason"),
+                            })
+                            if len(AUTO_TRADE["preReversalBlocks"]) > 50:
+                                AUTO_TRADE["preReversalBlocks"] = AUTO_TRADE["preReversalBlocks"][-50:]
+                            await asyncio.sleep(cfg["intervalSec"])
+                            continue
+            except Exception as e:
+                _autotrade_log(f"pre-reversal check skipped: {type(e).__name__}: {e}")
             if cfg["requireVisionConsensus"] and not vision:
                 _agent_mark("strategy_builder", "blocked", "vision consensus required")
                 _autotrade_skip("vision", "Skip: vision consensus required")
