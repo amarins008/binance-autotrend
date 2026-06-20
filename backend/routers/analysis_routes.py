@@ -2,33 +2,28 @@ import asyncio
 
 from fastapi import APIRouter
 
-from main import (
-    AnalyzeRequest,
-    IntelAnalyzeRequest,
-    _intel_score,
-    _normalize_symbol,
-    _pick_best_symbol_from_scan,
-    analyze,
-    analyze_vision,
-    intel_analyze,
-    parse_strategy,
-    risk_alerts,
-    set_risk_config,
-    symbol_meta,
-    get_risk_config,
-)
+# Lazy imports to break the circular dependency with main.py.
+# main.py imports this router at the bottom of its module after everything
+# is defined. Importing intel_analyze, analyze etc. at the top level would
+# cause a circular-import error because main.py has not finished loading yet.
+def _lazy_main():
+    import main as _m
+    return _m
+
+
 from schemas import CoinRankRequest
 
 router = APIRouter()
 
 
 def _rank_row(symbol: str, intel: dict, position_order: int) -> dict:
+    _m = _lazy_main()
     signal = str((intel or {}).get("signal", "WAIT")).upper()
     confidence = float((intel or {}).get("confidence", 0.0) or 0.0)
     execution = intel.get("execution") if isinstance((intel or {}).get("execution"), dict) else {}
     momentum_pct = abs(float(execution.get("momentumPct", 0.0) or 0.0))
     spread_bps = float(execution.get("spreadBps", 0.0) or 0.0)
-    score = _intel_score(symbol, intel)
+    score = _m._intel_score(symbol, intel)
     return {
         "positionOrder": position_order,
         "symbol": symbol,
@@ -44,12 +39,13 @@ def _rank_row(symbol: str, intel: dict, position_order: int) -> dict:
 
 
 async def rank_coins(req: CoinRankRequest):
+    _m = _lazy_main()
     if req.symbols:
         candidates: list[str] = []
         seen: set[str] = set()
         for raw_symbol in req.symbols:
             try:
-                symbol = _normalize_symbol(str(raw_symbol).strip())
+                symbol = _m._normalize_symbol(str(raw_symbol).strip())
             except Exception:
                 continue
             if symbol in seen:
@@ -67,7 +63,7 @@ async def rank_coins(req: CoinRankRequest):
             }
 
         results = await asyncio.gather(
-            *[intel_analyze(IntelAnalyzeRequest(symbol=symbol)) for symbol in candidates],
+            *[_m.intel_analyze(_m.IntelAnalyzeRequest(symbol=symbol)) for symbol in candidates],
             return_exceptions=True,
         )
 
@@ -78,7 +74,7 @@ async def rank_coins(req: CoinRankRequest):
         for symbol, outcome in zip(candidates, results):
             if isinstance(outcome, Exception) or not isinstance(outcome, dict):
                 continue
-            score = _intel_score(symbol, outcome)
+            score = _m._intel_score(symbol, outcome)
             ranked.append(_rank_row(symbol, outcome, len(ranked) + 1))
             signal = str(outcome.get("signal", "WAIT")).upper()
             if signal in ("LONG", "SHORT") and score > best_score:
@@ -103,7 +99,7 @@ async def rank_coins(req: CoinRankRequest):
         "scanAnalyzeTop": req.scanAnalyzeTop,
         "whitelistSymbols": req.whitelistSymbols,
     }
-    best_symbol, best_intel, board = await _pick_best_symbol_from_scan(cfg)
+    best_symbol, best_intel, board = await _m._pick_best_symbol_from_scan(cfg)
     ranked: list[dict] = []
     sorted_board = sorted(
         board,
@@ -131,12 +127,18 @@ async def rank_coins(req: CoinRankRequest):
     }
 
 
-router.add_api_route('/risk-config', get_risk_config, methods=['GET'])
-router.add_api_route('/symbol-meta', symbol_meta, methods=['GET'])
-router.add_api_route('/risk-config', set_risk_config, methods=['POST'])
-router.add_api_route('/analyze', analyze, methods=['POST'])
-router.add_api_route('/analyze-vision', analyze_vision, methods=['POST'])
-router.add_api_route('/intel/analyze', intel_analyze, methods=['POST'])
+def _route_getter(name: str):
+    """Lazily resolve a function from main.py when the route is actually called."""
+    _m = _lazy_main()
+    return getattr(_m, name)
+
+
+router.add_api_route('/risk-config', lambda: _route_getter('get_risk_config')(), methods=['GET'])
+router.add_api_route('/symbol-meta', lambda: _route_getter('symbol_meta')(), methods=['GET'])
+router.add_api_route('/risk-config', lambda: _route_getter('set_risk_config')(), methods=['POST'])
+router.add_api_route('/analyze', lambda: _route_getter('analyze')(), methods=['POST'])
+router.add_api_route('/analyze-vision', lambda: _route_getter('analyze_vision')(), methods=['POST'])
+router.add_api_route('/intel/analyze', lambda: _route_getter('intel_analyze')(), methods=['POST'])
 router.add_api_route('/intel/rank', rank_coins, methods=['POST'])
-router.add_api_route('/risk-alerts', risk_alerts, methods=['GET'])
-router.add_api_route('/strategy/parse', parse_strategy, methods=['POST'])
+router.add_api_route('/risk-alerts', lambda: _route_getter('risk_alerts')(), methods=['GET'])
+router.add_api_route('/strategy/parse', lambda: _route_getter('parse_strategy')(), methods=['POST'])

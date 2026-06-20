@@ -4,9 +4,9 @@
 
 setlocal
 
-set HOST_NAME=com.binance_copilot.host
+set HOST_NAME=com.cmux_hermes.host
 set HOST_DIR=%~dp0
-set MANIFEST_PATH=%HOST_DIR%com.binance_copilot.host.json
+set MANIFEST_PATH=%HOST_DIR%com.cmux_hermes.host.json
 set REG_KEY=HKCU\Software\Google\Chrome\NativeMessagingHosts\%HOST_NAME%
 
 echo Installing Native Messaging Host...

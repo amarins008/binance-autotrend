@@ -7,7 +7,7 @@ const HEADERS = { "Content-Type": "application/json", "Connection": "keep-alive"
 const GET_HEADERS = { "Connection": "keep-alive" }
 
 // ── Native Messaging — start/stop backend process ─────────────────────────────
-const NATIVE_HOST = "com.binance_copilot.host"
+const NATIVE_HOST = "com.cmux_hermes.host"
 
 const sendNativeMessage = (msg: object): Promise<{ ok: boolean; msg?: string; running?: boolean }> =>
   new Promise((resolve) => {

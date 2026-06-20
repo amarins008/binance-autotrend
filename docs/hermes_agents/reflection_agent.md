@@ -14,9 +14,9 @@ Expected outputs:
 Allowed self-heal:
 
 - Mark missing reflection after closed trades and create a summary request.
-- Propose narrow changes with evidence and send them to strategy_builder, position_guardian, or Codex.
+- Propose narrow changes with evidence and send them to strategy_builder, position_guardian, or Cmux.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Reflections repeat the same issue without a code/config path.
 - Review data is missing even though trades exist.

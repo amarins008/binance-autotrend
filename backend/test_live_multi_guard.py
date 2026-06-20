@@ -1630,6 +1630,10 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.prev_scan_board = main.AUTO_TRADE.get("scanBoard")
         self.prev_perf_locks = main.AUTO_TRADE.get("perfLocks")
         self.prev_supervisor_auto_tune = main.AUTO_TRADE.get("supervisorAutoTune")
+        self.prev_supervisor_review = main.AUTO_TRADE.get("hermesSupervisorReview")
+        # The hermesSupervisorReview cache can hold stale severity from a previous
+        # test; clear it so each test computes a fresh review.
+        main.AUTO_TRADE.pop("hermesSupervisorReview", None)
         self.prev_risk = dict(main.RISK)
         main.AUTO_TRADE["config"] = {
             "executionMode": "LIVE",
@@ -1655,6 +1659,10 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["scanBoard"] = self.prev_scan_board
         main.AUTO_TRADE["perfLocks"] = self.prev_perf_locks
         main.AUTO_TRADE["supervisorAutoTune"] = self.prev_supervisor_auto_tune
+        if self.prev_supervisor_review is None:
+            main.AUTO_TRADE.pop("hermesSupervisorReview", None)
+        else:
+            main.AUTO_TRADE["hermesSupervisorReview"] = self.prev_supervisor_review
         main.RISK.clear()
         main.RISK.update(self.prev_risk)
 
@@ -1770,7 +1778,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(guardian["runs"], 7)
         self.assertTrue(guardian["data"]["heartbeat"])
         self.assertLessEqual(int(main.time.time()) - int(guardian["updatedAt"]), 2)
-        self.assertFalse(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in out["hermesSupervisorReview"]["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in out["hermesSupervisorReview"]["cmuxHandoff"]))
 
     def test_supervisor_ignores_stopped_scan_board_perf_locks(self):
         main.AUTO_TRADE["running"] = False
@@ -1783,8 +1791,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
         out = main.autotrade_status_lite()
 
         review = out["hermesSupervisorReview"]
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["codexHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_status_lite_keeps_dashboard_kpi_fields(self):
         main.AUTO_TRADE["paper"] = {"wins": 2, "losses": 1, "realizedPnl": 1.25, "position": None, "history": []}
@@ -1996,7 +2004,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "high")
         self.assertTrue(any(x["agent"] == "risk_manager" for x in review["issues"]))
-        self.assertTrue(review["codexHandoff"])
+        self.assertTrue(review["cmuxHandoff"])
 
     def test_supervisor_treats_portfolio_capacity_as_hold(self):
         state = main.new_agent_state()
@@ -2008,7 +2016,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Capacity hold" for x in review["issues"]))
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_auto_handles_symbol_day_cap_scan_loop(self):
         prev = {
@@ -2060,7 +2068,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for action in review["autoActions"]
             )
         )
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_auto_handles_mixed_perf_lock_and_analyze_error_board(self):
         prev = {
@@ -2121,7 +2129,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for action in review["autoActions"]
             )
         )
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_treats_adaptive_cooldown_as_safety_hold(self):
         state = main.new_agent_state()
@@ -2133,7 +2141,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_treats_no_trade_window_as_safety_hold(self):
         state = main.new_agent_state()
@@ -2145,7 +2153,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_treats_late_chase_as_strategy_safety_hold(self):
         state = main.new_agent_state()
@@ -2157,7 +2165,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Inspect repeated blocked state for strategy_builder: late long chase" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Inspect repeated blocked state for strategy_builder: late long chase" for x in review["cmuxHandoff"]))
 
     def test_supervisor_treats_signal_wait_as_strategy_safety_hold(self):
         state = main.new_agent_state()
@@ -2172,7 +2180,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(
             any(
                 x.get("task") == "Inspect repeated blocked state for strategy_builder: signal wait"
-                for x in review["codexHandoff"]
+                for x in review["cmuxHandoff"]
             )
         )
 
@@ -2189,7 +2197,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(
             any(
                 x.get("task") == "Inspect repeated blocked state for strategy_builder: confidence below adaptive minimum"
-                for x in review["codexHandoff"]
+                for x in review["cmuxHandoff"]
             )
         )
 
@@ -2206,7 +2214,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(
             any(
                 x.get("task") == "Inspect repeated blocked state for market_analyst: primary symbol already open"
-                for x in review["codexHandoff"]
+                for x in review["cmuxHandoff"]
             )
         )
 
@@ -2223,7 +2231,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(
             any(
                 x.get("task") == "Inspect repeated blocked state for market_analyst: symbol volatile cooldown"
-                for x in review["codexHandoff"]
+                for x in review["cmuxHandoff"]
             )
         )
 
@@ -2236,7 +2244,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "high")
-        self.assertTrue(review["codexHandoff"])
+        self.assertTrue(review["cmuxHandoff"])
 
     def test_supervisor_treats_cooldown_check_timeout_as_safety_hold(self):
         state = main.new_agent_state()
@@ -2248,7 +2256,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_reports_stale_guardian_with_open_position(self):
         state = main.new_agent_state()
@@ -2265,7 +2273,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(review["severity"], "high")
         self.assertTrue(any(x["title"] == "Open positions not actively monitored" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "position_guardian" for x in review["autoActions"]))
-        self.assertTrue(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in review["codexHandoff"]))
+        self.assertTrue(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in review["cmuxHandoff"]))
 
     def test_supervisor_reports_repeated_fapi_agreement_rejects(self):
         state = main.new_agent_state()
@@ -2294,7 +2302,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for x in review["autoActions"]
             )
         )
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
         self.assertFalse(any(x["title"] == "Low entry activity" for x in review["issues"]))
 
     def test_supervisor_escalates_unhandled_repeated_fapi_agreement_rejects(self):
@@ -2316,7 +2324,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertTrue(any(x["title"] == "Exchange agreement rejects entries" and x["severity"] == "high" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["codexHandoff"]))
+        self.assertTrue(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
         self.assertTrue(
             any(
                 x.get("action") == "skip symbols rejected by -4411"
@@ -2351,7 +2359,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         self.assertFalse(any(x["title"] == "Exchange agreement rejects entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
         self.assertTrue(any(x.get("action") == "skip symbols rejected by -4411" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertEqual(main.AUTO_TRADE["hermesAgents"]["agents"]["execution_agent"]["lastAction"], "skip symbols rejected by -4411")
 
@@ -2375,7 +2383,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         self.assertFalse(any(x["title"] == "Exchange agreement rejects entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
         self.assertTrue(any(x.get("action") == "skip symbols rejected by -4411" and x.get("status") == "applied" for x in review["autoActions"]))
 
     def test_supervisor_auto_heals_live_scan_config_drift(self):
@@ -2420,7 +2428,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertEqual(main.AUTO_TRADE["perfLocks"]["XAUUSDT"]["reason"], "fapi_agreement")
         self.assertTrue(any(x.get("action") == "restored -4411 perf locks from logs" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
 
     def test_supervisor_escalates_repeated_locked_scan_pick(self):
         state = main.new_agent_state()
@@ -2449,7 +2457,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertTrue(any(x["title"] == "Repeated scan pick concentration" and x["severity"] == "high" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Fix scan candidate lock enforcement for repeated rejected symbol picks" for x in review["codexHandoff"]))
+        self.assertTrue(any(x.get("task") == "Fix scan candidate lock enforcement for repeated rejected symbol picks" for x in review["cmuxHandoff"]))
 
     def test_supervisor_reports_perf_locks_reducing_entries_when_no_qualified_candidates(self):
         state = main.new_agent_state()
@@ -2473,8 +2481,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "market_analyst" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Performance locks reducing entries" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["codexHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_supervisor_suppresses_no_qualified_scan_candidates_during_risk_cooldown_hold(self):
         state = main.new_agent_state()
@@ -2497,7 +2505,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Safety hold" and x["agent"] == "risk_manager" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_supervisor_suppresses_no_qualified_scan_candidates_during_entry_risk_cooldown(self):
         state = main.new_agent_state()
@@ -2522,7 +2530,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Entry blocked by risk cooldown" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_perf_locks_when_qualified_candidates_exist(self):
         state = main.new_agent_state()
@@ -2543,7 +2551,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Performance locks reducing entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
 
     def test_supervisor_reports_low_live_entry_activity(self):
         state = main.new_agent_state()
@@ -2620,7 +2628,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for x in review["autoActions"]
             )
         )
-        self.assertFalse(review["codexHandoff"])
+        self.assertFalse(review["cmuxHandoff"])
 
     def test_supervisor_does_not_report_no_new_position_when_capacity_full(self):
         state = main.new_agent_state()
@@ -2814,7 +2822,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "No new position despite capacity" for x in review["issues"]))
         self.assertTrue(any(x["action"] == "auto-tuned scan-none fallback policy" and x["status"] == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_low_entry_tune_relaxes_quiet_market_and_targets_min_positions(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -2904,7 +2912,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Low entry activity" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
 
     def test_supervisor_reports_symbol_volatile_cooldown_as_root_entry_blocker(self):
         state = main.new_agent_state()
@@ -3001,7 +3009,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Profit capture may be too early" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "strategy_builder" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Profit capture may be too early" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review guardian early-exit and hold-winner thresholds" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review guardian early-exit and hold-winner thresholds" for x in review["cmuxHandoff"]))
 
     def test_supervisor_auto_tunes_scan_timeout_when_live(self):
         state = main.new_agent_state()
@@ -3029,7 +3037,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Scan timeout detected" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned scan timeout workload" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["cmuxHandoff"]))
         self.assertLess(main.AUTO_TRADE["config"]["scanAnalyzeTop"], 8)
         self.assertGreater(main.AUTO_TRADE["config"]["scanPerSymbolTimeoutSec"], 7.5)
 
@@ -3051,7 +3059,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Scan timeout detected" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["cmuxHandoff"]))
 
     def test_supervisor_periodic_trade_review_keeps_negative_expectancy_supervisor_first(self):
         state = main.new_agent_state()
@@ -3081,7 +3089,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(review["periodicTradeReview"])
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["codexHandoff"]))
+        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["cmuxHandoff"]))
 
     def test_supervisor_auto_tunes_negative_expectancy_when_live(self):
         state = main.new_agent_state()
@@ -3125,8 +3133,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned negative expectancy policy" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertTrue(any(x.get("action") == "auto-tuned weak payoff policy" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["codexHandoff"]))
-        self.assertFalse(any("payoff ratio" in x.get("task", "") for x in review["codexHandoff"]))
+        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["cmuxHandoff"]))
+        self.assertFalse(any("payoff ratio" in x.get("task", "") for x in review["cmuxHandoff"]))
         self.assertGreater(cfg["minConfidence"], 0.62)
         self.assertGreater(cfg["earlyEntryScoreGapMin"], 1.40)
         self.assertGreater(cfg["hybridMinScore"], 0.72)
@@ -3278,7 +3286,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             self.assertEqual(supervisor["state"], "done")
             self.assertEqual(supervisor["lastAction"], "reviewed high-severity subagent issue")
             self.assertFalse(any(x.get("agent") == "hermes_supervisor" for x in review["issues"]))
-            self.assertFalse(any(x.get("agent") == "hermes_supervisor" for x in review["codexHandoff"]))
+            self.assertFalse(any(x.get("agent") == "hermes_supervisor" for x in review["cmuxHandoff"]))
         finally:
             main.AUTO_TRADE.clear()
             main.AUTO_TRADE.update(prev_auto)
@@ -3414,43 +3422,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
         heavy.assert_not_called()
         self.assertTrue(out.get("cached"))
         self.assertEqual(out["summary"], "cached")
-
-    def test_external_signal_data_failure_does_not_reduce_auto_scan_capacity(self):
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_config = main.AUTO_TRADE.get("config")
-        cfg = {
-            "symbol": "AUTO",
-            "marketScan": True,
-            "maxOpenPositions": 6,
-            "supervisorSizeMultiplier": 1.0,
-            "supervisorSizeMinMultiplier": 0.65,
-            "scanPerfSoftFallbackEnabled": True,
-            "minConfidence": 0.68,
-        }
-        payload = {
-            "source": "tradingview_mcp_internal",
-            "findings": [
-                {
-                    "symbol": "DASHUSDT",
-                    "side": "LONG",
-                    "target": "open_position",
-                    "condition": "mcp_data_failure",
-                    "severity": "high",
-                    "tradingViewSignal": "Analysis failed: parser error",
-                }
-            ],
-        }
-        main.AUTO_TRADE["supervisorAutoTune"] = {}
-        try:
-            out = main._maybe_tune_external_signal_guard(payload, cfg)
-        finally:
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["config"] = prev_config
-
-        self.assertFalse(out.get("applied"))
-        self.assertEqual(out.get("reason"), "data_failure_recorded")
-        self.assertEqual(cfg["maxOpenPositions"], 6)
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 1.0)
 
     def test_risk_cooldown_watchlist_refreshes_scan_without_order(self):
         prev_board = main.AUTO_TRADE.get("scanBoard")
@@ -3598,7 +3569,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any("already locked" in x.get("detail", "") for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "temporary perf-lock dominant symbol drag" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review symbol-specific filters and perf lock behavior for FETUSDT" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review symbol-specific filters and perf lock behavior for FETUSDT" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_profitable_small_win_cluster(self):
         state = main.new_agent_state()
@@ -3627,7 +3598,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(review["periodicTradeReview"])
         self.assertFalse(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_healthy_low_payoff_window(self):
         state = main.new_agent_state()
@@ -3686,8 +3657,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["codexHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["cmuxHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
 
     def test_supervisor_auto_tunes_weak_payoff_when_live(self):
         state = main.new_agent_state()
@@ -3769,7 +3740,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "weak payoff policy already at safe limits" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["cmuxHandoff"]))
 
     def test_supervisor_reports_small_wins_without_weak_payoff(self):
         state = main.new_agent_state()
@@ -3798,7 +3769,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertFalse(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["codexHandoff"]))
+        self.assertTrue(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
 
     def test_supervisor_auto_tunes_small_wins_when_live(self):
         state = main.new_agent_state()
@@ -3837,7 +3808,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned small-profit capture policy" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
         self.assertLess(main.AUTO_TRADE["config"]["holdMinConfidence"], 0.72)
         self.assertGreater(main.AUTO_TRADE["config"]["tpTargetMinUsdt"], 0.55)
 
@@ -3863,7 +3834,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertIn("Backtest validation missing", titles)
         self.assertTrue(any(x["agent"] == "memory_agent" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Backtest validation missing" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Wire Backtest Agent validation for learning config proposals" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Wire Backtest Agent validation for learning config proposals" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_known_operator_permission_hold(self):
         prev_errors = main.AUTO_TRADE.get("consecutiveErrors", 0)
@@ -3881,7 +3852,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
             review = out["hermesSupervisorReview"]
             self.assertFalse(any(x["title"] == "Backend loop errors" for x in review["issues"]))
-            self.assertFalse(any(x.get("task") == "Trace AUTO_TRADE consecutiveErrors and add targeted recovery" for x in review["codexHandoff"]))
+            self.assertFalse(any(x.get("task") == "Trace AUTO_TRADE consecutiveErrors and add targeted recovery" for x in review["cmuxHandoff"]))
         finally:
             main.AUTO_TRADE["consecutiveErrors"] = prev_errors
             main.AUTO_TRADE["lastSkip"] = prev_skip
@@ -3897,7 +3868,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         out = main.autotrade_status_lite()
 
         review = out["hermesSupervisorReview"]
-        self.assertFalse(any(x.get("task") == "Review workload split around risk_manager" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around risk_manager" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_guardian_heartbeat_run_imbalance(self):
         state = main.new_agent_state()
@@ -3919,7 +3890,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         review = main._hermes_supervisor_review(bot)
 
-        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_guardian_loop_cadence_when_risk_manager_also_active(self):
         state = main.new_agent_state()
@@ -3955,7 +3926,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "position_guardian" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["cmuxHandoff"]))
 
     def test_supervisor_compares_workload_against_cadence_agents_only(self):
         state = main.new_agent_state()
@@ -3985,7 +3956,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         )
 
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_portfolio_loop_cadence_workload(self):
         state = main.new_agent_state()
@@ -4024,7 +3995,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "portfolio_manager" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["cmuxHandoff"]))
 
     def test_supervisor_ignores_market_workload_during_risk_cooldown_probe_timeout(self):
         state = main.new_agent_state()
@@ -4059,7 +4030,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "market_analyst" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
 
     def test_supervisor_uses_wider_market_workload_threshold_for_scan_fanout(self):
         state = main.new_agent_state()
@@ -4090,7 +4061,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "market_analyst" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
 
     def test_weak_payoff_tune_tightens_loss_guard_when_losses_dwarf_wins(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -4192,7 +4163,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         )
 
-        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["codexHandoff"]))
+        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["cmuxHandoff"]))
 
     def test_agent_start_cycle_clears_stale_action(self):
         state = main.mark_agent(main.new_agent_state(), "memory_agent", "done", "decision stored", "LIVE XLMUSDT LONG")

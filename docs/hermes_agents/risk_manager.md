@@ -18,7 +18,7 @@ Allowed self-heal:
 - Apply cooldown release when market state has normalized.
 - Tighten risk after loss streaks or negative expectancy windows within configured caps.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Cooldown checks fail repeatedly.
 - Risk gates conflict with live config.

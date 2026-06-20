@@ -17,7 +17,7 @@ Allowed self-heal:
 - Keep capacity blocks as safety holds when the portfolio is full.
 - Prefer symbol-specific restrictions before broad strategy tuning.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Symbol drag repeats after locks expire.
 - Capacity state disagrees with actual open positions.

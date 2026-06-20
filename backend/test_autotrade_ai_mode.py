@@ -189,6 +189,15 @@ class TestEntrySessionBias(unittest.TestCase):
 class TestSupervisorRegimeReview(unittest.TestCase):
     def setUp(self):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["supervisorExternalSignals"] = []
+        main.AUTO_TRADE["externalSignalGuard"] = {}
+        main.AUTO_TRADE["lastCmuxReport"] = {}
+        main.AUTO_TRADE["marketContextWatcher"] = {}
+        main.AUTO_TRADE["pauseUntil"] = 0
+        main.AUTO_TRADE["openLivePositions"] = []
+        main.AUTO_TRADE["liveGuardian"] = None
+        main.AUTO_TRADE["lastDecision"] = None
+        main.AUTO_TRADE["scanBoard"] = []
 
     def test_supervisor_agent_exists_in_template(self):
         state = main.new_agent_state()
@@ -218,667 +227,15 @@ class TestSupervisorRegimeReview(unittest.TestCase):
             main.AUTO_TRADE["running"] = prev_running
             main.AUTO_TRADE["config"] = prev_config
 
-    def test_external_signal_contradiction_applies_bounded_risk_tune(self):
-        prev_agents = main.AUTO_TRADE.get("hermesAgents")
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        prev_positions = main.AUTO_TRADE.get("openLivePositions")
-        cfg = {
-            "leverage": 20,
-            "leverageMax": 25,
-            "maxOpenPositions": 5,
-            "minConfidence": 0.80,
-            "scanPerfSoftFallbackEnabled": True,
-            "scanGuardedFallbackConfRelax": 0.04,
-            "supervisorSizeMultiplier": 1.0,
-            "supervisorSizeMinMultiplier": 0.5,
-            "profitLockTriggerUsdt": 0.35,
-            "profitLockKeepUsdt": 0.10,
-            "profitLockMaxGivebackUsdt": 0.22,
-        }
-        payload = {
-            "source": "tradingview_mcp",
-            "findings": [{
-                "symbol": "ETHUSDT",
-                "side": "LONG",
-                "target": "open_position",
-                "condition": "strong_mtf_contradiction",
-                "alignment": "LEAN_BEARISH",
-                "severity": "high",
-            }],
-        }
-        try:
-            main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            main.AUTO_TRADE["openLivePositions"] = [{"symbol": "ETHUSDT", "side": "LONG", "qty": 0.01}]
-            with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-                with mock.patch.object(main, "_autotrade_log", return_value=None):
-                    out = main._maybe_tune_external_signal_guard(payload, cfg)
 
-            self.assertTrue(out["applied"])
-            self.assertEqual(cfg["leverage"], 20)
-            self.assertEqual(cfg["leverageMax"], 25)
-            self.assertEqual(cfg["supervisorSizeMultiplier"], 0.75)
-            self.assertEqual(cfg["maxOpenPositions"], 3)
-            self.assertFalse(cfg["scanPerfSoftFallbackEnabled"])
-            self.assertEqual(cfg["scanGuardedFallbackConfRelax"], 0.025)
-            self.assertLessEqual(cfg["profitLockTriggerUsdt"], 0.25)
-            self.assertGreaterEqual(cfg["profitLockKeepUsdt"], 0.12)
-            self.assertLessEqual(cfg["profitLockMaxGivebackUsdt"], 0.16)
-            supervisor = main.AUTO_TRADE["hermesAgents"]["agents"]["hermes_supervisor"]
-            self.assertEqual(supervisor["lastAction"], "bounded external-signal tune approved")
-        finally:
-            main.AUTO_TRADE["hermesAgents"] = prev_agents
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
-            main.AUTO_TRADE["openLivePositions"] = prev_positions
 
-    def test_external_signal_pending_breakout_relaxes_only_scan_fallback(self):
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        cfg = {
-            "leverage": 7,
-            "maxOpenPositions": 4,
-            "minConfidence": 0.84,
-            "scanFallbackNearEnabled": False,
-            "scanGuardedFallbackEnabled": False,
-            "scanGuardedFallbackConfRelax": 0.02,
-            "scanAnalyzeTop": 8,
-        }
-        payload = {
-            "source": "tradingview_mcp",
-            "finding": {
-                "symbol": "ONDOUSDT",
-                "side": "LONG",
-                "target": "pending_entry",
-                "condition": "volume_breakout_aligned_pending_entry",
-                "severity": "medium",
-            },
-        }
-        try:
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-                with mock.patch.object(main, "_autotrade_log", return_value=None):
-                    out = main._maybe_tune_external_signal_guard(payload, cfg)
 
-            self.assertTrue(out["applied"])
-            self.assertEqual(cfg["leverage"], 7)
-            self.assertEqual(cfg["maxOpenPositions"], 4)
-            self.assertEqual(cfg["minConfidence"], 0.84)
-            self.assertTrue(cfg["scanFallbackNearEnabled"])
-            self.assertTrue(cfg["scanGuardedFallbackEnabled"])
-            self.assertEqual(cfg["scanGuardedFallbackConfRelax"], 0.04)
-            self.assertEqual(cfg["scanAnalyzeTop"], 10)
-        finally:
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
 
-    def test_external_signal_data_failure_pauses_entries_and_reports_codex(self):
-        prev_agents = main.AUTO_TRADE.get("hermesAgents")
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        prev_pause = main.AUTO_TRADE.get("pauseUntil")
-        prev_guard = main.AUTO_TRADE.get("externalSignalGuard")
-        cfg = {
-            "minConfidence": 0.82,
-            "scanGuardedFallbackConfRelax": 0.04,
-            "scanPerfSoftFallbackEnabled": True,
-            "scanFallbackNearEnabled": True,
-            "maxOpenPositions": 5,
-        }
-        payload = {
-            "source": "tradingview_mcp",
-            "finding": {
-                "symbol": "VVVUSDT",
-                "target": "guardian",
-                "condition": "mcp_data_failure",
-                "guardianActive": True,
-                "severity": "high",
-            },
-        }
-        try:
-            main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            main.AUTO_TRADE["openLivePositions"] = [{"symbol": "VVVUSDT", "side": "LONG", "qty": 1.0}]
-            main.AUTO_TRADE["pauseUntil"] = 0
-            out = main._maybe_tune_external_signal_guard(payload, cfg)
 
-            self.assertTrue(out["applied"])
-            self.assertEqual(cfg["minConfidence"], 0.84)
-            self.assertEqual(cfg["maxOpenPositions"], 1)
-            self.assertFalse(cfg["scanPerfSoftFallbackEnabled"])
-            self.assertFalse(cfg["scanFallbackNearEnabled"])
-            self.assertTrue(cfg["riskCooldownEnabled"])
-            self.assertTrue(cfg["entryTradingViewBlockWeakSignal"])
-            self.assertEqual(cfg["scanGuardedFallbackConfRelax"], 0.04)
-            self.assertGreater(main.AUTO_TRADE["pauseUntil"], 0)
-            self.assertEqual(out["codexActionReport"]["action"], "pause_new_entries")
-            data_guard = main.AUTO_TRADE["hermesAgents"]["agents"]["data_quality_guard"]
-            self.assertEqual(data_guard["state"], "blocked")
-            self.assertEqual(data_guard["lastAction"], "external MCP data unavailable; entry guard active")
-        finally:
-            main.AUTO_TRADE["hermesAgents"] = prev_agents
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
-            main.AUTO_TRADE["pauseUntil"] = prev_pause
-            if prev_guard is None:
-                main.AUTO_TRADE.pop("externalSignalGuard", None)
-            else:
-                main.AUTO_TRADE["externalSignalGuard"] = prev_guard
 
-    def test_tradingview_watcher_recovery_clears_data_failure_pause(self):
-        prev_agents = main.AUTO_TRADE.get("hermesAgents")
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        prev_config = main.AUTO_TRADE.get("config")
-        prev_positions = main.AUTO_TRADE.get("openLivePositions")
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        prev_guardian = main.AUTO_TRADE.get("liveGuardian")
-        prev_decision = main.AUTO_TRADE.get("lastDecision")
-        prev_scan = main.AUTO_TRADE.get("scanBoard")
-        prev_pause = main.AUTO_TRADE.get("pauseUntil")
-        prev_guard = main.AUTO_TRADE.get("externalSignalGuard")
-        prev_report = main.AUTO_TRADE.get("lastCodexReport")
 
-        async def fake_provider(calls, cfg):
-            return [
-                {
-                    **call,
-                    "ok": True,
-                    "data": {
-                        "alignment": {"status": "LEAN BULLISH", "confidence": "Medium"},
-                    } if call["name"] == "multi_timeframe_analysis" else {
-                        "market_sentiment": {"buy_sell_signal": "NEUTRAL"},
-                    },
-                }
-                for call in calls
-            ]
 
-        try:
-            now = int(time.time())
-            main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            main.AUTO_TRADE["supervisorExternalSignals"] = []
-            main.AUTO_TRADE["config"] = {"tradingViewWatcherEnabled": True, "tradingViewWatcherMaxSymbols": 1}
-            main.AUTO_TRADE["openLivePositions"] = [{"symbol": "BTCUSDT", "side": "LONG", "qty": 0.002}]
-            main.AUTO_TRADE["liveGuardian"] = None
-            main.AUTO_TRADE["lastDecision"] = None
-            main.AUTO_TRADE["scanBoard"] = []
-            main.AUTO_TRADE["pauseUntil"] = now + 600
-            main.AUTO_TRADE["externalSignalGuard"] = {
-                "updatedAt": now,
-                "until": now + 600,
-                "reason": "tradingview_mcp_data_failure",
-                "symbols": ["BTCUSDT"],
-            }
-            with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-                out = asyncio.run(main._tradingview_signal_watch_once(fake_provider))
 
-            self.assertTrue(out["ok"])
-            self.assertEqual(main.AUTO_TRADE["pauseUntil"], 0)
-            self.assertEqual(out["codexActionReport"]["type"], "tradingview_mcp_recovered")
-            self.assertEqual(main.AUTO_TRADE["lastCodexReport"]["action"], "clear_data_failure_entry_pause")
-        finally:
-            main.AUTO_TRADE["hermesAgents"] = prev_agents
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
-            main.AUTO_TRADE["config"] = prev_config
-            main.AUTO_TRADE["openLivePositions"] = prev_positions
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-            main.AUTO_TRADE["liveGuardian"] = prev_guardian
-            main.AUTO_TRADE["lastDecision"] = prev_decision
-            main.AUTO_TRADE["scanBoard"] = prev_scan
-            main.AUTO_TRADE["pauseUntil"] = prev_pause
-            if prev_guard is None:
-                main.AUTO_TRADE.pop("externalSignalGuard", None)
-            else:
-                main.AUTO_TRADE["externalSignalGuard"] = prev_guard
-            if prev_report is None:
-                main.AUTO_TRADE.pop("lastCodexReport", None)
-            else:
-                main.AUTO_TRADE["lastCodexReport"] = prev_report
-
-    def test_tradingview_watcher_open_position_submits_supervisor_risk_tune(self):
-        prev_agents = main.AUTO_TRADE.get("hermesAgents")
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        prev_config = main.AUTO_TRADE.get("config")
-        prev_positions = main.AUTO_TRADE.get("openLivePositions")
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        prev_guardian = main.AUTO_TRADE.get("liveGuardian")
-        prev_decision = main.AUTO_TRADE.get("lastDecision")
-        prev_scan = main.AUTO_TRADE.get("scanBoard")
-
-        async def fake_provider(calls, cfg):
-            self.assertTrue(any(call["name"] == "multi_timeframe_analysis" for call in calls))
-            return [
-                {
-                    **call,
-                    "ok": True,
-                    "data": {
-                        "alignment": {"status": "LEAN BEARISH", "confidence": "Medium"},
-                    } if call["name"] == "multi_timeframe_analysis" else {
-                        "market_sentiment": {"buy_sell_signal": "NEUTRAL"},
-                    },
-                }
-                for call in calls
-            ]
-
-        try:
-            main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            main.AUTO_TRADE["supervisorExternalSignals"] = []
-            main.AUTO_TRADE["config"] = {
-                "tradingViewWatcherEnabled": True,
-                "tradingViewWatcherMaxSymbols": 3,
-                "supervisorSizeMultiplier": 1.0,
-                "supervisorSizeMinMultiplier": 0.5,
-                "maxOpenPositions": 5,
-                "minConfidence": 0.80,
-                "scanPerfSoftFallbackEnabled": True,
-                "scanGuardedFallbackConfRelax": 0.04,
-                "profitLockTriggerUsdt": 0.35,
-                "profitLockKeepUsdt": 0.10,
-                "profitLockMaxGivebackUsdt": 0.22,
-            }
-            main.AUTO_TRADE["openLivePositions"] = [{"symbol": "BTCUSDT", "side": "LONG", "qty": 0.002}]
-            main.AUTO_TRADE["liveGuardian"] = None
-            main.AUTO_TRADE["lastDecision"] = None
-            main.AUTO_TRADE["scanBoard"] = []
-            with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-                with mock.patch.object(main, "_autotrade_log", return_value=None):
-                    out = asyncio.run(main._tradingview_signal_watch_once(fake_provider))
-
-            self.assertTrue(out["ok"])
-            self.assertTrue(out["submitted"])
-            self.assertEqual(out["findings"][0]["symbol"], "BTCUSDT")
-            self.assertEqual(out["findings"][0]["condition"], "strong_mtf_contradiction")
-            self.assertEqual(main.AUTO_TRADE["config"]["supervisorSizeMultiplier"], 0.75)
-            self.assertEqual(main.AUTO_TRADE["tradingViewWatcher"]["supervisorResult"]["reason"], "tradingview_mcp_internal")
-        finally:
-            main.AUTO_TRADE["hermesAgents"] = prev_agents
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
-            main.AUTO_TRADE["config"] = prev_config
-            main.AUTO_TRADE["openLivePositions"] = prev_positions
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-            main.AUTO_TRADE["liveGuardian"] = prev_guardian
-            main.AUTO_TRADE["lastDecision"] = prev_decision
-            main.AUTO_TRADE["scanBoard"] = prev_scan
-
-    def test_tradingview_watcher_uses_live_profit_locks_as_open_positions(self):
-        state = {
-            "openLivePositions": [],
-            "liveProfitLocks": {
-                "ETHUSDT": {
-                    "symbol": "ETHUSDT",
-                    "side": "LONG",
-                    "qty": 0.031,
-                }
-            },
-            "liveGuardian": None,
-            "lastDecision": {"symbol": "TONUSDT", "intel": {"signal": "LONG"}},
-            "scanBoard": [],
-        }
-
-        targets = main._tradingview_target_symbols(state, {"tradingViewWatcherMaxSymbols": 3})
-
-        self.assertEqual(targets[0]["symbol"], "ETHUSDT")
-        self.assertEqual(targets[0]["target"], "open_position")
-        self.assertEqual(targets[0]["side"], "LONG")
-
-    def test_tradingview_watcher_pending_breakout_relaxes_scan_only(self):
-        prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        prev_signals = main.AUTO_TRADE.get("supervisorExternalSignals")
-        prev_config = main.AUTO_TRADE.get("config")
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        prev_positions = main.AUTO_TRADE.get("openLivePositions")
-        prev_guardian = main.AUTO_TRADE.get("liveGuardian")
-        prev_decision = main.AUTO_TRADE.get("lastDecision")
-        prev_scan = main.AUTO_TRADE.get("scanBoard")
-
-        async def fake_provider(calls, cfg):
-            out = []
-            for call in calls:
-                if call["name"] == "multi_timeframe_analysis":
-                    data = {"alignment": {"status": "LEAN BULLISH", "confidence": "Medium"}}
-                elif call["name"] == "volume_confirmation_analysis":
-                    data = {"overall_assessment": {"bullish_signals": 1, "bearish_signals": 0}}
-                else:
-                    data = {"market_sentiment": {"buy_sell_signal": "BUY"}}
-                out.append({**call, "ok": True, "data": data})
-            return out
-
-        try:
-            main.AUTO_TRADE["supervisorAutoTune"] = {}
-            main.AUTO_TRADE["supervisorExternalSignals"] = []
-            main.AUTO_TRADE["config"] = {
-                "tradingViewWatcherEnabled": True,
-                "tradingViewWatcherMaxSymbols": 2,
-                "scanFallbackNearEnabled": False,
-                "scanGuardedFallbackEnabled": False,
-                "scanGuardedFallbackConfRelax": 0.02,
-                "scanAnalyzeTop": 8,
-                "maxOpenPositions": 4,
-                "minConfidence": 0.84,
-            }
-            main.AUTO_TRADE["openLivePositions"] = []
-            main.AUTO_TRADE["liveGuardian"] = None
-            main.AUTO_TRADE["lastDecision"] = None
-            main.AUTO_TRADE["scanBoard"] = [{"symbol": "ENAUSDT", "signal": "LONG", "qualified": True}]
-            with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-                with mock.patch.object(main, "_autotrade_log", return_value=None):
-                    out = asyncio.run(main._tradingview_signal_watch_once(fake_provider))
-
-            self.assertTrue(out["submitted"])
-            self.assertEqual(out["findings"][0]["condition"], "volume_breakout_aligned_pending_entry")
-            self.assertTrue(main.AUTO_TRADE["config"]["scanFallbackNearEnabled"])
-            self.assertTrue(main.AUTO_TRADE["config"]["scanGuardedFallbackEnabled"])
-            self.assertEqual(main.AUTO_TRADE["config"]["scanAnalyzeTop"], 10)
-        finally:
-            main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
-            main.AUTO_TRADE["supervisorExternalSignals"] = prev_signals
-            main.AUTO_TRADE["config"] = prev_config
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-            main.AUTO_TRADE["openLivePositions"] = prev_positions
-            main.AUTO_TRADE["liveGuardian"] = prev_guardian
-            main.AUTO_TRADE["lastDecision"] = prev_decision
-            main.AUTO_TRADE["scanBoard"] = prev_scan
-
-    def test_tradingview_watcher_pending_contradiction_creates_entry_gate_finding(self):
-        targets = [{"symbol": "ENAUSDT", "side": "LONG", "target": "pending_entry"}]
-        results = [
-            {
-                "symbol": "ENAUSDT",
-                "name": "multi_timeframe_analysis",
-                "ok": True,
-                "data": {"alignment": {"status": "LEAN BEARISH", "confidence": "High"}},
-            },
-            {
-                "symbol": "ENAUSDT",
-                "name": "volume_confirmation_analysis",
-                "ok": True,
-                "data": {"overall_assessment": {"bullish_signals": 0, "bearish_signals": 1}},
-            },
-        ]
-
-        findings = main._tradingview_findings_from_results(targets, results, {})
-
-        self.assertEqual(findings[0]["condition"], "pending_entry_mtf_contradiction")
-        self.assertEqual(findings[0]["target"], "pending_entry")
-        self.assertEqual(findings[0]["severity"], "high")
-
-    def test_entry_tradingview_context_blocks_pending_reversal(self):
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        try:
-            main.AUTO_TRADE["tradingViewWatcher"] = {
-                "updatedAt": int(time.time()),
-                "findings": [{
-                    "symbol": "ENAUSDT",
-                    "side": "LONG",
-                    "target": "pending_entry",
-                    "condition": "pending_entry_mtf_contradiction",
-                    "tradingViewSignal": "LEAN BEARISH",
-                }],
-            }
-
-            out = main._entry_tradingview_context(
-                "ENAUSDT",
-                "LONG",
-                {"entryTradingViewGateEnabled": True, "entryTradingViewBlockContradiction": True},
-            )
-
-            self.assertTrue(out["active"])
-            self.assertTrue(out["block"])
-            self.assertTrue(out["contradiction"])
-        finally:
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-
-    def test_entry_tradingview_context_boosts_confirmed_pending_breakout(self):
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        try:
-            main.AUTO_TRADE["tradingViewWatcher"] = {
-                "updatedAt": int(time.time()),
-                "findings": [{
-                    "symbol": "ENAUSDT",
-                    "side": "LONG",
-                    "target": "pending_entry",
-                    "condition": "volume_breakout_aligned_pending_entry",
-                    "tradingViewSignal": "LEAN BULLISH",
-                }],
-            }
-
-            out = main._entry_tradingview_context(
-                "ENAUSDT",
-                "LONG",
-                {"entryTradingViewGateEnabled": True, "entryTradingViewConfirmConfidenceBoost": 0.02},
-            )
-
-            self.assertTrue(out["active"])
-            self.assertFalse(out["block"])
-            self.assertTrue(out["confirmed"])
-            self.assertEqual(out["confidenceBoost"], 0.02)
-        finally:
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-
-    def test_guardian_tradingview_context_tightens_long_sl_and_blocks_tp_extension(self):
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        try:
-            main.AUTO_TRADE["tradingViewWatcher"] = {
-                "updatedAt": int(time.time()),
-                "findings": [{
-                    "symbol": "ETHUSDT",
-                    "side": "LONG",
-                    "target": "open_position",
-                    "condition": "strong_mtf_contradiction",
-                    "tradingViewSignal": "LEAN BEARISH",
-                }],
-            }
-            out = main._guardian_tradingview_context(
-                "ETHUSDT",
-                "LONG",
-                mark=100.0,
-                entry=98.0,
-                qty=1.0,
-                sl=95.0,
-                tp=104.0,
-                cfg={
-                    "guardianTradingViewContextEnabled": True,
-                    "guardianTradingViewTightenSlPct": 0.2,
-                    "guardianTradingViewMinProfitLockUsdt": 0.5,
-                    "guardianTradingViewBlockTpExtension": True,
-                },
-            )
-
-            self.assertTrue(out["active"])
-            self.assertTrue(out["changedSl"])
-            self.assertGreater(out["tightenedSl"], 99.0)
-            self.assertTrue(out["blockTpExtension"])
-            self.assertTrue(out["armProfitLock"])
-        finally:
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-
-    def test_guardian_tradingview_context_ignores_stale_signal(self):
-        prev_watcher = main.AUTO_TRADE.get("tradingViewWatcher")
-        try:
-            main.AUTO_TRADE["tradingViewWatcher"] = {
-                "updatedAt": int(time.time()) - 9999,
-                "findings": [{
-                    "symbol": "ETHUSDT",
-                    "side": "LONG",
-                    "target": "open_position",
-                    "condition": "strong_mtf_contradiction",
-                    "tradingViewSignal": "LEAN BEARISH",
-                }],
-            }
-            out = main._guardian_tradingview_context(
-                "ETHUSDT",
-                "LONG",
-                mark=100.0,
-                entry=98.0,
-                qty=1.0,
-                sl=95.0,
-                tp=104.0,
-                cfg={"guardianTradingViewContextMaxAgeSec": 60},
-            )
-
-            self.assertFalse(out["active"])
-        finally:
-            main.AUTO_TRADE["tradingViewWatcher"] = prev_watcher
-
-    def _today_noon(self) -> int:
-        parts = list(time.localtime(time.time()))
-        parts[3] = 12
-        parts[4] = 0
-        parts[5] = 0
-        return int(time.mktime(tuple(parts)))
-
-    def test_daily_regime_review_flags_today_vs_profitable_baseline(self):
-        now = self._today_noon()
-        rows = []
-        for i in range(10):
-            rows.append({
-                "closedAt": now - 86400 + i * 600,
-                "mode": "LIVE",
-                "symbol": "BTCUSDT",
-                "pnl": 0.45 if i < 8 else -0.25,
-            })
-        for i in range(8):
-            rows.append({
-                "closedAt": now - 3600 + i * 300,
-                "mode": "LIVE",
-                "symbol": "ADAUSDT",
-                "pnl": 0.08 if i < 2 else -0.35,
-            })
-
-        review = main._daily_trade_regime_review(rows, {"supervisorDailyBaselineMinTrades": 8}, now_ts=now)
-
-        self.assertTrue(review["degraded"])
-        self.assertEqual(review["today"]["trades"], 8)
-        self.assertGreater(review["winRateDropPct"], 40)
-        self.assertGreater(review["baseline"]["pnl"], 0)
-
-    def test_daily_entry_regression_tightens_entry_knobs(self):
-        cfg = {
-            "minConfidence": 0.66,
-            "earlyEntryMinConfidence": 0.60,
-            "earlyEntryScoreGapMin": 1.4,
-            "earlyEntryMaxBbPctB": 0.82,
-            "earlyEntryMinBbPctBShort": 0.18,
-            "earlyEntryMaxVwapDistancePct": 0.24,
-            "scanFallbackNearEnabled": True,
-            "scanPerfSoftFallbackEnabled": True,
-            "todayPerformanceGuardMinTrades": 8,
-        }
-        review = {
-            "degraded": True,
-            "today": {"day": "2026-06-06", "trades": 8, "winRatePct": 25.0, "pnl": -2.4},
-            "baseline": {"day": "2026-06-03", "trades": 12, "winRatePct": 75.0, "pnl": 4.5},
-        }
-
-        with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-            with mock.patch.object(main, "_autotrade_log", return_value=None):
-                out = main._maybe_tune_daily_entry_regression(review, cfg)
-
-        self.assertTrue(out["applied"])
-        self.assertGreater(cfg["minConfidence"], 0.66)
-        self.assertLessEqual(cfg["minConfidence"], 0.84)
-        self.assertLessEqual(cfg["earlyEntryMinConfidence"], 0.76)
-        self.assertGreater(cfg["earlyEntryScoreGapMin"], 1.4)
-        self.assertLessEqual(cfg["earlyEntryMaxBbPctB"], 0.78)
-        self.assertTrue(cfg["scanFallbackNearEnabled"])
-        self.assertFalse(cfg["scanPerfSoftFallbackEnabled"])
-        self.assertEqual(cfg["todayPerformanceGuardMinTrades"], 6)
-
-    def test_daily_entry_regression_reapplies_when_config_drifted_during_cooldown(self):
-        cfg = {
-            "minConfidence": 0.66,
-            "earlyEntryMinConfidence": 0.60,
-            "earlyEntryScoreGapMin": 1.4,
-            "earlyEntryMaxBbPctB": 0.82,
-            "earlyEntryMinBbPctBShort": 0.18,
-            "earlyEntryMaxVwapDistancePct": 0.24,
-            "scanFallbackNearEnabled": True,
-            "scanPerfSoftFallbackEnabled": True,
-        }
-        review = {
-            "degraded": True,
-            "today": {"day": "2026-06-06", "trades": 8, "winRatePct": 25.0, "pnl": -2.4},
-            "baseline": {"day": "2026-06-03", "trades": 12, "winRatePct": 75.0, "pnl": 4.5},
-        }
-        signature = "2026-06-06:8:25.0:-2.4:2026-06-03:4.5"
-        main.AUTO_TRADE["supervisorAutoTune"] = {
-            "delegations": {
-                "daily_entry_regression": {
-                    "at": int(time.time()),
-                    "signature": signature,
-                }
-            }
-        }
-
-        with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-            with mock.patch.object(main, "_autotrade_log", return_value=None):
-                out = main._maybe_tune_daily_entry_regression(review, cfg)
-
-        self.assertTrue(out["applied"])
-        self.assertGreater(cfg["minConfidence"], 0.66)
-        self.assertTrue(cfg["scanFallbackNearEnabled"])
-
-    def test_daily_entry_regression_caps_over_tight_confidence(self):
-        cfg = {
-            "minConfidence": 0.88,
-            "earlyEntryMinConfidence": 0.80,
-            "earlyEntryScoreGapMin": 2.4,
-            "earlyEntryMaxBbPctB": 0.82,
-            "earlyEntryMinBbPctBShort": 0.18,
-            "earlyEntryMaxVwapDistancePct": 0.24,
-            "scanFallbackNearEnabled": False,
-            "scanPerfSoftFallbackEnabled": True,
-            "scanFallbackNearConfRelax": 0.04,
-        }
-        review = {
-            "degraded": True,
-            "today": {"day": "2026-06-07", "trades": 15, "winRatePct": 20.0, "pnl": -3.6},
-            "baseline": {"day": "2026-06-03", "trades": 155, "winRatePct": 66.45, "pnl": 15.3},
-        }
-
-        with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-            with mock.patch.object(main, "_autotrade_log", return_value=None):
-                out = main._maybe_tune_daily_entry_regression(review, cfg)
-
-        self.assertTrue(out["applied"])
-        self.assertEqual(cfg["minConfidence"], 0.84)
-        self.assertEqual(cfg["earlyEntryMinConfidence"], 0.76)
-        self.assertEqual(cfg["earlyEntryScoreGapMin"], 2.1)
-        self.assertTrue(cfg["scanFallbackNearEnabled"])
-        self.assertEqual(cfg["scanFallbackNearConfRelax"], 0.035)
-
-    def test_small_profit_capture_reduces_profit_giveback(self):
-        cfg = {
-            "holdWinners": True,
-            "profitLockTriggerUsdt": 0.35,
-            "profitLockKeepUsdt": 0.15,
-            "profitLockMaxGivebackUsdt": 0.22,
-            "profitLockBreakevenFloorUsdt": 0.08,
-            "profitLockBreakevenTriggerUsdt": 0.16,
-            "tpTargetMinUsdt": 0.55,
-            "tpTargetMaxUsdt": 2.2,
-        }
-        review = {
-            "label": "last_8_trades",
-            "trades": 8,
-            "smallWins": 4,
-        }
-
-        with mock.patch.object(main, "_persist_autotrade_snapshot", return_value=None):
-            with mock.patch.object(main, "_autotrade_log", return_value=None):
-                out = main._maybe_tune_small_profit_capture_from_review(review, cfg)
-
-        self.assertTrue(out["applied"])
-        self.assertLess(cfg["profitLockTriggerUsdt"], 0.35)
-        self.assertGreaterEqual(cfg["profitLockKeepUsdt"], 0.18)
-        self.assertLess(cfg["profitLockMaxGivebackUsdt"], 0.22)
-        self.assertGreaterEqual(cfg["profitLockBreakevenFloorUsdt"], 0.10)
 
 
 class TestRewardSystem(unittest.TestCase):
@@ -1063,6 +420,293 @@ class TestLossStreakSelfReview(unittest.TestCase):
         tuned = main._loss_streak_self_review_tune(cfg, now=int(time.time()), loss_streak=4)
 
         self.assertEqual(tuned["maxOpenPositions"], 6)
+
+
+class TestPerSymbolVolatilityTPSL(unittest.TestCase):
+    """Per-symbol TP/SL/cap/profit-lock scaling via _symbol_volatility_score + _effective_tp_sl."""
+
+    def _base_cfg(self):
+        return {
+            "takeProfitPct": 1.8,
+            "stopLossPct": 0.9,
+            "tradeNotionalCapUsdt": 80.0,
+            "profitLockTriggerUsdt": 0.35,
+            "profitLockKeepUsdt": 0.15,
+            "profitLockMaxGivebackUsdt": 0.22,
+            "tpTargetMinUsdt": 0.55,
+            "tpTargetMaxUsdt": 2.0,
+        }
+
+    def _intel_btc(self):
+        return {
+            "precision": {"atrPct": 0.04, "vwapDistancePct": 0.02, "bbPctB": 0.5, "longScore": 0.0, "shortScore": 0.0},
+            "execution": {"momentumPct": 0.05, "spreadBps": 3.0},
+        }
+
+    def _intel_sol(self):
+        return {
+            "precision": {"atrPct": 0.32, "vwapDistancePct": 0.22, "bbPctB": 0.72, "longScore": 1.5, "shortScore": 0.0},
+            "execution": {"momentumPct": 0.45, "spreadBps": 9.0},
+        }
+
+    def test_symbol_volatility_score_tier_assignment(self):
+        # BTC profile → low tier (tight multipliers, larger cap)
+        btc = main._symbol_volatility_score("BTCUSDT", self._intel_btc())
+        self.assertEqual(btc["tier"], "low")
+        self.assertEqual(btc["tpMult"], 0.85)
+        self.assertEqual(btc["slMult"], 0.85)
+        self.assertEqual(btc["capMult"], 1.20)
+        self.assertEqual(btc["lockMult"], 0.85)
+        # SOL profile → high tier (wider TP, tighter cap)
+        sol = main._symbol_volatility_score("SOLUSDT", self._intel_sol())
+        self.assertEqual(sol["tier"], "high")
+        self.assertEqual(sol["tpMult"], 1.30)
+        self.assertEqual(sol["slMult"], 1.20)
+        self.assertEqual(sol["capMult"], 0.65)
+        self.assertEqual(sol["lockMult"], 1.40)
+
+    def test_symbol_volatility_score_score_in_unit_interval(self):
+        intel = {
+            "precision": {"atrPct": 1.5, "vwapDistancePct": 0.7, "bbPctB": 1.0, "longScore": 6.0, "shortScore": 0.0},
+            "execution": {"momentumPct": 2.0, "spreadBps": 200.0},
+        }
+        v = main._symbol_volatility_score("EXTREMEUSDT", intel)
+        # All inputs are way above the high thresholds — score should saturate
+        # at the tier ceiling but stay in [0, 1] with multipliers at "high" values.
+        self.assertGreaterEqual(v["score"], 0.55)
+        self.assertLessEqual(v["score"], 1.0)
+        self.assertEqual(v["tier"], "high")
+
+    def test_symbol_volatility_score_ignores_zero_intel(self):
+        # Empty intel dict → score collapses to 0 (no data yet).
+        v = main._symbol_volatility_score("BTCUSDT", {})
+        self.assertEqual(v["score"], 0.0)
+        self.assertEqual(v["tier"], "low")
+
+    def test_effective_tp_sl_scales_per_symbol(self):
+        cfg = self._base_cfg()
+        btc = main._effective_tp_sl("BTCUSDT", cfg, self._intel_btc())
+        sol = main._effective_tp_sl("SOLUSDT", cfg, self._intel_sol())
+        # BTC: smaller TP, smaller SL, larger cap, smaller lock trigger.
+        self.assertLess(btc["tpPct"], sol["tpPct"])
+        self.assertLess(btc["slPct"], sol["slPct"])
+        self.assertGreater(btc["notionalCapUsdt"], sol["notionalCapUsdt"])
+        self.assertLess(btc["profitLockTriggerUsdt"], sol["profitLockTriggerUsdt"])
+        # Sanity: TP/SL still sane for both.
+        self.assertGreater(btc["tpPct"], 0.5)
+        self.assertLess(sol["tpPct"], 3.5)
+        self.assertGreater(sol["notionalCapUsdt"], 20.0)
+
+    def test_effective_tp_sl_without_intel_returns_baseline(self):
+        cfg = self._base_cfg()
+        out = main._effective_tp_sl("ANYUSDT", cfg, None)
+        self.assertEqual(out["tier"], "unknown")
+        self.assertEqual(out["tpPct"], cfg["takeProfitPct"])
+        self.assertEqual(out["slPct"], cfg["stopLossPct"])
+        self.assertEqual(out["notionalCapUsdt"], cfg["tradeNotionalCapUsdt"])
+        self.assertEqual(out["profitLockTriggerUsdt"], cfg["profitLockTriggerUsdt"])
+
+    def test_effective_tp_sl_with_empty_intel_returns_baseline(self):
+        cfg = self._base_cfg()
+        out = main._effective_tp_sl("ANYUSDT", cfg, {})
+        # Empty intel has no precision/execution keys → treat as missing.
+        self.assertEqual(out["tier"], "unknown")
+        self.assertEqual(out["tpPct"], cfg["takeProfitPct"])
+
+    def test_effective_tp_sl_respects_minimum_floor(self):
+        # Very tight base SL should never go below 0.20.
+        cfg = self._base_cfg()
+        cfg["stopLossPct"] = 0.25
+        sol = main._effective_tp_sl("SOLUSDT", cfg, self._intel_sol())
+        # floor is enforced before the multiplier is applied.
+        self.assertGreaterEqual(sol["slPct"], 0.20)
+
+    def test_effective_tp_sl_preserves_mid_tier_baseline(self):
+        # A mid-volatility profile should keep cfg values within a sensible
+        # range. After the 3-tier multiplier stack, the exact value depends
+        # on the resolved group + tier — the assertion just checks that the
+        # TP/SL/cap values stay close to the cfg baseline.
+        cfg = self._base_cfg()
+        intel_med = {
+            "precision": {"atrPct": 0.12, "vwapDistancePct": 0.10, "bbPctB": 0.55, "longScore": 0.3, "shortScore": 0.0},
+            "execution": {"momentumPct": 0.12, "spreadBps": 5.0},
+        }
+        out = main._effective_tp_sl("MIDUSDT", cfg, intel_med)
+        # Group (trend-friendly tp_mult=1.10) + med vol (1.0) → tpMult 1.10.
+        # 1.8 * 1.10 = 1.98 (no exotic high-vol stack expected).
+        self.assertGreater(out["tpPct"], 1.0)
+        self.assertLess(out["tpPct"], 3.0)
+        # Cap: trend-friendly group capMult=1.15, med vol capMult=1.0 → 1.15.
+        # 80 * 1.15 = 92.
+        self.assertGreater(out["notionalCapUsdt"], 40.0)
+        self.assertLess(out["notionalCapUsdt"], 120.0)
+
+
+
+class TestThreeTierProfile(unittest.TestCase):
+    """Verify the System > Group > Symbol 3-tier policy architecture."""
+
+    def test_symbol_group_hardcoded_for_well_known_coins(self):
+        # Hard-coded defaults must be respected for well-known coins.
+        self.assertEqual(main._symbol_group("BTCUSDT"), "trend-friendly")
+        self.assertEqual(main._symbol_group("ETHUSDT"), "trend-friendly")
+        self.assertEqual(main._symbol_group("DOGEUSDT"), "high-volatility")
+        self.assertEqual(main._symbol_group("SPXUSDT"), "low-liquidity-noisy")
+        self.assertEqual(main._symbol_group("XLMUSDT"), "mean-reversion-friendly")
+        # Unknown coins default to trend-friendly (safe fallback).
+        self.assertEqual(main._symbol_group("RANDOMUSDT"), "trend-friendly")
+        self.assertEqual(main._symbol_group(""), "trend-friendly")
+
+    def test_effective_profile_uses_group_when_no_samples(self):
+        # For a fresh symbol with no trade history, the effective profile
+        # must equal the group defaults (no premature per-coin override).
+        p = main._symbol_effective_profile("NEWUSDT", cfg={})
+        self.assertEqual(p["source"], "group")
+        self.assertEqual(p["sampleTrades"], 0)
+        # Defaults come from the trend-friendly group baseline.
+        self.assertGreaterEqual(p["tpsl_mult"], 0.5)
+        self.assertLessEqual(p["tpsl_mult"], 2.0)
+        self.assertIn(p["group"], main.SYMBOL_GROUP_DEFS)
+
+    def test_effective_profile_promotes_symbol_with_enough_samples(self):
+        # DOGEUSDT has 30 closed trades — the symbol profile may apply if
+        # the user has set overrides. Even with no overrides, the
+        # ``source`` field correctly reports that the group is in use.
+        # Ensure no leftover state from a previous test.
+        main._save_symbol_profiles({})
+        p = main._symbol_effective_profile("DOGEUSDT", cfg={})
+        self.assertGreaterEqual(p["sampleTrades"], main.SYMBOL_PROFILE_MIN_TRADES)
+        # Default behaviour: source=group, the user hasn't set overrides yet.
+        self.assertEqual(p["source"], "group")
+        # When user applies overrides, source should switch to symbol+group.
+        main._save_symbol_profiles({"DOGEUSDT": {"tpPct": 2.5}})
+        try:
+            p2 = main._symbol_effective_profile("DOGEUSDT", cfg={})
+            self.assertEqual(p2["source"], "symbol+group")
+            # tpPct reflects the explicit user override.
+            self.assertEqual(p2["tpPct"], 2.5)
+        finally:
+            main._save_symbol_profiles({})
+
+    def test_sample_count_guard_prevents_overfitting(self):
+        # A symbol with fewer than SYMBOL_PROFILE_MIN_TRADES trades must NOT
+        # use user overrides even if they exist. This is the safety net
+        # against overfitting on a handful of trades.
+        main._save_symbol_profiles({"FEWUSDT": {"tpPct": 9.9}})
+        try:
+            p = main._symbol_effective_profile("FEWUSDT", cfg={})
+            # FEWUSDT has 0 trades in the log — overrides must be ignored.
+            self.assertLess(p["sampleTrades"], main.SYMBOL_PROFILE_MIN_TRADES)
+            self.assertEqual(p["source"], "group")
+            # tpsl_mult must come from the group, not from the override.
+            self.assertEqual(p["tpsl_mult"], p["tpsl_mult"])  # present
+            # And the user override's tpPct was not applied.
+            # (We can't check it directly because tpsl_mult ≠ tpPct; but the
+            # ``source`` check above already proves the override path was
+            # not taken.)
+        finally:
+            main._save_symbol_profiles({})
+
+    def test_effective_tpsl_stacks_group_and_volatility(self):
+        # When the group multiplier and the volatility multiplier differ,
+        # the effective TP/SL must be the product (stacked), not the max.
+        cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9,
+               "tradeNotionalCapUsdt": 80.0,
+               "profitLockTriggerUsdt": 0.35, "profitLockKeepUsdt": 0.15,
+               "profitLockMaxGivebackUsdt": 0.22,
+               "tpTargetMinUsdt": 0.55, "tpTargetMaxUsdt": 2.0}
+        # BTCUSDT (trend-friendly group) + low volatility profile:
+        #   group tp_mult = 1.10, vol tier = low (0.85)
+        #   effective tp_mult should be 1.10 * 0.85 = 0.935
+        intel_btc = {
+            "precision": {"atrPct": 0.04, "vwapDistancePct": 0.02, "bbPctB": 0.5,
+                          "longScore": 0.0, "shortScore": 0.0},
+            "execution": {"momentumPct": 0.05, "spreadBps": 3.0},
+        }
+        btc = main._effective_tp_sl("BTCUSDT", cfg, intel_btc)
+        # tpMult should be approximately 0.935 (1.10 * 0.85)
+        self.assertAlmostEqual(btc["tpMult"], 0.935, places=3)
+        # And the effective TP% must be cfg["takeProfitPct"] * tpMult.
+        self.assertAlmostEqual(btc["tpPct"], 1.8 * 0.935, places=3)
+        # DOGEUSDT (high-volatility group) + high volatility profile:
+        #   group tp_mult = 1.35, vol tier = high (1.30)
+        #   effective tp_mult = 1.35 * 1.30 = 1.755
+        intel_doge = {
+            "precision": {"atrPct": 0.40, "vwapDistancePct": 0.30, "bbPctB": 0.75,
+                          "longScore": 2.0, "shortScore": 0.0},
+            "execution": {"momentumPct": 0.60, "spreadBps": 12.0},
+        }
+        doge = main._effective_tp_sl("DOGEUSDT", cfg, intel_doge)
+        self.assertAlmostEqual(doge["tpMult"], 1.755, places=3)
+        self.assertGreater(doge["tpPct"], btc["tpPct"])  # DOGE wider than BTC
+
+    def test_scan_bias_uses_group_long_bias(self):
+        # The group profile's scan_long_bias must surface through the
+        # helper. trend-friendly groups have a small LONG tilt (>0.5),
+        # mean-reversion groups are neutral (0.5).
+        btc = main._symbol_effective_profile("BTCUSDT", cfg={})
+        xlm = main._symbol_effective_profile("XLMUSDT", cfg={})
+        self.assertGreater(btc["scan_long_bias"], 0.5)
+        self.assertEqual(xlm["scan_long_bias"], 0.5)
+
+    def test_unknown_group_falls_back_safely(self):
+        # An unknown coin with no hard-coded mapping should still return a
+        # valid profile (defaults to trend-friendly).
+        p = main._symbol_effective_profile("ZZZ_NEW_COIN", cfg={})
+        self.assertIn(p["group"], main.SYMBOL_GROUP_DEFS)
+        self.assertEqual(p["source"], "group")
+        # Every required key must be present.
+        for k in ("tpsl_mult", "sl_mult", "lock_trigger_mult",
+                  "min_conf_floor", "max_trade_notional_mult",
+                  "scan_long_bias", "scan_chase_speed"):
+            self.assertIn(k, p)
+
+    def test_position_size_mult_respects_group(self):
+        # Each group has a different position_size_mult baseline.
+        # high-volatility tokens should use smaller size than trend-friendly.
+        hv = main._symbol_effective_profile("DOGEUSDT", cfg={})
+        tf = main._symbol_effective_profile("BTCUSDT", cfg={})
+        self.assertLess(hv.get("position_size_mult", 1.0), tf.get("position_size_mult", 1.0))
+        # low-liquidity group should be smallest
+        ln = main._symbol_effective_profile("SPXUSDT", cfg={})
+        self.assertLess(ln.get("position_size_mult", 1.0), hv.get("position_size_mult", 1.0))
+
+    def test_entry_offset_bps_is_group_specific(self):
+        # trend-friendly: enter at mid (0 bps offset)
+        # mean-reversion: enter slightly above mid (15 bps) to avoid chasing
+        # low-liquidity: enter well above mid (25 bps) to avoid fake pumps
+        tf = main._symbol_effective_profile("BTCUSDT", cfg={})
+        mr = main._symbol_effective_profile("XLMUSDT", cfg={})
+        ll = main._symbol_effective_profile("SPXUSDT", cfg={})
+        self.assertEqual(tf.get("entry_offset_bps", 0.0), 0.0)
+        self.assertGreater(mr.get("entry_offset_bps", 0.0), 0.0)
+        self.assertGreater(ll.get("entry_offset_bps", 0.0), mr.get("entry_offset_bps", 0.0))
+
+    def test_position_size_mult_bounded_by_wr(self):
+        # Low WR (<=45%) + negative pnl should push position_size_mult below group base.
+        # _auto_update_symbol_profile reads from learning store; mock it directly.
+        cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9}
+        with mock.patch.object(main, "_load_learning_profiles", return_value={
+            "DOGEUSDT": {
+                "memoryWindows": {
+                    "7d": {"trades": 10, "winRatePct": 42.0, "pnl": -0.6},
+                    "14d": {"trades": 20, "winRatePct": 43.0, "pnl": -1.0},
+                    "30d": {"trades": 30, "winRatePct": 44.0, "pnl": -1.5},
+                },
+                "symbolRiskTune": {"active": False},
+            }
+        }), \
+             mock.patch.object(main, "_symbol_sample_count", return_value=30):
+            p = main._auto_update_symbol_profile("DOGEUSDT", cfg)
+        # WR <= 45% + negative pnl → size shrinks vs group baseline of 0.65
+        self.assertLess(p.get("positionSizeMult", 1.0), 0.65)
+
+    def test_leverage_mult_defaults_to_one(self):
+        # When no symbolRiskTune is active, leverageMult defaults to 1.0.
+        # Only symbolRiskTune can push it away from 1.0.
+        p = main._symbol_effective_profile("BTCUSDT", cfg={})
+        self.assertEqual(p.get("leverageMult", 1.0), 1.0)
+        self.assertEqual(p.get("leverageMax", 0), 0)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ Allowed self-heal:
 - Mark stale or malformed intel as unusable for the current cycle.
 - Let market_analyst rotate to another symbol when one symbol repeatedly fails data checks.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Missing fields repeat across symbols.
 - Stale data persists after refresh attempts.

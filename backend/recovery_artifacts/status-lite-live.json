@@ -1,0 +1,1116 @@
+{
+  "running": true,
+  "sessionId": "a521896e-a1a3-4f47-bae9-50a63ae57709",
+  "startedAt": 1781057733,
+  "autotradeTask": {
+    "exists": true,
+    "done": false,
+    "cancelled": false
+  },
+  "lastTradeAt": 0,
+  "tradesLastHour": 0,
+  "pauseUntil": 0,
+  "riskCooldownLossSignature": "",
+  "consecutiveErrors": 0,
+  "lastDecision": {
+    "intel": {
+      "symbol": "IOUSDT",
+      "signal": "SHORT",
+      "confidence": 0.795,
+      "setup": "Order flow skewed to bids",
+      "notes": [
+        "Order flow skewed to bids",
+        "Momentum -0.545% | VolRatio 1.06",
+        "Divergence: BULLISH_DIVERGENCE",
+        "Session: ASIA (low liquidity)",
+        "Score L/S=2/7 | MACD=↓ | BB%B=0.21 | VWAP=↓"
+      ],
+      "vision": null,
+      "orderBook": {
+        "bidNotional": 335483.95809,
+        "askNotional": 179343.56973,
+        "imbalance": 0.3032867900851479,
+        "icebergRisk": true
+      },
+      "momentum": {
+        "momentumPct": -0.5455,
+        "volumeRatio": 1.0648,
+        "divergence": "BULLISH_DIVERGENCE"
+      },
+      "precision": {
+        "rsi14": 25,
+        "rsi14_5m": 18.321,
+        "stochK": 73.94,
+        "stochD": 29.52,
+        "macdLine": -0.00107,
+        "macdSignal": -0.001022,
+        "macdHist": -0.000047,
+        "macdBullish": false,
+        "macdCrossUp": false,
+        "macdCrossDn": false,
+        "bbPctB": 0.207,
+        "bbBandwidth": 0.0339,
+        "bbSqueeze": false,
+        "vwap": 0.160456,
+        "priceAboveVwap": false,
+        "vwapDistancePct": -2.0914,
+        "atrPct": 0.406,
+        "atrTpMult": 2,
+        "atrSlMult": 1.2,
+        "cvd": -0.0034,
+        "trendUp": false,
+        "trendDown": true,
+        "trendUpPartial": false,
+        "trendDnPartial": true,
+        "breakoutUp": false,
+        "breakoutDown": false,
+        "nearResistance": false,
+        "nearSupport": true,
+        "session": "ASIA",
+        "highLiquiditySession": false,
+        "longScore": 2,
+        "shortScore": 7
+      },
+      "snapshotMeta": {
+        "disabled": true,
+        "provider": "none"
+      },
+      "execution": {
+        "bid": 0.157,
+        "ask": 0.1571,
+        "mark": 0.15722216,
+        "spreadBps": 6.3673989175414825,
+        "lastFundingRate": -0.00008958
+      },
+      "candles": {
+        "ok": true,
+        "tags": [],
+        "bias": 0,
+        "score": 0
+      },
+      "decisionData": {
+        "schema": "hermes-decision-data-v1",
+        "symbol": "IOUSDT",
+        "policy": {
+          "marketCore": "primary_signal_source",
+          "riskGuards": "can_block_or_reduce_only",
+          "newsSentiment": "guard_only_never_opens_trade",
+          "learning": "feature_quality_weighting"
+        },
+        "marketCore": {
+          "signal": "SHORT",
+          "confidence": 0.795,
+          "setup": "Order flow skewed to bids",
+          "scoreGap": -5,
+          "longScore": 2,
+          "shortScore": 7,
+          "momentumPct": -0.5455,
+          "volumeRatio": 1.0648,
+          "trend": "DOWN"
+        },
+        "riskGuards": {
+          "guards": [
+            {
+              "name": "spread",
+              "state": "ok",
+              "value": 6.3674,
+              "unit": "bps"
+            },
+            {
+              "name": "volatility",
+              "state": "ok",
+              "value": 0.406,
+              "unit": "pct"
+            },
+            {
+              "name": "funding",
+              "state": "ok",
+              "value": -0.00009
+            }
+          ],
+          "orderBookImbalance": 0.303287,
+          "decisionImpact": "block_or_reduce_only"
+        },
+        "patternContext": {
+          "enabled": true,
+          "decisionImpact": "confidence_tuning_only",
+          "bias": 0,
+          "tags": []
+        },
+        "newsSentimentGuard": {
+          "enabled": false,
+          "status": "not_wired",
+          "decisionImpact": "none_until_news_agent_is_connected",
+          "rule": "news may pause, reduce size, or raise confidence threshold; it must not open trades"
+        },
+        "learningQuality": {
+          "status": "record_for_reward_scoring",
+          "features": [
+            "marketCore",
+            "riskGuards",
+            "patternContext",
+            "newsSentimentGuard"
+          ],
+          "rule": "features that repeatedly precede losses should lose weight or become guards"
+        },
+        "summary": [
+          "Order flow skewed to bids",
+          "Momentum -0.545% | VolRatio 1.06",
+          "Divergence: BULLISH_DIVERGENCE",
+          "Session: ASIA (low liquidity)"
+        ]
+      },
+      "marketContextEntryContext": {
+        "active": true,
+        "finding": {
+          "symbol": "IOUSDT",
+          "side": "SHORT",
+          "target": "pending_entry",
+          "status": "DATA_FAILURE",
+          "alignment": "{}",
+          "aligned": false,
+          "contradicted": false,
+          "weak": false,
+          "dataFailure": true,
+          "error": "FileNotFoundError: [Errno 2] No such file or directory; FileNotFoundError: [Errno 2] No such file or directory",
+          "_watcherUpdatedAt": 1781065873
+        },
+        "signal": "DATA_FAILURE",
+        "condition": "direction_context",
+        "dataFailure": true,
+        "contradiction": false,
+        "weak": false,
+        "confirmed": false,
+        "directionalAuthority": true,
+        "block": true,
+        "confidenceBoost": 0,
+        "extraConfidence": 0
+      }
+    },
+    "symbol": "IOUSDT",
+    "ts": 1781065925
+  },
+  "lastSkip": {
+    "ts": 1781065928,
+    "code": "marketcontext_entry_gate",
+    "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+  },
+  "log": [
+    {
+      "ts": 1781065928,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065905,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065883,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065873,
+      "msg": "Supervisor delegated external_signal_guard: {'scanDenySymbols': {'old': ['XAUUSDT', 'XAGUSDT', 'SPCXUSDT', 'CLUSDT', 'MRVLUSDT', 'INTCUSDT', 'BZUSDT', 'QQQUSDT', 'GWEIUSDT', 'CBRSUSDT', 'SLXUSDT', 'MUUSDT', 'POWERUSDT', 'ADAUSDT', 'ENAUSDT', 'WLDUSDT', 'ZECUSDT', 'BTCUSDT', 'BNBUSDT', 'SNDKUSDT', 'BEATUSDT', 'SKHYNIXUSDT', 'VELVETUSDT', 'CRCLUSDT', 'ONDOUSDT', 'DRAMUSDT', 'PAXGUSDT', 'RKLBUSDT', 'SOXLUSDT', 'ESPORTSUSDT', 'ETHUSDT', 'MSTRUSDT', 'NVDAUSDT', 'PIPPINUSDT', 'TONUSDT', 'NEARUSDT', 'LITUSDT', 'EWYUSDT', 'MOVEUSDT', 'SAHARAUSDT', 'CHZUSDT', 'ALLOUSDT', 'TSLAUSDT', 'DOGEUSDT', 'SUIUSDT', 'AMDUSDT', 'LITEUSDT', 'HYPEUSDT', 'SIRENUSDT', 'CHIPUSDT', 'BCHUSDT', 'SOLUSDT', 'LTCUSDT', 'BTWUSDT', 'XLMUSDT', 'LABUSDT', 'BSBUSDT', 'VVVUSDT', 'INJUSDT', 'XRPUSDT', 'SPYUSDT', 'HOMEUSDT', 'FILUSDT', 'DOTUSDT', 'TAOUSDT', 'SENTUSDT', 'PUMPUSDT', 'LINKUSDT', 'JTOUSDT', 'AVAXUSDT', 'TRXUSDT', 'XAUTUSDT', 'AVGOUSDT', 'ARMUSDT', 'TRUMPUSDT', 'ASTERUSDT', 'DASHUSDT', 'AAVEUSDT', 'OPNUSDT', 'FETUSDT'], 'new': ['XAUUSDT', 'XAGUSDT', 'SPCXUSDT', 'CLUSDT', 'MRVLUSDT', 'INTCUSDT', 'BZUSDT', 'QQQUSDT', 'GWEIUSDT', 'CBRSUSDT', 'SLXUSDT', 'MUUSDT', 'POWERUSDT', 'ADAUSDT', 'ENAUSDT', 'WLDUSDT', 'ZECUSDT', 'BTCUSDT', 'BNBUSDT', 'SNDKUSDT', 'BEATUSDT', 'SKHYNIXUSDT', 'VELVETUSDT', 'CRCLUSDT', 'ONDOUSDT', 'DRAMUSDT', 'PAXGUSDT', 'RKLBUSDT', 'SOXLUSDT', 'ESPORTSUSDT', 'ETHUSDT', 'MSTRUSDT', 'NVDAUSDT', 'PIPPINUSDT', 'TONUSDT', 'NEARUSDT', 'LITUSDT', 'EWYUSDT', 'MOVEUSDT', 'SAHARAUSDT', 'CHZUSDT', 'ALLOUSDT', 'TSLAUSDT', 'DOGEUSDT', 'SUIUSDT', 'AMDUSDT', 'LITEUSDT', 'HYPEUSDT', 'SIRENUSDT', 'CHIPUSDT', 'BCHUSDT', 'SOLUSDT', 'LTCUSDT', 'BTWUSDT', 'XLMUSDT', 'LABUSDT', 'BSBUSDT', 'VVVUSDT', 'INJUSDT', 'XRPUSDT', 'SPYUSDT', 'HOMEUSDT', 'FILUSDT', 'DOTUSDT', 'TAOUSDT', 'SENTUSDT', 'PUMPUSDT', 'LINKUSDT', 'JTOUSDT', 'AVAXUSDT', 'TRXUSDT', 'XAUTUSDT', 'AVGOUSDT', 'ARMUSDT', 'TRUMPUSDT', 'ASTERUSDT', 'DASHUSDT', 'AAVEUSDT', 'OPNUSDT', 'FETUSDT']}}"
+    },
+    {
+      "ts": 1781065862,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065840,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065818,
+      "msg": "Skip: MarketContext entry gate blocks SHORT IOUSDT (direction_context DATA_FAILURE)"
+    },
+    {
+      "ts": 1781065805,
+      "msg": "Supervisor delegated external_signal_guard: {'scanDenySymbols': {'old': ['XAUUSDT', 'XAGUSDT', 'SPCXUSDT', 'CLUSDT', 'MRVLUSDT', 'INTCUSDT', 'BZUSDT', 'QQQUSDT', 'GWEIUSDT', 'CBRSUSDT', 'SLXUSDT', 'MUUSDT', 'POWERUSDT', 'ADAUSDT', 'ENAUSDT', 'WLDUSDT', 'ZECUSDT', 'BTCUSDT', 'BNBUSDT', 'SNDKUSDT', 'BEATUSDT', 'SKHYNIXUSDT', 'VELVETUSDT', 'CRCLUSDT', 'ONDOUSDT', 'DRAMUSDT', 'PAXGUSDT', 'RKLBUSDT', 'SOXLUSDT', 'ESPORTSUSDT', 'ETHUSDT', 'MSTRUSDT', 'NVDAUSDT', 'PIPPINUSDT', 'TONUSDT', 'NEARUSDT', 'LITUSDT', 'EWYUSDT', 'MOVEUSDT', 'SAHARAUSDT', 'CHZUSDT', 'ALLOUSDT', 'TSLAUSDT', 'DOGEUSDT', 'SUIUSDT', 'AMDUSDT', 'LITEUSDT', 'HYPEUSDT', 'SIRENUSDT', 'CHIPUSDT', 'BCHUSDT', 'SOLUSDT', 'LTCUSDT', 'BTWUSDT', 'XLMUSDT', 'LABUSDT', 'BSBUSDT', 'VVVUSDT', 'INJUSDT', 'XRPUSDT', 'SPYUSDT', 'HOMEUSDT', 'FILUSDT', 'DOTUSDT', 'TAOUSDT', 'SENTUSDT', 'PUMPUSDT', 'LINKUSDT', 'JTOUSDT', 'AVAXUSDT', 'TRXUSDT', 'XAUTUSDT', 'AVGOUSDT', 'ARMUSDT', 'TRUMPUSDT', 'ASTERUSDT', 'DASHUSDT', 'AAVEUSDT', 'OPNUSDT', 'FETUSDT'], 'new': ['XAUUSDT', 'XAGUSDT', 'SPCXUSDT', 'CLUSDT', 'MRVLUSDT', 'INTCUSDT', 'BZUSDT', 'QQQUSDT', 'GWEIUSDT', 'CBRSUSDT', 'SLXUSDT', 'MUUSDT', 'POWERUSDT', 'ADAUSDT', 'ENAUSDT', 'WLDUSDT', 'ZECUSDT', 'BTCUSDT', 'BNBUSDT', 'SNDKUSDT', 'BEATUSDT', 'SKHYNIXUSDT', 'VELVETUSDT', 'CRCLUSDT', 'ONDOUSDT', 'DRAMUSDT', 'PAXGUSDT', 'RKLBUSDT', 'SOXLUSDT', 'ESPORTSUSDT', 'ETHUSDT', 'MSTRUSDT', 'NVDAUSDT', 'PIPPINUSDT', 'TONUSDT', 'NEARUSDT', 'LITUSDT', 'EWYUSDT', 'MOVEUSDT', 'SAHARAUSDT', 'CHZUSDT', 'ALLOUSDT', 'TSLAUSDT', 'DOGEUSDT', 'SUIUSDT', 'AMDUSDT', 'LITEUSDT', 'HYPEUSDT', 'SIRENUSDT', 'CHIPUSDT', 'BCHUSDT', 'SOLUSDT', 'LTCUSDT', 'BTWUSDT', 'XLMUSDT', 'LABUSDT', 'BSBUSDT', 'VVVUSDT', 'INJUSDT', 'XRPUSDT', 'SPYUSDT', 'HOMEUSDT', 'FILUSDT', 'DOTUSDT', 'TAOUSDT', 'SENTUSDT', 'PUMPUSDT', 'LINKUSDT', 'JTOUSDT', 'AVAXUSDT', 'TRXUSDT', 'XAUTUSDT', 'AVGOUSDT', 'ARMUSDT', 'TRUMPUSDT', 'ASTERUSDT', 'DASHUSDT', 'AAVEUSDT', 'OPNUSDT', 'FETUSDT']}}"
+    }
+  ],
+  "scanBoard": [
+    {
+      "symbol": "IOUSDT",
+      "signal": "SHORT",
+      "confidence": 0.795,
+      "score": 0.763163,
+      "learningScore": 0,
+      "momentumPct": 0,
+      "spreadBps": 6.3674,
+      "qualified": true,
+      "rejectReason": "",
+      "adaptiveMinConf": 0.62,
+      "perfTrades": 0,
+      "perfWinRatePct": 0,
+      "perfPnl": 0,
+      "softFallbackEligible": false,
+      "scanErrorStreak": 0,
+      "scanCooldownUntil": 0,
+      "sessionBias": {
+        "hour": 11,
+        "reason": "insufficient_session_data",
+        "confidenceShift": 0,
+        "sizeMult": 1,
+        "trades": 0,
+        "winRatePct": 0,
+        "pnl": 0,
+        "avgAbsMovePct": 0
+      }
+    },
+    {
+      "symbol": "HUSDT",
+      "signal": "WAIT",
+      "confidence": 0,
+      "score": -999,
+      "momentumPct": 0,
+      "spreadBps": 0,
+      "qualified": false,
+      "rejectReason": "analyze_error",
+      "adaptiveMinConf": 0.62,
+      "error": "Invalid symbol format",
+      "scanErrorStreak": 429,
+      "scanCooldownUntil": 1781066828
+    },
+    {
+      "symbol": "币安人生USDT",
+      "signal": "WAIT",
+      "confidence": 0,
+      "score": -999,
+      "momentumPct": 0,
+      "spreadBps": 0,
+      "qualified": false,
+      "rejectReason": "analyze_error",
+      "adaptiveMinConf": 0.62,
+      "error": "Invalid symbol format",
+      "scanErrorStreak": 429,
+      "scanCooldownUntil": 1781066828
+    }
+  ],
+  "cooldownWatchlist": {},
+  "supervisorReviewScheduler": {
+    "lastCheckedAt": 1781065880,
+    "lastPendingReason": "waiting",
+    "pendingClosedTradeCount": 0,
+    "pendingClosedTradeDelta": 0,
+    "lastReviewedAt": 1781065040,
+    "lastReason": "hourly_fallback",
+    "lastReviewedClosedTradeCount": 0,
+    "lastReviewedClosedTradeSignature": "",
+    "lastMetrics": {
+      "trades": 0,
+      "pnl": 0,
+      "lossStreak": 0,
+      "winRatePct": 0,
+      "payoffRatio": 0
+    },
+    "lastSeverity": "medium",
+    "lastSummary": "พบ 2 จุดที่ควรปรับปรุง · Supervisor actions 2"
+  },
+  "liveGuardian": null,
+  "paper": {
+    "position": null,
+    "wins": 0,
+    "losses": 0,
+    "winRatePct": 0,
+    "realizedPnl": 0,
+    "lastTrades": []
+  },
+  "liveStats": {
+    "symbol": "IOUSDT",
+    "wins": 0,
+    "losses": 0,
+    "winRatePct": 0,
+    "realizedPnl": 0,
+    "winsToday": 0,
+    "lossesToday": 0,
+    "winRatePctToday": 0,
+    "realizedPnlToday": 0,
+    "lastTrades": []
+  },
+  "liveStatsAll": {
+    "wins": 0,
+    "losses": 0,
+    "winRatePct": 0,
+    "realizedPnl": 0,
+    "winsToday": 0,
+    "lossesToday": 0,
+    "winRatePctToday": 0,
+    "realizedPnlToday": 0
+  },
+  "kpiTodayAllSymbols": {
+    "live": {
+      "wins": 0,
+      "losses": 0,
+      "winRatePct": 0,
+      "realizedPnl": 0
+    }
+  },
+  "kpiToday": {
+    "live": {
+      "wins": 0,
+      "losses": 0,
+      "winRatePct": 0,
+      "realizedPnl": 0
+    },
+    "paper": {
+      "wins": 0,
+      "losses": 0,
+      "winRatePct": 0,
+      "realizedPnl": 0
+    }
+  },
+  "liveDailyPnl": 0,
+  "activePosition": {
+    "mode": "LIVE",
+    "paper": {
+      "side": "FLAT",
+      "qty": 0,
+      "notionalUsdtApprox": 0
+    },
+    "live": {
+      "symbol": "",
+      "side": "FLAT",
+      "qty": 0,
+      "notionalUsdtApprox": 0,
+      "entryMark": null,
+      "markPrice": null,
+      "localTp": null,
+      "localSl": null,
+      "leverage": 5
+    }
+  },
+  "openLivePositions": [],
+  "marketContextWatcher": {
+    "updatedAt": 1781065873,
+    "ok": false,
+    "error": "FileNotFoundError: [Errno 2] No such file or directory",
+    "targets": [
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "last_decision"
+      },
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "pending_entry"
+      }
+    ],
+    "contexts": [
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "pending_entry",
+        "status": "DATA_FAILURE",
+        "alignment": "{}",
+        "aligned": false,
+        "contradicted": false,
+        "weak": false,
+        "dataFailure": true,
+        "error": "FileNotFoundError: [Errno 2] No such file or directory; FileNotFoundError: [Errno 2] No such file or directory"
+      },
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "pending_entry",
+        "status": "DATA_FAILURE",
+        "alignment": "{}",
+        "aligned": false,
+        "contradicted": false,
+        "weak": false,
+        "dataFailure": true,
+        "error": "FileNotFoundError: [Errno 2] No such file or directory; FileNotFoundError: [Errno 2] No such file or directory"
+      }
+    ],
+    "findings": [
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "pending_entry",
+        "condition": "mcp_data_failure",
+        "severity": "high",
+        "guardianActive": false,
+        "marketContextSignal": "FileNotFoundError: [Errno 2] No such file or directory; FileNotFoundError: [Errno 2] No such file or directory",
+        "hermesState": "MarketContext MCP data unavailable for pending entry validation",
+        "recommendedAction": "Block this entry until MarketContext context recovers or symbol is excluded from TV-gated scans."
+      },
+      {
+        "symbol": "IOUSDT",
+        "side": "SHORT",
+        "target": "pending_entry",
+        "condition": "mcp_data_failure",
+        "severity": "high",
+        "guardianActive": false,
+        "marketContextSignal": "FileNotFoundError: [Errno 2] No such file or directory; FileNotFoundError: [Errno 2] No such file or directory",
+        "hermesState": "MarketContext MCP data unavailable for pending entry validation",
+        "recommendedAction": "Block this entry until MarketContext context recovers or symbol is excluded from TV-gated scans."
+      }
+    ],
+    "submitted": true,
+    "supervisorResult": {
+      "applied": true,
+      "changes": {
+        "scanDenySymbols": {
+          "old": [
+            "XAUUSDT",
+            "XAGUSDT",
+            "SPCXUSDT",
+            "CLUSDT",
+            "MRVLUSDT",
+            "INTCUSDT",
+            "BZUSDT",
+            "QQQUSDT",
+            "GWEIUSDT",
+            "CBRSUSDT",
+            "SLXUSDT",
+            "MUUSDT",
+            "POWERUSDT",
+            "ADAUSDT",
+            "ENAUSDT",
+            "WLDUSDT",
+            "ZECUSDT",
+            "BTCUSDT",
+            "BNBUSDT",
+            "SNDKUSDT",
+            "BEATUSDT",
+            "SKHYNIXUSDT",
+            "VELVETUSDT",
+            "CRCLUSDT",
+            "ONDOUSDT",
+            "DRAMUSDT",
+            "PAXGUSDT",
+            "RKLBUSDT",
+            "SOXLUSDT",
+            "ESPORTSUSDT",
+            "ETHUSDT",
+            "MSTRUSDT",
+            "NVDAUSDT",
+            "PIPPINUSDT",
+            "TONUSDT",
+            "NEARUSDT",
+            "LITUSDT",
+            "EWYUSDT",
+            "MOVEUSDT",
+            "SAHARAUSDT",
+            "CHZUSDT",
+            "ALLOUSDT",
+            "TSLAUSDT",
+            "DOGEUSDT",
+            "SUIUSDT",
+            "AMDUSDT",
+            "LITEUSDT",
+            "HYPEUSDT",
+            "SIRENUSDT",
+            "CHIPUSDT",
+            "BCHUSDT",
+            "SOLUSDT",
+            "LTCUSDT",
+            "BTWUSDT",
+            "XLMUSDT",
+            "LABUSDT",
+            "BSBUSDT",
+            "VVVUSDT",
+            "INJUSDT",
+            "XRPUSDT",
+            "SPYUSDT",
+            "HOMEUSDT",
+            "FILUSDT",
+            "DOTUSDT",
+            "TAOUSDT",
+            "SENTUSDT",
+            "PUMPUSDT",
+            "LINKUSDT",
+            "JTOUSDT",
+            "AVAXUSDT",
+            "TRXUSDT",
+            "XAUTUSDT",
+            "AVGOUSDT",
+            "ARMUSDT",
+            "TRUMPUSDT",
+            "ASTERUSDT",
+            "DASHUSDT",
+            "AAVEUSDT",
+            "OPNUSDT",
+            "FETUSDT"
+          ],
+          "new": [
+            "XAUUSDT",
+            "XAGUSDT",
+            "SPCXUSDT",
+            "CLUSDT",
+            "MRVLUSDT",
+            "INTCUSDT",
+            "BZUSDT",
+            "QQQUSDT",
+            "GWEIUSDT",
+            "CBRSUSDT",
+            "SLXUSDT",
+            "MUUSDT",
+            "POWERUSDT",
+            "ADAUSDT",
+            "ENAUSDT",
+            "WLDUSDT",
+            "ZECUSDT",
+            "BTCUSDT",
+            "BNBUSDT",
+            "SNDKUSDT",
+            "BEATUSDT",
+            "SKHYNIXUSDT",
+            "VELVETUSDT",
+            "CRCLUSDT",
+            "ONDOUSDT",
+            "DRAMUSDT",
+            "PAXGUSDT",
+            "RKLBUSDT",
+            "SOXLUSDT",
+            "ESPORTSUSDT",
+            "ETHUSDT",
+            "MSTRUSDT",
+            "NVDAUSDT",
+            "PIPPINUSDT",
+            "TONUSDT",
+            "NEARUSDT",
+            "LITUSDT",
+            "EWYUSDT",
+            "MOVEUSDT",
+            "SAHARAUSDT",
+            "CHZUSDT",
+            "ALLOUSDT",
+            "TSLAUSDT",
+            "DOGEUSDT",
+            "SUIUSDT",
+            "AMDUSDT",
+            "LITEUSDT",
+            "HYPEUSDT",
+            "SIRENUSDT",
+            "CHIPUSDT",
+            "BCHUSDT",
+            "SOLUSDT",
+            "LTCUSDT",
+            "BTWUSDT",
+            "XLMUSDT",
+            "LABUSDT",
+            "BSBUSDT",
+            "VVVUSDT",
+            "INJUSDT",
+            "XRPUSDT",
+            "SPYUSDT",
+            "HOMEUSDT",
+            "FILUSDT",
+            "DOTUSDT",
+            "TAOUSDT",
+            "SENTUSDT",
+            "PUMPUSDT",
+            "LINKUSDT",
+            "JTOUSDT",
+            "AVAXUSDT",
+            "TRXUSDT",
+            "XAUTUSDT",
+            "AVGOUSDT",
+            "ARMUSDT",
+            "TRUMPUSDT",
+            "ASTERUSDT",
+            "DASHUSDT",
+            "AAVEUSDT",
+            "OPNUSDT",
+            "FETUSDT"
+          ]
+        }
+      },
+      "reason": "marketcontext_mcp_internal",
+      "signature": "IOUSDT:SHORT:data_failure_guardian:FileNotFoundError: [Errno 2] No |IOUSDT:SHORT:data_failure_guardian:FileNotFoundError: [Errno 2] No ",
+      "kinds": [
+        "data_failure_guardian"
+      ],
+      "recorded": true,
+      "cmuxActionReport": {
+        "type": "marketcontext_mcp_data_failure_guard",
+        "action": "degrade_external_signal",
+        "until": 1781065873,
+        "source": "marketcontext_mcp_internal",
+        "symbols": [
+          "IOUSDT",
+          "IOUSDT"
+        ],
+        "note": "MarketContext MCP is unavailable; Hermes continues using internal Binance guards and cools down only failed external-data symbols."
+      }
+    }
+  },
+  "hermesAgents": {
+    "version": "hermes-multi-agent-1",
+    "engine": {
+      "id": "hermes_ai_decision_engine",
+      "name": "Hermes",
+      "title": "AI Decision Engine",
+      "role": "หัวหน้าทีมเทรด",
+      "mission": "วิเคราะห์ วางแผน เรียนรู้ ตั้ง hypothesis สรุปความผิดพลาด และ optimize strategy",
+      "responsibilities": [
+        "analyze_data",
+        "plan_trades",
+        "learn_from_results",
+        "form_hypotheses",
+        "review_failures",
+        "optimize_strategy"
+      ]
+    },
+    "updatedAt": 1781065932,
+    "kanban": {
+      "todo": [
+        "hermes_supervisor",
+        "portfolio_manager",
+        "position_guardian",
+        "backtest_agent",
+        "execution_agent",
+        "reflection_agent",
+        "memory_agent"
+      ],
+      "doing": [],
+      "done": [
+        "market_analyst",
+        "data_quality_guard",
+        "news_sentiment_guard",
+        "risk_manager"
+      ],
+      "blocked": [
+        "strategy_builder"
+      ]
+    },
+    "agents": {
+      "hermes_supervisor": {
+        "id": "hermes_supervisor",
+        "name": "Hermes Supervisor",
+        "role": "Control-plane governor, agent cadence, delegation policy",
+        "playbookPath": "docs/hermes_agents/hermes_supervisor.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 151
+      },
+      "market_analyst": {
+        "id": "market_analyst",
+        "name": "Market Analyst",
+        "role": "Market scan, momentum, symbol ranking",
+        "playbookPath": "docs/hermes_agents/market_analyst.md",
+        "state": "done",
+        "lastAction": "scan completed",
+        "lastReason": "IOUSDT",
+        "updatedAt": 1781065928,
+        "runs": 297,
+        "data": {
+          "candidates": 3,
+          "picked": "IOUSDT"
+        }
+      },
+      "data_quality_guard": {
+        "id": "data_quality_guard",
+        "name": "Data Quality Guard",
+        "role": "Data freshness, missing fields, stale/analyze-error protection",
+        "playbookPath": "docs/hermes_agents/data_quality_guard.md",
+        "state": "done",
+        "lastAction": "intel quality ok",
+        "lastReason": "IOUSDT",
+        "updatedAt": 1781065928,
+        "runs": 155,
+        "data": {
+          "ok": true,
+          "reason": "ok",
+          "issues": [],
+          "symbol": "IOUSDT",
+          "signal": "SHORT",
+          "confidence": 0.795
+        }
+      },
+      "news_sentiment_guard": {
+        "id": "news_sentiment_guard",
+        "name": "News Sentiment Guard",
+        "role": "News/event risk as guard-only; never opens trades",
+        "playbookPath": "docs/hermes_agents/news_sentiment_guard.md",
+        "state": "done",
+        "lastAction": "news guard neutral",
+        "lastReason": "not_wired",
+        "updatedAt": 1781065928,
+        "runs": 78,
+        "data": {
+          "enabled": true,
+          "wired": false,
+          "status": "not_wired",
+          "decisionImpact": "none_until_news_agent_is_connected"
+        }
+      },
+      "risk_manager": {
+        "id": "risk_manager",
+        "name": "Risk Manager",
+        "role": "Risk gates, cooldowns, exposure limits",
+        "playbookPath": "docs/hermes_agents/risk_manager.md",
+        "state": "done",
+        "lastAction": "risk policy active",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 370
+      },
+      "portfolio_manager": {
+        "id": "portfolio_manager",
+        "name": "Portfolio Manager",
+        "role": "Portfolio capacity, position count, symbol/day caps",
+        "playbookPath": "docs/hermes_agents/portfolio_manager.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 0
+      },
+      "position_guardian": {
+        "id": "position_guardian",
+        "name": "Position Guardian",
+        "role": "Open-position monitoring, profit lock, reversal protection",
+        "playbookPath": "docs/hermes_agents/position_guardian.md",
+        "state": "todo",
+        "lastAction": "no open positions",
+        "lastReason": "",
+        "updatedAt": 1781065926,
+        "runs": 1
+      },
+      "strategy_builder": {
+        "id": "strategy_builder",
+        "name": "Strategy Builder",
+        "role": "Signal shaping, entry rules, session bias",
+        "playbookPath": "docs/hermes_agents/strategy_builder.md",
+        "state": "blocked",
+        "lastAction": "MarketContext entry gate",
+        "lastReason": "direction_context DATA_FAILURE",
+        "updatedAt": 1781065928,
+        "runs": 4
+      },
+      "backtest_agent": {
+        "id": "backtest_agent",
+        "name": "Backtest Agent",
+        "role": "Learning report and walk-forward validation",
+        "playbookPath": "docs/hermes_agents/backtest_agent.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 0
+      },
+      "execution_agent": {
+        "id": "execution_agent",
+        "name": "Execution Agent",
+        "role": "Order placement and exchange responses",
+        "playbookPath": "docs/hermes_agents/execution_agent.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 0
+      },
+      "reflection_agent": {
+        "id": "reflection_agent",
+        "name": "Reflection Agent",
+        "role": "Loss-streak review and self-tuning",
+        "playbookPath": "docs/hermes_agents/reflection_agent.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 0
+      },
+      "memory_agent": {
+        "id": "memory_agent",
+        "name": "Memory Agent",
+        "role": "Snapshots, logs, learning profiles",
+        "playbookPath": "docs/hermes_agents/memory_agent.md",
+        "state": "todo",
+        "lastAction": "waiting",
+        "lastReason": "",
+        "updatedAt": 1781065925,
+        "runs": 1
+      }
+    }
+  },
+  "hermesSupervisorReview": {
+    "reviewedAt": 1781065040,
+    "severity": "medium",
+    "summary": "พบ 2 จุดที่ควรปรับปรุง · Supervisor actions 2",
+    "issues": [
+      {
+        "agent": "market_analyst",
+        "severity": "medium",
+        "title": "No qualified scan candidates",
+        "detail": "scan rows=2 แต่ไม่มี qualified candidate",
+        "suggestion": "ขยาย universe หรือปรับ ranking fallback เฉพาะช่วงที่ guard บล็อกทั้งหมด"
+      },
+      {
+        "agent": "hermes",
+        "severity": "medium",
+        "title": "Low entry activity",
+        "detail": "LIVE running แต่ tradesLastHour=0 และไม่มี open position (scan_none)",
+        "suggestion": "ให้ Supervisor ตรวจ log/scan guards และเสนอเฉพาะ root cause ที่บล็อก entry จริง"
+      }
+    ],
+    "suggestions": [
+      {
+        "agent": "market_analyst",
+        "action": "ขยาย universe หรือปรับ ranking fallback เฉพาะช่วงที่ guard บล็อกทั้งหมด",
+        "severity": "medium"
+      },
+      {
+        "agent": "hermes",
+        "action": "ให้ Supervisor ตรวจ log/scan guards และเสนอเฉพาะ root cause ที่บล็อก entry จริง",
+        "severity": "medium"
+      }
+    ],
+    "cmuxHandoff": [],
+    "autoActions": [
+      {
+        "agent": "strategy_builder",
+        "action": "auto-tuned scan-none fallback policy",
+        "reason": "scan_none",
+        "status": "applied",
+        "issueType": "scan_none",
+        "delegated": true,
+        "changes": {
+          "minConfidence": {
+            "old": 0.65,
+            "new": 0.62
+          },
+          "earlyEntryMinConfidence": {
+            "old": 0.575,
+            "new": 0.55
+          },
+          "earlyEntryScoreGapMin": {
+            "old": 1.4,
+            "new": 1.28
+          },
+          "hybridMinScore": {
+            "old": 0.695,
+            "new": 0.67
+          },
+          "hybridMinEdge": {
+            "old": 0.05,
+            "new": 0.04
+          }
+        }
+      },
+      {
+        "agent": "strategy_builder",
+        "action": "low entry auto-tune cooldown active",
+        "reason": "scan_none",
+        "status": "applied",
+        "issueType": "low_entry_activity",
+        "delegated": true
+      }
+    ],
+    "periodicTradeReview": [],
+    "tradeReviewAttribution": {
+      "primary": "market_strategy",
+      "strategyTuningSuppressed": false,
+      "infraAuthIncident": {},
+      "infraDataIncident": {}
+    },
+    "dailyRegimeReview": {},
+    "agentHealth": {
+      "hermes_supervisor": {
+        "state": "done",
+        "lastAction": "reviewed subagent health",
+        "ageSec": 0,
+        "runs": 118
+      },
+      "market_analyst": {
+        "state": "done",
+        "lastAction": "scan completed",
+        "ageSec": 14,
+        "runs": 256
+      },
+      "data_quality_guard": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 104
+      },
+      "news_sentiment_guard": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 43
+      },
+      "risk_manager": {
+        "state": "done",
+        "lastAction": "risk policy active",
+        "ageSec": 16,
+        "runs": 313
+      },
+      "portfolio_manager": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 0
+      },
+      "position_guardian": {
+        "state": "todo",
+        "lastAction": "no open positions",
+        "ageSec": 16,
+        "runs": 1
+      },
+      "strategy_builder": {
+        "state": "done",
+        "lastAction": "auto-tuned scan-none fallback policy",
+        "ageSec": 0,
+        "runs": 4
+      },
+      "backtest_agent": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 0
+      },
+      "execution_agent": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 0
+      },
+      "reflection_agent": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 0
+      },
+      "memory_agent": {
+        "state": "todo",
+        "lastAction": "waiting",
+        "ageSec": 16,
+        "runs": 1
+      }
+    },
+    "agentRuns": {
+      "hermes_supervisor": 118,
+      "market_analyst": 256,
+      "data_quality_guard": 104,
+      "news_sentiment_guard": 43,
+      "risk_manager": 313,
+      "portfolio_manager": 0,
+      "position_guardian": 1,
+      "strategy_builder": 4,
+      "backtest_agent": 0,
+      "execution_agent": 0,
+      "reflection_agent": 0,
+      "memory_agent": 1
+    },
+    "cached": true,
+    "staleSec": 892
+  },
+  "config": {
+    "symbol": "AUTO",
+    "primarySymbol": null,
+    "activeScanSymbol": "IOUSDT",
+    "executionMode": "LIVE",
+    "intervalSec": 20,
+    "marketScan": true,
+    "leverage": 5,
+    "leverageMin": 1,
+    "leverageMax": 25,
+    "leverageAutoEnabled": true,
+    "adaptiveLeverageEnabled": true,
+    "adaptiveLeverageMax": 25,
+    "supervisorSizeStreakEnabled": true,
+    "supervisorSizeMultiplier": 0.85,
+    "supervisorReviewSchedulerEnabled": true,
+    "supervisorReviewIntervalSec": 3600,
+    "supervisorReviewFullClosedTrades": 8,
+    "supervisorReviewFastClosedTrades": 4,
+    "supervisorReviewLossStreakTrigger": 2,
+    "supervisorReviewDrawdownTriggerUsdt": 2,
+    "scanDenySymbols": [
+      "XAUUSDT",
+      "XAGUSDT",
+      "SPCXUSDT",
+      "CLUSDT",
+      "MRVLUSDT",
+      "INTCUSDT",
+      "BZUSDT",
+      "QQQUSDT",
+      "GWEIUSDT",
+      "CBRSUSDT",
+      "SLXUSDT",
+      "MUUSDT",
+      "POWERUSDT",
+      "ADAUSDT",
+      "ENAUSDT",
+      "WLDUSDT",
+      "ZECUSDT",
+      "BTCUSDT",
+      "BNBUSDT",
+      "SNDKUSDT",
+      "BEATUSDT",
+      "SKHYNIXUSDT",
+      "VELVETUSDT",
+      "CRCLUSDT",
+      "ONDOUSDT",
+      "DRAMUSDT",
+      "PAXGUSDT",
+      "RKLBUSDT",
+      "SOXLUSDT",
+      "ESPORTSUSDT",
+      "ETHUSDT",
+      "MSTRUSDT",
+      "NVDAUSDT",
+      "PIPPINUSDT",
+      "TONUSDT",
+      "NEARUSDT",
+      "LITUSDT",
+      "EWYUSDT",
+      "MOVEUSDT",
+      "SAHARAUSDT",
+      "CHZUSDT",
+      "ALLOUSDT",
+      "TSLAUSDT",
+      "DOGEUSDT",
+      "SUIUSDT",
+      "AMDUSDT",
+      "LITEUSDT",
+      "HYPEUSDT",
+      "SIRENUSDT",
+      "CHIPUSDT",
+      "BCHUSDT",
+      "SOLUSDT",
+      "LTCUSDT",
+      "BTWUSDT",
+      "XLMUSDT",
+      "LABUSDT",
+      "BSBUSDT",
+      "VVVUSDT",
+      "INJUSDT",
+      "XRPUSDT",
+      "SPYUSDT",
+      "HOMEUSDT",
+      "FILUSDT",
+      "DOTUSDT",
+      "TAOUSDT",
+      "SENTUSDT",
+      "PUMPUSDT",
+      "LINKUSDT",
+      "JTOUSDT",
+      "AVAXUSDT",
+      "TRXUSDT",
+      "XAUTUSDT",
+      "AVGOUSDT",
+      "ARMUSDT",
+      "TRUMPUSDT",
+      "ASTERUSDT",
+      "DASHUSDT",
+      "AAVEUSDT",
+      "OPNUSDT",
+      "FETUSDT"
+    ],
+    "marketContextWatcherEnabled": true,
+    "marketContextWatcherIntervalSec": 45
+  },
+  "riskLimits": {
+    "maxLeverage": 25,
+    "maxNotionalUSDT": 200,
+    "maxDailyLossUSDT": 50,
+    "killSwitch": false
+  }
+}

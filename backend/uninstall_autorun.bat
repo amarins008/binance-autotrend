@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set TASK_NAME=BinanceCopilotLauncher
+set TASK_NAME=CmuxHermesLauncher
 schtasks /Delete /TN "%TASK_NAME%" /F >nul
 if %ERRORLEVEL% NEQ 0 (
   echo WARNING: Task not found or delete failed.

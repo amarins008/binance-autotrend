@@ -118,42 +118,6 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("scanPerSymbolTimeoutSec", 7.5)
     out.setdefault("scanFallbackNearEnabled", True)
     out.setdefault("scanFallbackNearConfRelax", 0.04)
-    out.setdefault("tradingViewWatcherEnabled", True)
-    out.setdefault("tradingViewWatcherIntervalSec", 300)
-    out.setdefault("tradingViewWatcherMaxSymbols", 3)
-    out.setdefault("tradingViewWatcherExchange", "BINANCE")
-    out.setdefault("tradingViewWatcherTimeframe", "1h")
-    out.setdefault("tradingViewWatcherMcpPort", 8877)
-    out.setdefault("tradingViewWatcherMcpStartupSec", 120)
-    out.setdefault("tradingViewWatcherMcpCallTimeoutSec", 45)
-    out.setdefault("tradingViewWatcherBatchTimeoutSec", 180)
-    out.setdefault("guardianTradingViewContextEnabled", True)
-    out.setdefault("guardianTradingViewContextMaxAgeSec", 420)
-    out.setdefault("guardianTradingViewTightenSlPct", 0.22)
-    out.setdefault("guardianTradingViewMinProfitLockUsdt", 0.06)
-    out.setdefault("guardianTradingViewBlockTpExtension", True)
-    out.setdefault("entryTradingViewGateEnabled", True)
-    out.setdefault("entryTradingViewGateMaxAgeSec", 420)
-    out.setdefault("entryTradingViewBlockContradiction", True)
-    out.setdefault("entryTradingViewBlockWeakSignal", True)
-    out.setdefault("entryTradingViewWeakExtraConfidence", 0.03)
-    out.setdefault("entryTradingViewConfirmConfidenceBoost", 0.015)
-    out.setdefault(
-        "tradingViewWatcherCommand",
-        [
-            r"C:\Users\KGB008\.local\bin\uvx.exe",
-            "--python",
-            "3.13",
-            "--from",
-            "tradingview-mcp-server",
-            "tradingview-mcp",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "{port}",
-            "streamable-http",
-        ],
-    )
     out.setdefault("orphanAutoAdoptEnabled", True)
     out.setdefault("orphanAutoAdoptForceSingleSymbol", False)
     out.setdefault("orphanAutoAdoptMultiEnabled", True)
@@ -299,4 +263,3 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         out["strongFlipUltraScoreGap"] = 2.2
     out["engineVersion"] = "pro-2.0"
     return out
-

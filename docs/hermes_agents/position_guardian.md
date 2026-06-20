@@ -18,7 +18,7 @@ Allowed self-heal:
 - Update heartbeat from openLivePositions when guardian state is stale.
 - Extend TP only when configured strong-signal criteria hold.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Open positions exist but guardian heartbeat is stale.
 - Weak payoff ratio persists after auto-tune cooldown.

@@ -23,7 +23,7 @@ await esbuild.build({
     "process.env.NODE_ENV": '"production"',
   },
   alias: {
-    "~components/CopilotPanel": resolve(__dirname, "src/components/CopilotPanel.tsx"),
+    "~components/CmuxPanel": resolve(__dirname, "src/components/CmuxPanel.tsx"),
     "~lib/backend": resolve(__dirname, "src/lib/backend.ts"),
     "~lib/orderbook": resolve(__dirname, "src/lib/orderbook.ts"),
     "~lib/types": resolve(__dirname, "src/lib/types.ts"),
@@ -44,7 +44,7 @@ try {
 // ── Write manifest.json ───────────────────────────────────────────────────────
 const manifest = {
   manifest_version: 3,
-  name: "Binance AI Copilot",
+  name: "Cmux + Hermes",
   description: "AI overlay, order book analytics, and one-click trade actions for Binance",
   version: "0.2.0",
   icons: { "128": "icon128.png" },

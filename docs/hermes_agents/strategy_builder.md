@@ -17,7 +17,7 @@ Allowed self-heal:
 - Treat signal wait, late chase, and adaptive confidence blocks as safety holds unless repeated evidence shows false blocking.
 - Ask market_analyst to explain top blockers when activity is too low.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Negative expectancy persists after auto-tune cooldown.
 - signal wait repeats with strong missed moves.

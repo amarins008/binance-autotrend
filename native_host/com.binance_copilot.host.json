@@ -1,9 +1,0 @@
-{
-    "name":  "com.binance_copilot.host",
-    "description":  "Binance AI Copilot Native Host",
-    "path":  "E:\\My Project\\Chrome extension\\Binance autotrend\\native_host\\binance_copilot_host.bat",
-    "type":  "stdio",
-    "allowed_origins":  [
-                            "chrome-extension://EXTENSION_ID_PLACEHOLDER/"
-                        ]
-}

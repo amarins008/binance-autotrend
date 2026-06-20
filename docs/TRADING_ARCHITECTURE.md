@@ -46,7 +46,7 @@ Each cycle stores `intel.entryPipeline` for dashboard/debug.
 ## Config
 
 - **PRO preset file:** `backend/autotrade.pro.json`  
-- **Start bot:** `python codex_cli.py start --config autotrade.pro.json`  
+- **Start bot:** `python cmux_cli.py start --config autotrade.pro.json`  
 - **Playbook API:** `GET /trading/playbook`
 
 ## Philosophy

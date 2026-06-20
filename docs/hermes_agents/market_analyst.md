@@ -19,7 +19,7 @@ Allowed self-heal:
 - Skip locked, already-open, timed-out, or exchange-rejected symbols.
 - Restore AUTO scan mode when runtime drifted into a single fixed symbol.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - scanBoard stays empty or stale across multiple cycles in AUTO mode.
 - The same rejected or locked symbol is picked repeatedly.

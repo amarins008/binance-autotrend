@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
-import { CopilotPanel, PANEL_WIDTH, PANEL_COLLAPSED_W, PANEL_MOBILE_BREAKPOINT } from "~components/CopilotPanel"
+import { CmuxPanel, PANEL_WIDTH, PANEL_COLLAPSED_W, PANEL_MOBILE_BREAKPOINT } from "~components/CmuxPanel"
 import {
   analyzeChartVision, analyzeIntel, checkHealth, evaluateStrategy,
   fetchAutoTradeStatus, fetchRiskAlerts, listMonitors, parseStrategyCommand,
@@ -339,7 +339,7 @@ const App = ({ onPanelToggle }: { onPanelToggle?: (open: boolean) => void }) => 
   }
 
   return (
-    <CopilotPanel
+    <CmuxPanel
       symbol={symbol}
       loading={loading}
       backendStatus={backendStatus}
@@ -371,7 +371,7 @@ const App = ({ onPanelToggle }: { onPanelToggle?: (open: boolean) => void }) => 
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
 
-const STYLE_ID = "binance-copilot-body-style"
+const STYLE_ID = "binance-cmux-body-style"
 
 function injectBodyPadding(open: boolean) {
   let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null
@@ -394,7 +394,7 @@ function injectBodyPadding(open: boolean) {
 injectBodyPadding(true)
 
 const host = document.createElement("div")
-host.id = "binance-ai-copilot-root"
+host.id = "binance-ai-cmux-root"
 host.style.cssText = "position:fixed;top:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;"
 document.documentElement.appendChild(host)
 

@@ -1,17 +1,17 @@
 (() => {
   const BASE = "http://127.0.0.1:8020";
   const LAUNCHER = "http://127.0.0.1:8021";
-  const NATIVE_HOST = "com.binance_copilot.host";
+  const NATIVE_HOST = "com.cmux_hermes.host";
   let backendOnline = false;
   let backendHealth = null;
-  const id = "binance-ai-copilot-root";
-  const toggleId = "binance-ai-copilot-toggle";
+  const id = "cmux-hermes-root";
+  const toggleId = "cmux-hermes-toggle";
   const sidebarWidth = 400;
-  const FLIP_PREF_KEY = "binance_copilot_auto_flip_pref_v1";
-  const MODE_PREF_KEY = "binance_copilot_auto_mode_pref_v1";
-  const AUTOTRADE_STATE_KEY = "binance_copilot_autotrade_state_v1";
-  const TAB_KEY = "binance_copilot_tab_v1";
-  const PERF_MODE_KEY = "binance_copilot_perf_mode_v1";
+  const FLIP_PREF_KEY = "cmux_hermes_auto_flip_pref_v1";
+  const MODE_PREF_KEY = "cmux_hermes_auto_mode_pref_v1";
+  const AUTOTRADE_STATE_KEY = "cmux_hermes_autotrade_state_v1";
+  const TAB_KEY = "cmux_hermes_tab_v1";
+  const PERF_MODE_KEY = "cmux_hermes_perf_mode_v1";
   let autoSessionId = null;
   let symbolSyncInProgress = false;
   let lastSymbolSyncTs = 0;
@@ -279,11 +279,11 @@
 
   /* ── Toggle Button ── */
   const toggle = document.createElement("button"); toggle.id = toggleId;
-  toggle.textContent = "ซ่อน Copilot";
+  toggle.textContent = "ซ่อน Cmux";
   toggle.style.cssText = `position:fixed;top:12px;right:${sidebarWidth+12}px;z-index:2147483647;padding:8px 14px;border-radius:99px;border:1px solid rgba(148,163,184,.25);background:rgba(11,17,32,.88);color:#e8edf7;cursor:pointer;font-family:'Inter',system-ui,sans-serif;font-size:11px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(8px);transition:all .2s`;
   document.body.appendChild(toggle);
   let isHidden = false; applyPageOffset(true);
-  const setHidden = (h) => { isHidden = h; root.style.display = h ? "none" : "block"; toggle.textContent = h ? "แสดง Copilot" : "ซ่อน Copilot"; toggle.style.right = h ? "12px" : `${sidebarWidth+12}px`; applyPageOffset(!h); };
+  const setHidden = (h) => { isHidden = h; root.style.display = h ? "none" : "block"; toggle.textContent = h ? "แสดง Cmux" : "ซ่อน Cmux"; toggle.style.right = h ? "12px" : `${sidebarWidth+12}px`; applyPageOffset(!h); };
   toggle.onclick = () => setHidden(!isHidden);
 
   /* ── Symbol Detection ── */
@@ -301,7 +301,7 @@
   const html = () => `
 <div class="hdr">
   <div class="hdr-row">
-    <div class="hdr-brand"><div id="connDot" class="hdr-dot"></div><span class="hdr-title">AI Copilot</span></div>
+    <div class="hdr-brand"><div id="connDot" class="hdr-dot"></div><span class="hdr-title">AI Cmux</span></div>
     <span style="font-size:10px;color:var(--text3)">v2.0</span>
   </div>
   <div id="sym" class="hdr-sym">${symbol()}</div>

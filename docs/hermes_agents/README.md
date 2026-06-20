@@ -1,11 +1,11 @@
 # Hermes Agent Playbooks
 
-These playbooks define the stable operating rules for each Hermes agent. Hermes Supervisor may use them to classify agent health, decide which issues can be self-healed, and decide when a Codex task is required.
+These playbooks define the stable operating rules for each Hermes agent. Hermes Supervisor may use them to classify agent health, decide which issues can be self-healed, and decide when a Cmux task is required.
 
 Supervisor update policy:
 
-- Stable playbooks are source-controlled and should be changed by Codex or a human after tests.
-- Runtime learning should be appended as observations, proposals, or Codex tasks, not silently merged into stable rules.
+- Stable playbooks are source-controlled and should be changed by Cmux or a human after tests.
+- Runtime learning should be appended as observations, proposals, or Cmux tasks, not silently merged into stable rules.
 - Use recent evidence windows first: 7 days for tactical trading behavior, 15 days for medium-confidence tuning, 30 days for durable policy changes.
 - Do not widen risk, leverage, or exchange permissions without tests and explicit config changes.
 - Prefer symbol-specific changes before broad global changes when the evidence points to one symbol.

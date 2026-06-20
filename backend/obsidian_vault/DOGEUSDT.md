@@ -14,11 +14,14 @@
 - RewardLossStreak: 0
 - LearningRankScore: 0.0
 
+## Risk Tune
+- Active: False
+
 ## Scan Behavior
-- Observations: 7
+- Observations: 1006
 - PickedCount: 1
-- PickRate: 14.29%
-- LastSignal: SHORT
-- LastConfidence: 0.64
-- LastScanScore: 0.634027
-- UpdatedAt: 1781059843
+- PickRate: 0.1%
+- LastSignal: LONG
+- LastConfidence: 0.86
+- LastScanScore: 0.854008
+- UpdatedAt: 1781931430

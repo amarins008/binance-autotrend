@@ -450,7 +450,17 @@ def _run_learning_train(payload: dict[str, Any] | None = None) -> dict[str, Any]
     max_symbols = int(payload.get("maxSymbols", 20))
     symbols = symbols[: max(1, max_symbols)]
 
-    promote_hit_rate = float(payload.get("promoteHitRatePct", 55.0))
+    # Adaptive promote threshold: if previous run produced 0 promotions,
+    # lower the bar a bit so the system can actually start applying learning.
+    base_hit_rate = float(payload.get("promoteHitRatePct", 55.0))
+    promote_hit_rate = base_hit_rate
+    try:
+        last = _load_train_report() if callable(_load_train_report) else None
+        if isinstance(last, dict) and int(last.get("promotedCount", 0) or 0) <= 0:
+            promote_hit_rate = max(45.0, base_hit_rate - 8.0)
+    except Exception:
+        pass
+
     results = []
     promoted = []
     for sym in symbols:
@@ -521,9 +531,6 @@ def _merge_rich_bot_status(bot_status: dict[str, Any]) -> dict[str, Any]:
                 "openLivePositions",
                 "log",
                 "lastDecision",
-                "tradingViewWatcher",
-                "lastCodexReport",
-                "externalSignalGuard",
             )
             if key in bot_status
         }
@@ -543,9 +550,6 @@ def _merge_rich_bot_status(bot_status: dict[str, Any]) -> dict[str, Any]:
                     "openLivePositions",
                     "log",
                     "lastDecision",
-                    "tradingViewWatcher",
-                    "lastCodexReport",
-                    "externalSignalGuard",
                 )
                 if key in snap
             }
@@ -858,18 +862,86 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    # Paths that are cmux API — never serve as files.
+    _API_PATHS = frozenset([
+        "/health", "/status", "/status/quick", "/status-lite",
+        "/autotrade/status-lite", "/learning/report", "/learning/train-now",
+        "/bot/precheck-live", "/bot/start", "/bot/stop", "/bot/config",
+        "/service/start", "/service/stop",
+        "/symbol/profile", "/hermes/symbol/profile",
+        "/intel/rank", "/analyze", "/intel/analyze",
+    ])
+
+    # Serve HTML/dashboard assets for any path NOT starting with these API prefixes
+    _SERVE_FILE_PREFIXES = (
+        "/health", "/status", "/autotrade", "/learning",
+        "/bot/", "/service", "/symbol", "/hermes", "/intel",
+        "/analyze", "/api/",
+    )
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/")
+        path = parsed.path.rstrip("/") or "/"
         qs = parse_qs(parsed.query or "")
-        code, response = dispatch_get(path, qs)
-        self._write(code, response)
+
+        # If it's an API path, call dispatch. Otherwise serve a file.
+        if any(path.startswith(p) for p in self._SERVE_FILE_PREFIXES):
+            code, response = dispatch_get(path, qs)
+            self._write(code, response)
+        else:
+            self._serve_file(path)
+
+    def _serve_file(self, path: str) -> None:
+        """Serve a file from the dashboard directory."""
+        if path == "/" or not path:
+            file_path = ROOT / "dashboard" / "index.html"
+        else:
+            # Prevent path traversal
+            safe = path.lstrip("/").replace("..", "")
+            file_path = ROOT / "dashboard" / safe
+
+        if not file_path.is_file():
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+            return
+
+        ext = file_path.suffix.lower()
+        ctype = {
+            ".html": "text/html; charset=utf-8",
+            ".js": "application/javascript",
+            ".css": "text/css",
+            ".json": "application/json",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+        }.get(ext, "application/octet-stream")
+
+        content = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(content)
 
     def do_POST(self) -> None:  # noqa: N802
-        path = self.path.rstrip("/")
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
         payload = self._read_json()
         code, response = dispatch_post(path, payload)
         self._write(code, response)
+
+    def _write_json(self, code: int, response: dict) -> None:
+        body = json.dumps(response, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def run_server() -> None:

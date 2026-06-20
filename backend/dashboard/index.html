@@ -1,3167 +1,6338 @@
-﻿<!doctype html>
+<!doctype html>
+
 <html lang="th">
+
 <head>
+
   <meta charset="UTF-8" />
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+
   <meta http-equiv="Pragma" content="no-cache" />
+
   <meta http-equiv="Expires" content="0" />
+
   <title>Hermes Trading Lab · Virtual Office</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
+
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=VT323&display=swap" rel="stylesheet" />
+
   <style>
+
     :root {
+
       --bg: #070a12;
+
       --surface: rgba(14, 20, 34, 0.88);
+
       --surface-2: rgba(10, 15, 26, 0.95);
+
       --border: rgba(148, 163, 184, 0.14);
+
       --text: #f1f5f9;
+
       --muted: #94a3b8;
+
       --accent: #38bdf8;
+
       --good: #34d399;
+
       --warn: #fbbf24;
+
       --bad: #fb7185;
+
       --radius: 12px;
+
       --gap: 10px;
+
     }
+
     * { box-sizing: border-box; }
+
     body {
+
       margin: 0;
+
       font-family: "DM Sans", system-ui, sans-serif;
+
       font-size: 13px;
+
       color: var(--text);
+
       background: #020617;
+
       min-height: 100vh;
+
       overflow-x: hidden;
+
     }
+
     .vo-app {
+
       display: grid;
+
       grid-template-columns: 184px minmax(0, 1fr);
+
       min-height: 100vh;
+
     }
+
     .vo-sidebar {
+
       position: sticky;
+
       top: 0;
+
       align-self: start;
+
       height: 100vh;
+
       overflow: auto;
+
       border-right: 2px solid #123b63;
+
       background:
+
         linear-gradient(180deg, rgba(56,189,248,.04), transparent 24%),
+
         linear-gradient(180deg, #061428 0%, #020617 100%);
+
       padding: 7px 6px 8px;
+
       box-shadow: inset -2px 0 0 rgba(2,6,23,.8);
+
       font-size: 11px;
+
     }
+
     .vo-brand {
+
       display: flex;
+
       align-items: center;
+
       gap: 6px;
+
       margin-bottom: 7px;
+
       padding: 5px 6px;
+
       border: 1px solid #16466f;
+
       border-radius: 5px;
+
       background: rgba(2,6,23,.72);
+
     }
+
     .vo-robot {
+
       width: 28px;
+
       height: 28px;
+
       flex: 0 0 28px;
+
       display: grid;
+
       place-items: center;
+
       border: 1px solid #22c55e;
+
       border-radius: 3px;
+
       background: linear-gradient(180deg, #14532d, #052e16);
+
       font-size: 15px;
+
       image-rendering: pixelated;
+
     }
+
     .vo-brand strong {
+
       display: block;
+
       font-family: "VT323", monospace;
+
       font-size: 15px;
+
       color: #f8fafc;
+
       letter-spacing: .03em;
+
       line-height: 1;
+
     }
+
     .vo-brand span {
+
       display: block;
+
       margin-top: 1px;
+
       color: #38bdf8;
+
       font-size: 8px;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
     }
+
     .vo-nav {
+
       display: grid;
+
       grid-template-columns: 1fr 1fr;
+
       gap: 3px;
+
       margin-bottom: 7px;
+
     }
+
     .vo-nav button {
+
       width: 100%;
+
       text-align: center;
+
       border: 1px solid transparent;
+
       border-radius: 4px;
+
       background: transparent;
+
       color: #94a3b8;
+
       padding: 5px 4px;
+
       font-size: 10px;
+
       font-weight: 600;
+
       white-space: nowrap;
+
     }
+
     .vo-nav button:hover { border-color: rgba(56,189,248,.22); color: #e2e8f0; }
+
     .vo-nav button.active {
+
       border-color: #0ea5e9;
+
       background: rgba(14,165,233,.14);
+
       color: #bae6fd;
+
     }
+
     .vo-status-panel {
+
       border: 1px solid #22c55e;
+
       border-radius: 5px;
+
       padding: 5px 6px;
+
       margin-bottom: 7px;
+
       background: rgba(6,78,59,.16);
+
     }
+
     .vo-status-panel.standby { border-color: #facc15; background: rgba(69,53,9,.2); }
+
     .vo-status-panel.error { border-color: #fb7185; background: rgba(127,29,29,.2); }
+
     .vo-status-title {
+
       font-family: "VT323", monospace;
+
       font-size: 13px;
+
       color: #86efac;
+
       margin-bottom: 4px;
+
       letter-spacing: .03em;
+
       line-height: 1.1;
+
     }
+
     .vo-status-panel.standby .vo-status-title { color: #fde68a; }
+
     .vo-status-panel.error .vo-status-title { color: #fecdd3; }
+
     .vo-status-grid {
+
       display: grid;
+
       grid-template-columns: 1fr 1fr;
+
       gap: 2px 5px;
+
     }
+
     .vo-status-row {
+
       display: flex;
+
       justify-content: space-between;
+
       gap: 4px;
+
       color: #94a3b8;
+
       font-size: 8px;
+
       padding: 1px 0;
+
       letter-spacing: .04em;
+
       text-transform: uppercase;
+
     }
+
     .vo-status-row b {
+
       color: #e2e8f0;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 9px;
+
       font-weight: 500;
+
     }
+
     .vo-kpi-mini {
+
       display: grid;
+
       grid-template-columns: 1fr 1fr;
+
       gap: 4px;
+
       margin-bottom: 6px;
+
     }
+
     .vo-kpi-mini .metric { padding: 4px 5px; border-radius: 5px; }
+
     .vo-kpi-mini .metric .lbl { font-size: 8px; letter-spacing: .04em; }
+
     .vo-kpi-mini .metric .val { font-size: 11px; margin-top: 1px; }
+
     .vo-kpi-mini .metric .sub { display: none; }
+
     .vo-controls {
+
       display: flex;
+
       flex-direction: column;
+
       gap: 4px;
+
       padding-top: 5px;
+
       border-top: 1px solid rgba(22,70,111,.55);
+
     }
+
     .vo-controls .conn {
+
       width: 100%;
+
       padding: 3px 4px;
+
       gap: 3px;
+
       border-radius: 5px;
+
     }
+
     .vo-controls .conn label { display: none; }
+
     .vo-controls .conn input {
+
       flex: 1;
+
       min-width: 0;
+
       padding: 4px 5px;
+
       font-size: 9px;
+
     }
+
     .vo-controls .conn button { padding: 4px 7px; font-size: 10px; }
+
     .vo-controls .toolbar-mini {
+
       display: grid;
+
       grid-template-columns: repeat(3, 1fr);
+
       gap: 3px;
+
     }
+
     .vo-controls .toolbar-mini button { padding: 4px 2px; font-size: 9px; }
+
     .vo-field-grid {
+
       display: grid;
+
       grid-template-columns: 1fr 1fr;
+
       gap: 3px 4px;
+
     }
+
     .vo-field-grid .field-inline { flex-direction: column; align-items: stretch; gap: 2px; }
+
     .vo-field-grid .field-inline label { font-size: 8px; }
+
     .vo-field-grid input, .vo-field-grid select { padding: 4px 5px; font-size: 10px; width: 100%; }
+
     .vo-meta {
+
       display: flex;
+
       flex-wrap: wrap;
+
       align-items: center;
+
       gap: 4px;
+
       font-size: 8px;
+
       color: var(--muted);
+
       line-height: 1.2;
+
     }
+
     .vo-meta .badge { margin: 0; padding: 1px 5px; font-size: 8px; }
+
     .vo-main {
+
       min-width: 0;
+
       padding: 10px 12px 16px;
+
       background:
+
         radial-gradient(900px 420px at 100% -10%, rgba(56, 189, 248, 0.1), transparent),
+
         radial-gradient(700px 380px at 0% 0%, rgba(52, 211, 153, 0.06), transparent),
+
         #020617;
+
     }
+
     .app { max-width: none; margin: 0; padding: 0; }
 
+
+
     /* Header */
+
     .header {
+
       display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+
       position: sticky; top: 0; z-index: 50;
+
       padding: 10px 0 12px;
+
       margin-bottom: 8px;
+
       background: linear-gradient(180deg, rgba(7,10,18,.97) 70%, transparent);
+
       backdrop-filter: blur(8px);
+
     }
+
     .brand { flex: 1; min-width: 140px; }
+
     .brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+
     .brand p { margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+
     .conn {
+
       display: flex; align-items: center; gap: 6px;
+
       background: var(--surface); border: 1px solid var(--border);
+
       border-radius: var(--radius); padding: 4px 6px 4px 10px;
+
     }
+
     .conn label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
     .conn input { width: min(200px, 42vw); border: none; background: transparent; padding: 6px 4px; font-size: 12px; color: var(--text); }
+
     .conn input:focus { outline: none; }
 
+
+
     /* Metrics strip */
+
     .metrics {
+
       display: grid;
+
       grid-template-columns: repeat(4, 1fr);
+
       gap: var(--gap);
+
       margin-bottom: var(--gap);
+
     }
+
     .metric {
+
       background: var(--surface);
+
       border: 1px solid var(--border);
+
       border-radius: var(--radius);
+
       padding: 8px 11px;
+
       min-width: 0;
+
     }
+
     .metric .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
     .metric .val { font-size: 14px; font-weight: 700; margin-top: 3px; line-height: 1.2; }
+
     .metric .sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
     .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: middle; }
 
+
+
     /* Toolbar */
+
     .toolbar {
+
       display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+
       background: var(--surface);
+
       border: 1px solid var(--border);
+
       border-radius: var(--radius);
+
       padding: 7px 9px;
+
       margin-bottom: var(--gap);
+
     }
+
     .status-banner {
+
       display: none;
+
       margin-bottom: var(--gap);
+
       padding: 8px 10px;
+
       border-radius: var(--radius);
+
       border: 1px solid rgba(251, 191, 36, 0.35);
+
       background: rgba(120, 53, 15, 0.24);
+
       color: #fde68a;
+
       font-size: 11px;
+
       line-height: 1.35;
+
     }
+
     .status-banner.show { display: block; }
+
     .toolbar .group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
     .toolbar .group.settings { flex: 1; min-width: 0; gap: 8px; }
+
     .toolbar .sep { width: 1px; height: 24px; background: var(--border); margin: 0 2px; }
+
     .field-inline { display: flex; align-items: center; gap: 5px; min-width: 0; }
+
     .field-inline label { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
     .field-inline input, .field-inline select { width: 100%; min-width: 0; }
+
     .fld-symbol { flex: 1.2 1 180px; }
+
     .fld-usdt { flex: 0.65 1 96px; }
+
     .fld-mode { flex: 0.6 1 96px; }
+
     .fld-lev { flex: 0.95 1 160px; }
+
     .range-inline { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px; align-items: center; width: 100%; }
+
     .range-inline .sep { width: auto; height: auto; background: none; margin: 0; color: var(--muted); text-align: center; }
 
+
+
     input, select, button {
+
       font: inherit; color: var(--text);
+
       background: var(--surface-2);
+
       border: 1px solid var(--border);
+
       border-radius: 8px;
+
       padding: 7px 9px;
+
       font-size: 12px;
+
     }
+
     input:focus, select:focus { outline: 2px solid rgba(56, 189, 248, 0.25); border-color: rgba(56, 189, 248, 0.4); }
+
     select { cursor: pointer; }
+
     button { cursor: pointer; font-weight: 500; white-space: nowrap; }
+
     button:hover:not(:disabled) { border-color: rgba(148, 163, 184, 0.35); }
+
     button:disabled { opacity: 0.55; cursor: not-allowed; }
+
     button.sm { padding: 6px 10px; font-size: 11px; }
+
     button.busy { position: relative; padding-left: 26px; }
+
     button.busy::before {
+
       content: ""; position: absolute; left: 8px; top: 50%;
+
       width: 10px; height: 10px; margin-top: -5px;
+
       border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+
       border-radius: 50%; animation: spin .7s linear infinite;
+
     }
+
     .btn-primary { background: linear-gradient(135deg, #0369a1, #0ea5e9); border-color: #38bdf8; }
+
     .btn-good { background: linear-gradient(135deg, #065f46, #0d9488); border-color: var(--good); }
+
     .btn-warn { background: linear-gradient(135deg, #92400e, #d97706); border-color: var(--warn); }
+
     .btn-danger { background: linear-gradient(135deg, #9f1239, #e11d48); border-color: var(--bad); }
+
     .btn-ghost { background: transparent; }
 
+
+
     .badge {
+
       font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 999px;
+
       background: rgba(56, 189, 248, 0.12); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.25);
+
     }
+
+
 
     /* Tabs */
+
     .tabs {
+
       display: flex;
+
       justify-content: flex-end;
+
       gap: 4px;
+
       margin: -2px 0 var(--gap);
+
     }
+
     .tab {
+
       padding: 5px 10px; border-radius: 999px; border: 1px solid rgba(148,163,184,.12);
+
       background: rgba(15,23,42,.38); color: var(--muted); font-size: 10.5px; font-weight: 700;
+
       letter-spacing: .04em; text-transform: uppercase;
+
     }
+
     .tab.active { background: rgba(56,189,248,.13); border-color: rgba(56,189,248,.32); color: #bae6fd; }
+
     .panel-view { display: none; }
+
     .panel-view.active { display: block; }
 
+
+
     /* Grid panels */
+
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
+
     .grid-2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--gap); }
+
     .card {
+
       background: var(--surface);
+
       border: 1px solid var(--border);
+
       border-radius: var(--radius);
+
       padding: 9px 10px;
+
       min-width: 0;
+
     }
+
     .trading-office-card {
+
       position: relative;
+
       padding: 12px;
+
       border-color: rgba(56,189,248,.2);
+
       background:
+
         radial-gradient(420px 180px at 5% 0%, rgba(56,189,248,.13), transparent),
+
         radial-gradient(320px 180px at 95% 0%, rgba(52,211,153,.1), transparent),
+
         rgba(14,20,34,.9);
+
       box-shadow: 0 18px 60px rgba(0,0,0,.18);
+
     }
+
     .card-h {
+
       display: flex; align-items: center; justify-content: space-between;
+
       margin-bottom: 8px; gap: 8px;
+
     }
+
     .card-h h2 {
+
       margin: 0; font-size: 11px; font-weight: 600;
+
       color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+
     }
+
+
 
     .log {
+
       height: 168px; overflow: auto;
+
       background: var(--surface-2);
+
       border: 1px solid var(--border);
+
       border-radius: 8px;
+
       padding: 7px;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 10.5px;
+
       line-height: 1.4;
+
     }
+
     .log.tall { height: 220px; }
+
     .log-line { padding: 2px 0; border-bottom: 1px solid rgba(148,163,184,.06); }
+
     .log-line:last-child { border-bottom: none; }
 
+
+
     .pipeline-row {
+
       display: flex; flex-wrap: wrap; gap: 5px;
+
     }
+
     .office-pipeline {
+
       margin-top: 10px;
+
       padding: 8px 10px;
+
       border: 1px solid rgba(148,163,184,.12);
+
       border-radius: 12px;
+
       background: rgba(2,6,23,.32);
+
     }
+
     .office-pipeline-head {
+
       display: flex;
+
       align-items: center;
+
       justify-content: space-between;
+
       gap: 8px;
+
       margin-bottom: 7px;
+
       color: var(--muted);
+
       font-size: 10px;
+
       font-weight: 900;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
     }
+
     .tv-mcp-panel {
+
       margin-top: 8px;
+
       padding: 7px 8px;
+
       border: 1px solid rgba(148,163,184,.12);
+
       border-radius: 8px;
+
       background: rgba(2,6,23,.34);
+
     }
+
     .tv-mcp-head {
+
       display: flex;
+
       align-items: center;
+
       justify-content: space-between;
+
       gap: 8px;
+
       margin-bottom: 6px;
+
       color: var(--muted);
+
       font-size: 10px;
+
       font-weight: 900;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
     }
+
     .tv-mcp-body {
+
       display: grid;
+
       grid-template-columns: 1fr 1fr;
+
       gap: 5px 10px;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 10px;
+
       line-height: 1.35;
+
     }
+
     .tv-mcp-line {
+
       min-width: 0;
+
       color: var(--muted);
+
       overflow: hidden;
+
       text-overflow: ellipsis;
+
       white-space: nowrap;
+
     }
+
     .tv-mcp-line.full { grid-column: 1 / -1; }
+
     .tv-mcp-line b { color: var(--text); font-weight: 600; }
+
     .tv-mcp-badge {
+
       display: inline-flex;
+
       align-items: center;
+
       min-height: 20px;
+
       padding: 2px 7px;
+
       border-radius: 999px;
+
       border: 1px solid var(--border);
+
       background: var(--surface-2);
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 10px;
+
       font-weight: 800;
+
     }
+
     .tv-mcp-badge.ok { color: var(--good); border-color: rgba(52,211,153,.38); background: rgba(6,78,59,.26); }
+
     .tv-mcp-badge.warn { color: var(--warn); border-color: rgba(251,191,36,.36); background: rgba(69,53,9,.28); }
+
     .tv-mcp-badge.fail { color: var(--bad); border-color: rgba(251,113,133,.4); background: rgba(127,29,29,.28); }
+
     .tv-mcp-badge.off { color: var(--muted); }
+
     .kanban-row {
+
       display: grid;
+
       grid-template-columns: repeat(4, 1fr);
+
       gap: 7px;
+
     }
+
     .kanban-col {
+
       min-height: 88px;
+
       background: var(--surface-2);
+
       border: 1px solid var(--border);
+
       border-radius: 8px;
+
       padding: 7px;
+
     }
+
     .kanban-col h3 {
+
       margin: 0 0 6px;
+
       font-size: 9px;
+
       color: var(--muted);
+
       text-transform: uppercase;
+
       letter-spacing: .06em;
+
     }
+
     .agent-card {
+
       border: 1px solid rgba(148,163,184,.12);
+
       border-radius: 7px;
+
       padding: 5px 6px;
+
       margin-bottom: 5px;
+
       background: rgba(15,23,42,.58);
+
       font-size: 10px;
+
       line-height: 1.25;
+
     }
+
     .agent-card:last-child { margin-bottom: 0; }
+
     .agent-card b { display: block; font-size: 10.5px; color: var(--text); }
+
     .agent-card span { display: block; color: var(--muted); margin-top: 2px; }
+
     .trading-office {
+
       position: relative;
+
       display: grid;
+
       grid-template-columns: repeat(7, minmax(86px, 1fr));
+
       gap: 8px;
+
       min-height: 202px;
+
       padding: 36px 12px 12px;
+
       border: 1px solid rgba(56,189,248,.14);
+
       border-radius: 14px;
+
       background:
+
         radial-gradient(220px 110px at 15% 0%, rgba(56,189,248,.12), transparent),
+
         radial-gradient(180px 100px at 90% 15%, rgba(52,211,153,.1), transparent),
+
         linear-gradient(180deg, rgba(15,23,42,.76), rgba(2,6,23,.58));
+
       overflow: hidden;
+
     }
+
     .trading-office::before {
+
       content: "Hermes Trading Office";
+
       position: absolute;
+
       left: 14px; top: 10px;
+
       font-size: 10px;
+
       font-weight: 800;
+
       color: rgba(186,230,253,.85);
+
       letter-spacing: .08em;
+
       text-transform: uppercase;
+
     }
+
     .trading-scan-ticker {
+
       grid-column: 1 / -1;
+
       position: relative;
+
       height: 28px;
+
       margin-bottom: 2px;
+
       overflow: hidden;
+
       border: 1px solid rgba(52,211,153,.18);
+
       border-radius: 999px;
+
       background: rgba(2,6,23,.58);
+
       box-shadow: inset 0 0 18px rgba(52,211,153,.06);
+
     }
+
     .trading-scan-track {
+
       position: absolute;
+
       left: 0;
+
       top: 6px;
+
       display: inline-flex;
+
       width: max-content;
+
       white-space: nowrap;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 10px;
+
       color: #a7f3d0;
+
       text-shadow: 0 0 14px rgba(52,211,153,.24);
+
       animation: scanTicker var(--ticker-duration, 56s) linear infinite;
+
     }
+
     .scan-tick-loop {
+
       display: inline-flex;
+
       min-width: max-content;
+
     }
+
     .trading-agents { display: contents; }
+
     .scan-tick-item { margin-right: 18px; color: #cbd5e1; }
+
     .scan-tick-side {
+
       display: inline-block;
+
       margin: 0 4px;
+
       padding: 1px 6px;
+
       border-radius: 999px;
+
       border: 1px solid currentColor;
+
       font-size: 9px;
+
       font-weight: 900;
+
       letter-spacing: .04em;
+
     }
+
     .scan-tick-side.long { color: #4ade80; background: rgba(34,197,94,.14); }
+
     .scan-tick-side.short { color: #fda4af; background: rgba(244,63,94,.14); }
+
     .scan-tick-side.wait { color: #fbbf24; background: rgba(251,191,36,.12); }
+
     .trading-agent {
+
       position: relative;
+
       display: grid;
+
       align-content: end;
+
       min-width: 0;
+
       min-height: 158px;
+
       padding: 34px 7px 8px;
+
       border: 1px solid rgba(148,163,184,.14);
+
       border-radius: 12px;
+
       background: rgba(15,23,42,.64);
+
       box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+
       overflow: hidden;
+
     }
+
     .trading-agent.active {
+
       border-color: rgba(56,189,248,.48);
+
       box-shadow: 0 0 24px rgba(56,189,248,.16), inset 0 1px 0 rgba(255,255,255,.05);
+
     }
+
     .trading-agent.idle {
+
       border-color: rgba(250,204,21,.42);
+
       background: rgba(24,20,8,.56);
+
     }
+
     .trading-agent.done { border-color: rgba(134,239,172,.42); background: rgba(12,30,22,.5); }
+
     .trading-agent.todo { border-color: rgba(148,163,184,.18); background: rgba(15,23,42,.52); }
+
     .trading-agent.blocked { border-color: rgba(251,113,133,.5); }
+
     .trading-avatar {
+
       position: relative;
+
       width: 52px;
+
       height: 62px;
+
       margin: 0 auto 6px;
+
       animation: chibiIdle 3s ease-in-out infinite;
+
       animation-delay: var(--agent-delay, 0s);
+
     }
+
     .trading-agent.active .trading-avatar { animation: chibiWork 1s ease-in-out infinite; }
+
     .trading-agent.done .trading-avatar { animation: chibiHappy 2.6s ease-in-out infinite; }
+
     .trading-agent.blocked .trading-avatar { animation: chibiPanic .85s ease-in-out infinite; }
+
     .trading-head {
+
       position: absolute;
+
       top: 4px;
+
       left: 50%;
+
       transform: translateX(-50%);
+
       width: 40px;
+
       height: 38px;
+
       border-radius: 48% 48% 44% 44%;
+
       background: var(--skin-tone, #f7c59f);
+
       border: 2px solid #1e293b;
+
       box-shadow: inset 0 -4px 0 rgba(0,0,0,.06);
+
       z-index: 2;
+
     }
+
     .trading-head::before,
+
     .trading-head::after { content: none; }
+
     .trading-hair {
+
       position: absolute;
+
       top: 0;
+
       left: 50%;
+
       transform: translateX(-50%);
+
       width: 44px;
+
       height: 18px;
+
       border-radius: 50% 50% 35% 35%;
+
       background: var(--agent-hair, #334155);
+
       border: 2px solid rgba(2,6,23,.55);
+
       box-shadow: inset 0 -3px 0 rgba(255,255,255,.08);
+
       z-index: 5;
+
     }
+
     .trading-eye {
+
       position: absolute;
+
       top: 16px;
+
       width: 10px;
+
       height: 12px;
+
       border-radius: 45%;
+
       background: #fff;
+
       border: 2px solid #1e293b;
+
       z-index: 4;
+
       overflow: hidden;
+
     }
+
     .trading-eye::before {
+
       content: "";
+
       position: absolute;
+
       top: 1px;
+
       right: 1px;
+
       width: 3px;
+
       height: 3px;
+
       border-radius: 50%;
+
       background: #fff;
+
       z-index: 2;
+
     }
+
     .trading-eye::after {
+
       content: "";
+
       position: absolute;
+
       bottom: 1px;
+
       left: 50%;
+
       transform: translateX(-45%);
+
       width: 6px;
+
       height: 7px;
+
       border-radius: 50%;
+
       background: #1e293b;
+
     }
+
     .trading-eye.left { left: 9px; }
+
     .trading-eye.right { right: 9px; }
+
     .trading-blush {
+
       position: absolute;
+
       top: 27px;
+
       width: 8px;
+
       height: 5px;
+
       border-radius: 50%;
+
       background: rgba(251, 113, 133, .42);
+
       z-index: 3;
+
     }
+
     .trading-blush.left { left: 4px; }
+
     .trading-blush.right { right: 4px; }
+
     .trading-mouth {
+
       position: absolute;
+
       top: 30px;
+
       left: 50%;
+
       transform: translateX(-50%);
+
       width: 7px;
+
       height: 4px;
+
       border-bottom: 2px solid #e11d48;
+
       border-radius: 0 0 50% 50%;
+
       z-index: 4;
+
     }
+
     .trading-agent.active .trading-mouth {
+
       width: 5px;
+
       height: 5px;
+
       border: 0;
+
       border-radius: 50%;
+
       background: #be123c;
+
     }
+
     .trading-agent.done .trading-mouth {
+
       width: 10px;
+
       height: 5px;
+
       border-bottom-width: 2px;
+
       border-radius: 0 0 60% 60%;
+
     }
+
     .trading-agent.blocked .trading-mouth {
+
       width: 8px;
+
       height: 2px;
+
       border: 0;
+
       border-top: 2px solid #be123c;
+
       border-radius: 0;
+
       top: 31px;
+
     }
+
     .trading-body {
+
       position: absolute;
+
       left: 50%;
+
       transform: translateX(-50%);
+
       bottom: 0;
+
       width: 26px;
+
       height: 14px;
+
       border-radius: 10px 10px 4px 4px;
+
       background: linear-gradient(180deg, var(--agent-color, #38bdf8), color-mix(in srgb, var(--agent-color, #38bdf8) 55%, #0f172a));
+
       border: 2px solid rgba(2,6,23,.65);
+
       z-index: 1;
+
     }
+
     .trading-leg {
+
       position: absolute;
+
       bottom: -2px;
+
       width: 8px;
+
       height: 5px;
+
       border-radius: 2px;
+
       background: #334155;
+
       border: 1px solid #1e293b;
+
       z-index: 0;
+
     }
+
     .trading-leg.left { left: 14px; }
+
     .trading-leg.right { right: 14px; }
+
     .trading-tool {
+
       position: absolute;
+
       right: -4px;
+
       top: 8px;
+
       width: 18px;
+
       height: 18px;
+
       display: grid;
+
       place-items: center;
+
       border-radius: 50%;
+
       background: rgba(2,6,23,.88);
+
       border: 2px solid rgba(255,255,255,.15);
+
       font-size: 10px;
+
       z-index: 6;
+
       box-shadow: 2px 2px 0 rgba(0,0,0,.35);
+
     }
+
     .trading-agent.active .trading-tool { animation: toolPulse .75s ease-in-out infinite; }
+
     .trading-state {
+
       position: absolute;
+
       top: 11px; right: 10px;
+
       width: 9px; height: 9px;
+
       border-radius: 50%;
+
       background: var(--muted);
+
       box-shadow: 0 0 0 4px rgba(148,163,184,.1);
+
     }
+
     .trading-agent.active .trading-state { background: #38bdf8; box-shadow: 0 0 0 4px rgba(56,189,248,.16); }
+
     .trading-agent.idle .trading-state { background: #facc15; box-shadow: 0 0 0 4px rgba(250,204,21,.14); }
+
     .trading-agent.done .trading-state { background: #86efac; box-shadow: 0 0 0 4px rgba(134,239,172,.14); }
+
     .trading-agent.todo .trading-state { background: #94a3b8; box-shadow: 0 0 0 4px rgba(148,163,184,.1); }
+
     .trading-agent.blocked .trading-state { background: var(--bad); box-shadow: 0 0 0 4px rgba(251,113,133,.14); }
+
     .trading-status-badge {
+
       position: absolute;
+
       top: 8px;
+
       left: 8px;
+
       display: inline-flex;
+
       align-items: center;
+
       justify-content: center;
+
       min-width: 44px;
+
       height: 18px;
+
       padding: 0 6px;
+
       border-radius: 999px;
+
       border: 1px solid rgba(148,163,184,.18);
+
       background: rgba(15,23,42,.88);
+
       color: #cbd5e1;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 8px;
+
       font-weight: 900;
+
       letter-spacing: .06em;
+
     }
+
     .trading-agent.active .trading-status-badge { color: #bae6fd; border-color: rgba(56,189,248,.38); background: rgba(8,47,73,.82); }
+
     .trading-agent.idle .trading-status-badge { color: #fde68a; border-color: rgba(250,204,21,.42); background: rgba(69,53,9,.74); }
+
     .trading-agent.done .trading-status-badge { color: #bbf7d0; border-color: rgba(134,239,172,.36); background: rgba(20,83,45,.64); }
+
     .trading-agent.todo .trading-status-badge { color: #cbd5e1; border-color: rgba(148,163,184,.22); background: rgba(51,65,85,.62); }
+
     .trading-agent.blocked .trading-status-badge { color: #fecdd3; border-color: rgba(251,113,133,.44); background: rgba(127,29,29,.68); }
+
     .trading-name {
+
       font-size: 10px;
+
       font-weight: 800;
+
       text-align: center;
+
       white-space: nowrap;
+
       overflow: hidden;
+
       text-overflow: ellipsis;
+
     }
+
     .trading-runs {
+
       display: inline-flex;
+
       align-items: center;
+
       justify-content: center;
+
       min-width: 20px;
+
       margin-left: 4px;
+
       padding: 1px 5px;
+
       border: 1px solid rgba(52,211,153,.28);
+
       border-radius: 999px;
+
       background: rgba(52,211,153,.12);
+
       color: #bbf7d0;
+
       font-size: 8px;
+
       font-weight: 900;
+
       vertical-align: 1px;
+
     }
+
     .trading-action {
+
       margin-top: 4px;
+
       min-height: 34px;
+
       padding: 6px 6px 5px;
+
       border: 1px solid rgba(148,163,184,.1);
+
       border-radius: 8px;
+
       background: rgba(2,6,23,.34);
+
       font-size: 9px;
+
       line-height: 1.25;
+
       color: var(--muted);
+
       text-align: center;
+
     }
+
     .trading-action b {
+
       display: block;
+
       margin-bottom: 2px;
+
       color: rgba(226,232,240,.86);
+
       font-size: 8px;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
     }
+
     .trading-agent.active .trading-action { color: #bae6fd; border-color: rgba(56,189,248,.2); }
+
     .trading-agent.idle .trading-action { color: #fde68a; border-color: rgba(250,204,21,.18); }
+
     .trading-agent.done .trading-action { color: #bbf7d0; border-color: rgba(134,239,172,.18); }
+
     .trading-agent.blocked .trading-action { color: #fecdd3; border-color: rgba(251,113,133,.22); }
+
     .trading-office-positions {
+
       margin-top: 10px;
+
       border: 1px solid rgba(148,163,184,.14);
+
       border-radius: 12px;
+
       background: rgba(2,6,23,.36);
+
       overflow: hidden;
+
     }
+
     .trading-office-positions .sub-h {
+
       display: flex;
+
       align-items: center;
+
       justify-content: space-between;
+
       padding: 8px 10px;
+
       border-bottom: 1px solid rgba(148,163,184,.1);
+
       color: rgba(226,232,240,.86);
+
       font-size: 10px;
+
       font-weight: 800;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
     }
+
     .trading-office-positions .sub-h span {
+
       color: var(--muted);
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 9px;
+
       font-weight: 600;
+
       text-transform: none;
+
       letter-spacing: 0;
+
     }
+
     .trading-office-positions .log {
+
       height: 96px;
+
       border: 0;
+
       border-radius: 0;
+
       background: transparent;
+
     }
+
     .supervisor-review {
+
       margin-top: 10px;
+
       padding: 10px;
+
       border: 1px solid rgba(56,189,248,.16);
+
       border-radius: 12px;
+
       background: radial-gradient(240px 120px at 0% 0%, rgba(56,189,248,.12), transparent), rgba(2,6,23,.38);
+
     }
+
     .supervisor-head {
+
       display: flex;
+
       align-items: center;
+
       justify-content: space-between;
+
       gap: 8px;
+
       margin-bottom: 8px;
+
       font-size: 10px;
+
       font-weight: 900;
+
       letter-spacing: .06em;
+
       text-transform: uppercase;
+
       color: rgba(226,232,240,.9);
+
     }
+
     .supervisor-severity {
+
       padding: 2px 7px;
+
       border-radius: 999px;
+
       border: 1px solid rgba(52,211,153,.3);
+
       color: #bbf7d0;
+
       background: rgba(52,211,153,.12);
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 9px;
+
     }
+
     .supervisor-severity.low { border-color: rgba(251,191,36,.35); color: #fde68a; background: rgba(251,191,36,.12); }
+
     .supervisor-severity.medium { border-color: rgba(251,146,60,.42); color: #fed7aa; background: rgba(251,146,60,.13); }
+
     .supervisor-severity.high { border-color: rgba(251,113,133,.5); color: #fecdd3; background: rgba(251,113,133,.14); }
+
     .supervisor-summary { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+
     .supervisor-item {
+
       display: grid;
+
       grid-template-columns: 78px 1fr;
+
       gap: 7px;
+
       padding: 6px 0;
+
       border-top: 1px solid rgba(148,163,184,.08);
+
       font-size: 10px;
+
     }
+
     .supervisor-agent { color: #bae6fd; font-family: "JetBrains Mono", monospace; }
+
     .supervisor-title { color: rgba(226,232,240,.92); font-weight: 800; }
+
     .supervisor-detail { color: var(--muted); margin-top: 2px; }
-    .supervisor-codex {
+
+    .supervisor-cmux {
+
       margin-top: 7px;
+
       padding-top: 7px;
+
       border-top: 1px dashed rgba(56,189,248,.2);
+
       color: #93c5fd;
+
       font-size: 10px;
+
     }
+
     .supervisor-copy {
+
       margin-top: 7px;
+
       width: 100%;
+
       border: 1px solid rgba(56,189,248,.32);
+
       border-radius: 9px;
+
       background: rgba(56,189,248,.12);
+
       color: #bfdbfe;
+
       font-size: 10px;
+
       font-weight: 900;
+
       letter-spacing: .04em;
+
       text-transform: uppercase;
+
       padding: 7px 9px;
+
       cursor: pointer;
+
     }
+
     .supervisor-copy:hover { border-color: rgba(56,189,248,.55); background: rgba(56,189,248,.18); }
+
     @keyframes chibiIdle {
+
       0%, 100% { transform: translateY(0) rotate(0deg); }
+
       50% { transform: translateY(-3px) rotate(-1deg); }
+
     }
+
     @keyframes chibiWork {
+
       0%, 100% { transform: translateY(0) scale(1); }
+
       35% { transform: translateY(-5px) scale(1.04); }
+
       70% { transform: translateY(-2px) scale(1.02); }
+
     }
+
     @keyframes chibiHappy {
+
       0%, 100% { transform: translateY(0) rotate(0deg); }
+
       25% { transform: translateY(-2px) rotate(2deg); }
+
       75% { transform: translateY(-2px) rotate(-2deg); }
+
     }
+
     @keyframes chibiPanic {
+
       0%, 100% { transform: translateX(0); }
+
       25% { transform: translateX(-3px) rotate(-4deg); }
+
       75% { transform: translateX(3px) rotate(4deg); }
+
     }
+
     @keyframes eyeSparkle {
+
       0%, 100% { transform: scaleY(1); }
+
       50% { transform: scaleY(.7); }
+
     }
+
     @keyframes agentIdle {
+
       0%, 100% { transform: translateY(0); }
+
       50% { transform: translateY(-3px); }
+
     }
+
     @keyframes agentWorking {
+
       0%, 100% { transform: translateY(0) rotate(0deg); }
+
       25% { transform: translateY(-4px) rotate(-2deg); }
+
       75% { transform: translateY(-2px) rotate(2deg); }
+
     }
+
     @keyframes agentTyping {
+
       0%, 100% { transform: translateY(0); }
+
       20% { transform: translateY(-2px); }
+
       40% { transform: translateY(-5px); }
+
       60% { transform: translateY(-3px); }
+
       80% { transform: translateY(-6px); }
+
     }
+
     @keyframes agentDone {
+
       0%, 100% { transform: translateY(0) scale(1); }
+
       50% { transform: translateY(-1px) scale(1.02); }
+
     }
+
     @keyframes agentAlert {
+
       0%, 100% { transform: translateX(0); }
+
       20% { transform: translateX(-3px) rotate(-2deg); }
+
       40% { transform: translateX(3px) rotate(2deg); }
+
       60% { transform: translateX(-2px); }
+
       80% { transform: translateX(2px); }
+
     }
+
     @keyframes toolPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.22); } }
+
     @keyframes screenGlow {
+
       0% { background-position: 0% 50%; opacity: .85; }
+
       50% { opacity: 1; }
+
       100% { background-position: 200% 50%; opacity: .85; }
+
     }
+
     @keyframes screenBlink { 0%, 49%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
     @keyframes chairBob {
+
       0%, 100% { transform: translateY(0); }
+
       50% { transform: translateY(1px); }
+
     }
+
     @keyframes scanTicker { to { transform: translateX(-50%); } }
+
     .trading-office {
+
       grid-template-columns: 1fr;
+
       gap: 10px;
+
       min-height: 620px;
+
       padding: 12px;
+
       border-radius: 8px;
+
       border: 2px solid #123b63;
+
       background:
+
         linear-gradient(rgba(34,197,94,.04) 1px, transparent 1px),
+
         linear-gradient(90deg, rgba(56,189,248,.035) 1px, transparent 1px),
+
         linear-gradient(180deg, #061428 0%, #06111f 58%, #020617 100%);
+
       background-size: 18px 18px, 18px 18px, auto;
+
       box-shadow: inset 0 0 0 3px rgba(2,6,23,.8), 0 0 0 1px rgba(56,189,248,.24), 0 20px 50px rgba(0,0,0,.32);
+
       image-rendering: pixelated;
+
     }
+
     .trading-office::before { content: none; }
+
     .office-topbar {
+
       grid-column: 1 / -1;
+
       display: grid;
+
       grid-template-columns: minmax(220px, 1fr) minmax(120px, auto) minmax(220px, auto);
+
       gap: 8px;
+
     }
+
     .office-brand,
+
     .office-status,
+
     .office-daily-kpis {
+
       min-height: 48px;
+
       border: 2px solid #16466f;
+
       border-radius: 6px;
+
       background: linear-gradient(180deg, rgba(15,23,42,.96), rgba(2,6,23,.92));
+
       box-shadow: inset 0 0 0 2px rgba(2,6,23,.72);
+
       padding: 8px 10px;
+
     }
+
     .office-daily-kpis {
+
       display: grid;
+
       grid-template-columns: repeat(2, minmax(92px, 1fr));
+
       gap: 6px;
+
       min-width: 220px;
+
     }
+
     .office-daily-kpi {
+
       min-width: 0;
+
       padding: 2px 6px;
+
       border-radius: 5px;
+
       background: rgba(2,6,23,.58);
+
       border: 1px solid rgba(56,189,248,.22);
+
     }
+
     .office-daily-kpi b {
+
       display: block;
+
       color: #f8fafc;
+
       font-size: 13px;
+
       line-height: 1.15;
+
       white-space: nowrap;
+
     }
+
     .office-daily-kpi span {
+
       display: block;
+
       margin-top: 3px;
+
       color: #38bdf8;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 9px;
+
       text-transform: uppercase;
+
       white-space: nowrap;
+
     }
+
     .office-daily-kpi.good b { color: var(--good); }
+
     .office-daily-kpi.bad b { color: var(--bad); }
+
     .office-brand b {
+
       display: block;
+
       color: #f8fafc;
+
       font-family: "VT323", monospace;
+
       font-size: 22px;
+
       letter-spacing: .03em;
+
       text-shadow: 0 2px 0 #020617;
+
       line-height: 1.05;
+
     }
+
     .office-brand span,
+
     .office-status span {
+
       display: block;
+
       color: #38bdf8;
+
       font-family: "JetBrains Mono", monospace;
+
       font-size: 10px;
+
       margin-top: 3px;
+
     }
+
     .office-status b { color: #86efac; font-size: 12px; }
+
     .office-status .dot {
+
       display: inline-block;
+
       width: 10px;
+
       height: 10px;
+
       border-radius: 2px;
+
       margin-right: 7px;
+
       background: #22c55e;
+
       box-shadow: 0 0 12px rgba(34,197,94,.75);
+
     }
+
     .office-main {
+
       display: grid;
+
       grid-template-columns: repeat(2, minmax(0, 1fr));
+
       gap: 10px;
+
       min-width: 0;
+
     }
+
     .office-room {
+
       position: relative;
+
       min-height: 248px;
+
       padding: 40px 12px 12px;
+
       border: 3px solid var(--room-color, #38bdf8);
+
       border-radius: 7px;
+
       background:
+
         linear-gradient(90deg, color-mix(in srgb, var(--room-color, #38bdf8) 8%, transparent) 1px, transparent 1px),
+
         linear-gradient(color-mix(in srgb, var(--room-color, #38bdf8) 8%, transparent) 1px, transparent 1px),
+
         linear-gradient(180deg, color-mix(in srgb, var(--room-color, #38bdf8) 12%, #1e293b), rgba(15,23,42,.95));
+
       background-size: 16px 16px, 16px 16px, auto;
+
       box-shadow: inset 0 0 0 3px rgba(2,6,23,.65), 0 8px 0 rgba(0,0,0,.28), 0 0 28px var(--room-glow, transparent);
+
       overflow: hidden;
+
     }
+
     .room-market { --room-glow: rgba(37,99,235,.18); }
+
     .room-control { --room-glow: rgba(244,63,94,.18); }
+
     .room-risk { --room-glow: rgba(34,197,94,.18); }
+
     .room-strategy { --room-glow: rgba(124,58,237,.2); }
+
     .room-ops { --room-glow: rgba(245,158,11,.2); }
+
     .office-room::before {
+
       content: "";
+
       position: absolute;
+
       inset: 0;
+
       pointer-events: none;
+
       background:
+
         linear-gradient(180deg, rgba(255,255,255,.06), transparent 18%),
+
         radial-gradient(160px 60px at 80% 16%, color-mix(in srgb, var(--room-color, #38bdf8) 22%, transparent), transparent);
+
     }
+
     .room-title {
+
       position: absolute;
+
       top: 8px;
+
       left: 10px;
+
       min-width: 154px;
+
       height: 26px;
+
       display: inline-flex;
+
       align-items: center;
+
       padding: 0 12px;
+
       border: 2px solid #07111f;
+
       border-radius: 4px;
+
       color: #f8fafc;
+
       background: var(--room-color, #0ea5e9);
+
       box-shadow: 3px 3px 0 rgba(2,6,23,.8);
+
       font-family: "VT323", monospace;
+
       font-size: 17px;
+
       font-weight: 400;
+
       letter-spacing: .09em;
+
       text-transform: uppercase;
+
       text-shadow: 0 2px 0 rgba(0,0,0,.35);
+
       z-index: 2;
+
     }
+
     .room-agents {
+
       position: relative;
+
       z-index: 1;
+
       display: grid;
+
       grid-template-columns: repeat(3, minmax(86px, 1fr));
+
       gap: 10px;
+
     }
+
     .office-room .trading-agent {
+
       min-height: 166px;
+
       padding: 30px 7px 7px;
+
       border-radius: 8px;
+
       border: 2px solid rgba(7,17,31,.9);
+
       background:
+
         radial-gradient(42px 30px at 50% 44px, color-mix(in srgb, var(--agent-color, #38bdf8) 28%, transparent), transparent 72%),
+
         linear-gradient(180deg, rgba(120,80,36,.9) 0 54px, rgba(71,45,23,.92) 55px 61px, rgba(15,23,42,.9) 62px 100%);
+
       box-shadow: inset 0 0 0 2px rgba(255,255,255,.04), 3px 3px 0 rgba(0,0,0,.35);
+
       animation: chairBob 3.6s ease-in-out infinite;
+
       animation-delay: var(--agent-delay, 0s);
+
     }
+
     .office-room .trading-agent.active { animation: none; box-shadow: inset 0 0 0 2px rgba(255,255,255,.06), 3px 3px 0 rgba(0,0,0,.35), 0 0 18px color-mix(in srgb, var(--agent-color, #38bdf8) 40%, transparent); }
+
     .office-room .trading-desk {
+
       position: absolute;
+
       left: 50%;
+
       bottom: 58px;
+
       transform: translateX(-50%);
+
       width: 46px;
+
       z-index: 0;
+
     }
+
     .office-room .trading-monitor {
+
       width: 42px;
+
       height: 23px;
+
       margin: 0 auto;
+
       border: 2px solid #1e293b;
+
       border-radius: 2px;
+
       background: #0f172a;
+
       box-shadow: 0 2px 0 #020617;
+
     }
+
     .office-room .trading-screen {
+
       width: 28px;
+
       height: 12px;
+
       margin: 3px auto 0;
+
       border-radius: 1px;
+
       background: #1e3a5f;
+
       box-shadow: inset 0 0 6px rgba(56,189,248,.08);
+
     }
+
     .office-room .trading-agent.active .trading-screen {
+
       background: linear-gradient(90deg, #0369a1, #22d3ee, #0ea5e9, #22d3ee);
+
       background-size: 220% 100%;
+
       animation: screenGlow 1.4s linear infinite;
+
     }
+
     .office-room .trading-agent.done .trading-screen {
+
       background: #14532d;
+
       animation: screenBlink 2.4s ease-in-out infinite;
+
     }
+
     .office-room .trading-agent.blocked .trading-screen {
+
       background: #7f1d1d;
+
       animation: screenBlink .8s ease-in-out infinite;
+
     }
+
     .office-room .trading-chair {
+
       width: 34px;
+
       height: 8px;
+
       margin: 2px auto 0;
+
       border: 2px solid #334155;
+
       border-radius: 2px;
+
       background: #475569;
+
     }
+
     .office-room .trading-avatar {
+
       position: relative;
+
       z-index: 2;
+
       width: 72px;
+
       height: 74px;
+
       margin: 0 auto 2px;
+
     }
+
     .office-room .trading-head {
+
       top: 0;
+
       width: 58px;
+
       height: 54px;
+
       border-radius: 48% 48% 44% 44%;
+
       border-width: 3px;
+
       box-shadow: inset 0 -6px 0 rgba(0,0,0,.06), 0 4px 0 rgba(2,6,23,.25);
+
     }
+
     .office-room .trading-hair {
+
       top: -4px;
+
       width: 64px;
+
       height: 27px;
+
       border-width: 3px;
+
       border-radius: 52% 52% 32% 32%;
+
     }
+
     .office-room .trading-eye {
+
       top: 21px;
+
       width: 14px;
+
       height: 16px;
+
       border-width: 2px;
+
     }
+
     .office-room .trading-eye.left { left: 12px; }
+
     .office-room .trading-eye.right { right: 12px; }
+
     .office-room .trading-eye::before { width: 4px; height: 4px; }
+
     .office-room .trading-eye::after { width: 8px; height: 10px; }
+
     .office-room .trading-blush { top: 36px; width: 10px; height: 6px; }
+
     .office-room .trading-blush.left { left: 7px; }
+
     .office-room .trading-blush.right { right: 7px; }
+
     .office-room .trading-mouth { top: 41px; width: 10px; height: 5px; }
+
     .office-room .trading-body {
+
       bottom: 4px;
+
       width: 34px;
+
       height: 18px;
+
       border-radius: 12px 12px 5px 5px;
+
       border-width: 2px;
+
     }
+
     .office-room .trading-leg { bottom: 0; width: 9px; height: 5px; }
+
     .office-room .trading-leg.left { left: 21px; }
+
     .office-room .trading-leg.right { right: 21px; }
+
     .office-room .trading-agent.active .trading-eye { animation: eyeSparkle .55s ease-in-out infinite; }
+
     .office-room .trading-arm {
+
       position: absolute;
+
       bottom: 18px;
+
       width: 10px;
+
       height: 5px;
+
       border-radius: 999px;
+
       background: var(--skin-tone, #f7c59f);
+
       border: 1px solid rgba(2,6,23,.55);
+
       z-index: 3;
+
     }
+
     .office-room .trading-arm.left { left: 11px; transform: rotate(24deg); }
+
     .office-room .trading-arm.right { right: 11px; transform: rotate(-24deg); }
+
     .office-room .trading-agent.active .trading-arm.left { animation: armTypeL .45s steps(2) infinite; }
+
     .office-room .trading-agent.active .trading-arm.right { animation: armTypeR .45s steps(2) infinite .12s; }
+
     @keyframes armTypeL {
+
       0%, 100% { transform: rotate(18deg) translateY(0); }
+
       50% { transform: rotate(32deg) translateY(-2px); }
+
     }
+
     @keyframes armTypeR {
+
       0%, 100% { transform: rotate(-18deg) translateY(0); }
+
       50% { transform: rotate(-32deg) translateY(-2px); }
+
     }
+
     .office-room .trading-tool {
+
       right: -1px;
+
       top: 8px;
+
       width: 22px;
+
       height: 22px;
+
       font-size: 12px;
+
       border-width: 2px;
+
     }
+
     .office-room .trading-status-badge {
+
       left: 50%;
+
       right: auto;
+
       top: 6px;
+
       transform: translateX(-50%);
+
       min-width: 54px;
+
       height: 19px;
+
       padding: 0 8px;
+
       border-radius: 999px;
+
       font-size: 8px;
+
       background: #f8fafc;
+
       color: #0f172a;
+
       border: 2px solid #cbd5e1;
+
       box-shadow: 2px 2px 0 rgba(0,0,0,.35);
+
     }
+
     .office-room .trading-agent.active .trading-status-badge { color: #0c4a6e; border-color: #7dd3fc; background: #e0f2fe; }
+
     .office-room .trading-agent.done .trading-status-badge { color: #14532d; border-color: #86efac; background: #dcfce7; }
+
     .office-room .trading-agent.blocked .trading-status-badge { color: #7f1d1d; border-color: #fda4af; background: #ffe4e6; }
+
     .office-room .trading-state {
+
       top: 7px;
+
       left: 7px;
+
       right: auto;
+
       width: 8px;
+
       height: 8px;
+
       border-radius: 2px;
+
     }
+
     .office-room .trading-name {
+
       font-family: "VT323", monospace;
+
       font-size: 13px;
+
       line-height: 1.05;
+
       white-space: normal;
+
       min-height: 22px;
+
       color: #e2e8f0;
+
       text-shadow: 0 1px 0 #020617;
+
     }
+
     .office-room .trading-runs {
+
       min-width: 18px;
+
       border-radius: 3px;
+
       font-size: 8px;
+
       margin-left: 2px;
+
     }
+
     .office-room .trading-action {
+
       min-height: 26px;
+
       margin-top: 4px;
+
       padding: 4px;
+
       border-radius: 3px;
+
       font-size: 8px;
+
       background: rgba(2,6,23,.58);
+
     }
+
     .office-room .trading-action b { display: none; }
+
     .office-room .room-prop {
+
       position: absolute;
+
       pointer-events: none;
+
       z-index: 0;
+
       image-rendering: pixelated;
+
     }
+
     .office-room .room-prop.plant {
+
       right: 10px; bottom: 10px;
+
       width: 18px; height: 28px;
+
       background:
+
         linear-gradient(#166534 0 8px, transparent 8px),
+
         linear-gradient(90deg, #15803d 0 6px, #22c55e 6px 12px, #15803d 12px 18px);
+
       border: 2px solid #052e16;
+
       border-radius: 2px;
+
       box-shadow: 3px 3px 0 rgba(0,0,0,.35);
+
     }
+
     .office-room .room-prop.shelf {
+
       left: 10px; bottom: 10px;
+
       width: 42px; height: 34px;
+
       border: 2px solid #3f2d16;
+
       border-radius: 2px;
+
       background:
+
         linear-gradient(#7c4a1d 0 8px, transparent 8px),
+
         repeating-linear-gradient(90deg, #92400e 0 6px, #b45309 6px 12px);
+
       box-shadow: 3px 3px 0 rgba(0,0,0,.35);
+
     }
+
     .office-room .room-prop.clock {
+
       top: 10px; right: 10px;
+
       width: 22px; height: 22px;
+
       border: 2px solid #334155;
+
       border-radius: 50%;
+
       background: radial-gradient(circle at 50% 50%, #f8fafc 0 2px, transparent 2px), #1e293b;
+
       box-shadow: 2px 2px 0 rgba(0,0,0,.35);
+
     }
+
     .office-room .room-prop.map {
+
       top: 36px; right: 12px;
+
       width: 34px; height: 22px;
+
       border: 2px solid #1d4ed8;
+
       border-radius: 2px;
+
       background:
+
         linear-gradient(90deg, #1e3a8a 0 50%, #22c55e 50% 100%),
+
         linear-gradient(#38bdf8 0 40%, transparent 40%);
+
       opacity: .85;
+
       box-shadow: 2px 2px 0 rgba(0,0,0,.35);
+
     }
+
     .trading-scan-ticker {
+
       grid-column: 1 / -1;
+
       border-radius: 5px;
+
       border: 2px solid #16466f;
+
       background: rgba(2,6,23,.86);
+
     }
+
     @media (max-width: 1180px) {
+
       .vo-app { grid-template-columns: 1fr; }
+
       .vo-sidebar {
+
         position: relative;
+
         height: auto;
+
         border-right: 0;
+
         border-bottom: 3px solid #123b63;
+
       }
+
       .trading-office { grid-template-columns: 1fr; }
+
     }
+
     @media (max-width: 760px) {
+
       html, body { width: 100%; }
+
       .vo-app {
+
         display: block;
+
         width: 100%;
+
         min-height: 100vh;
+
       }
+
       .vo-sidebar {
+
         position: relative;
+
         width: 100%;
+
         height: auto;
+
         max-height: none;
+
         border-right: 0;
+
         border-bottom: 2px solid #123b63;
+
       }
+
       .vo-main {
+
         width: 100%;
+
         padding: 0;
+
       }
+
       .trading-office-card,
+
       #view-monitor,
+
       #hermesKanban {
+
         width: 100%;
+
         min-width: 0;
+
       }
+
       .trading-office {
+
         width: 100%;
+
         min-height: 0;
+
         padding: 0;
+
         gap: 8px;
+
         border-left: 0;
+
         border-right: 0;
+
         border-radius: 0;
+
         grid-template-columns: 1fr;
+
       }
+
       .office-topbar { grid-template-columns: 1fr; }
+
       .office-daily-kpis { min-width: 0; }
+
       .office-main {
+
         width: 100%;
+
         grid-template-columns: 1fr;
+
         gap: 8px;
+
       }
+
       .office-room {
+
         width: 100%;
+
         min-height: 0;
+
         padding: 38px 8px 8px;
+
         border-left: 0;
+
         border-right: 0;
+
         border-radius: 0;
+
       }
+
       .room-title {
+
         left: 8px;
+
         min-width: 0;
+
         max-width: calc(100% - 16px);
+
       }
+
       .room-agents {
+
         width: 100%;
+
         grid-template-columns: repeat(3, minmax(0, 1fr));
+
         grid-auto-rows: minmax(132px, auto);
+
         gap: 5px;
+
       }
+
       .office-room .trading-agent {
+
         width: 100%;
+
         min-height: 132px;
+
         padding: 24px 4px 5px;
+
         display: block;
+
       }
+
       .office-room .trading-avatar {
+
         width: 58px;
+
         height: 60px;
+
         margin: 0 auto 1px;
+
         transform: scale(.72);
+
         transform-origin: center;
+
       }
+
       .office-room .trading-desk {
+
         width: 36px;
+
         left: 50%;
+
         bottom: 53px;
+
       }
+
       .office-room .trading-monitor {
+
         width: 36px;
+
         height: 20px;
+
       }
+
       .office-room .trading-screen {
+
         width: 24px;
+
         height: 10px;
+
         margin-top: 3px;
+
       }
+
       .office-room .trading-chair {
+
         width: 30px;
+
         height: 7px;
+
       }
+
       .office-room .trading-status-badge {
+
         top: 5px;
+
         height: 17px;
+
         min-width: 48px;
+
         font-size: 7px;
+
         padding: 0 6px;
+
       }
+
       .office-room .trading-state {
+
         top: 8px;
+
         left: 8px;
+
       }
+
       .office-room .trading-tool {
+
         top: 5px;
+
         right: 6px;
+
         width: 20px;
+
         height: 20px;
+
         font-size: 11px;
+
       }
+
       .office-room .trading-name {
+
         min-height: 0;
+
         font-size: 12px;
+
         line-height: 1;
+
         text-align: center;
+
       }
+
       .office-room .trading-action {
+
         min-height: 30px;
+
         margin-top: 3px;
+
         padding: 3px;
+
         font-size: 7.5px;
+
         line-height: 1.2;
+
         display: -webkit-box;
+
         -webkit-line-clamp: 2;
+
         -webkit-box-orient: vertical;
+
         overflow: hidden;
+
       }
+
     }
+
     .gate-chip {
+
       font-size: 10px; padding: 4px 8px; border-radius: 6px;
+
       border: 1px solid var(--border); background: var(--surface-2);
+
       font-family: "JetBrains Mono", monospace;
+
     }
+
     .gate-chip.ok { border-color: rgba(52,211,153,.35); color: var(--good); }
+
     .gate-chip.fail { border-color: rgba(251,113,133,.35); color: var(--bad); }
 
+
+
     .pill {
+
       padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600;
+
       border: 1px solid; display: inline-block;
+
     }
+
     .pill-long { color: #4ade80; border-color: #22c55e; background: rgba(34,197,94,.1); }
+
     .pill-short { color: #fda4af; border-color: #f43f5e; background: rgba(244,63,94,.1); }
+
     .pill-wait { color: var(--warn); border-color: var(--warn); background: rgba(251,191,36,.08); }
 
+
+
     details.advanced {
+
       margin-bottom: var(--gap);
+
       background: var(--surface);
+
       border: 1px solid var(--border);
+
       border-radius: var(--radius);
+
     }
+
     details.advanced summary {
+
       padding: 10px 12px; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--muted);
+
       list-style: none;
+
     }
+
     details.advanced summary::-webkit-details-marker { display: none; }
+
     details.advanced[open] summary { border-bottom: 1px solid var(--border); color: var(--text); }
+
     .adv-grid {
+
       display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+
       padding: 10px 12px 12px;
+
     }
+
     .adv-grid .fld label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+
     .chk-row { display: flex; flex-wrap: wrap; gap: 12px; padding: 0 12px 12px; font-size: 11px; color: var(--muted); }
+
     .chk-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 
+
+
     .learn-stats {
+
       display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px;
+
     }
+
     .learn-stat {
+
       background: var(--surface-2); border: 1px solid var(--border);
+
       border-radius: 8px; padding: 8px 10px;
+
     }
+
     .learn-stat .k { font-size: 10px; color: var(--muted); }
+
     .learn-stat .v { font-size: 13px; font-weight: 600; margin-top: 2px; }
+
     .learn-badge {
+
       display: inline-block;
+
       margin-left: 6px;
+
       padding: 2px 8px;
+
       border-radius: 999px;
+
       border: 1px solid var(--border);
+
       font-size: 10px;
+
       font-weight: 700;
+
       letter-spacing: 0.04em;
+
     }
+
     .learn-badge.ok { color: var(--good); border-color: rgba(52,211,153,.45); background: rgba(52,211,153,.12); }
+
     .learn-badge.warn { color: var(--warn); border-color: rgba(251,191,36,.45); background: rgba(251,191,36,.12); }
+
     .learn-badge.idle { color: var(--muted); border-color: var(--border); background: rgba(148,163,184,.08); }
 
+
+
     .busy-overlay {
+
       position: fixed; inset: 0; z-index: 9998;
+
       background: rgba(7,10,18,.2); backdrop-filter: blur(1px);
+
       display: none; cursor: progress;
+
     }
+
     .busy-overlay.show { display: block; }
+
     .toasts {
+
       position: fixed; right: 12px; bottom: 12px; z-index: 9999;
+
       display: flex; flex-direction: column; gap: 6px; width: min(300px, calc(100vw - 24px));
+
     }
+
     .toast {
+
       border-radius: 8px; padding: 8px 10px; border: 1px solid;
+
       font-size: 11px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+
       animation: toastIn .15s ease;
+
     }
+
     .toast.ok { background: rgba(6,78,59,.95); border-color: var(--good); }
+
     .toast.err { background: rgba(127,29,29,.95); border-color: var(--bad); }
+
     .toast.info { background: rgba(30,64,175,.95); border-color: var(--accent); }
+
     @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } }
+
     @keyframes spin { to { transform: rotate(360deg); } }
 
+
+
     @media (max-width: 1200px) {
+
       .metrics { grid-template-columns: repeat(2, 1fr); }
+
       .grid-3 { grid-template-columns: 1fr 1fr; }
+
     }
+
     @media (max-width: 900px) {
+
       .metrics { grid-template-columns: repeat(2, 1fr); }
+
       .grid-3, .grid-2, .adv-grid, .learn-stats { grid-template-columns: 1fr; }
+
       .toolbar .sep { display: none; }
+
       .toolbar { gap: 8px; padding: 8px; }
+
       .toolbar .group.settings { width: 100%; }
+
       .fld-symbol, .fld-usdt, .fld-mode, .fld-lev { flex: 1 1 calc(50% - 6px); }
+
       .log { height: 148px; }
+
       .log.tall { height: 190px; }
+
     }
+
     @media (max-width: 520px) {
+
       .app { padding: 8px 8px 12px; }
+
       .header { gap: 6px; padding: 8px 0 10px; }
+
       .brand h1 { font-size: 16px; }
+
       .metrics { grid-template-columns: 1fr 1fr; gap: 7px; }
+
       .metric { padding: 8px 9px; }
+
       .metric .val { font-size: 13px; }
+
       .conn label { display: none; }
+
       .conn { width: 100%; justify-content: space-between; }
+
       .conn input { width: 100%; max-width: none; }
+
       .field-inline { flex-direction: column; align-items: stretch; gap: 4px; }
+
       .field-inline label {
+
         display: block;
+
         font-size: 10px;
+
         color: var(--muted);
+
         line-height: 1.1;
+
       }
+
       .fld-symbol, .fld-usdt, .fld-mode, .fld-lev { flex: 1 1 100%; }
+
       button.sm { padding: 7px 8px; font-size: 10px; }
+
       .toolbar .group:first-child { width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+
       .toolbar .group:first-child button { width: 100%; }
+
       .toolbar .group.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
       .toolbar .group.settings .field-inline { min-height: 48px; }
+
       .toolbar .group.settings .fld-symbol { grid-column: 1 / -1; }
+
       .toolbar .group.settings .fld-lev { grid-column: 1 / -1; }
+
       .toolbar input, .toolbar select { padding: 6px 8px; font-size: 11px; }
+
       .toolbar { padding: 7px; }
+
       .hint#levCapHint { width: 100%; text-align: right; display: block; }
+
       .tabs { gap: 3px; justify-content: center; }
+
       .tab { padding: 6px 9px; font-size: 10px; }
+
       .log { height: 132px; font-size: 10px; }
+
       .log.tall { height: 168px; }
+
       details.advanced summary { padding: 9px 10px; font-size: 11px; }
+
       .adv-grid { gap: 6px; padding: 8px 10px 10px; }
+
       .adv-grid { grid-template-columns: 1fr 1fr; }
+
       .adv-grid .fld:first-child { grid-column: 1 / -1; }
+
       .chk-row { gap: 8px; padding: 0 10px 10px; font-size: 10.5px; }
+
       .chk-row label { flex: 1 1 calc(50% - 8px); }
+
       .trading-office {
+
         grid-template-columns: 1fr;
+
         padding: 0;
+
         border-radius: 0;
+
       }
+
       .office-room {
+
         border-width: 2px;
+
         border-radius: 0;
+
         padding: 36px 6px 6px;
+
       }
+
       .room-agents {
+
         grid-template-columns: repeat(3, minmax(0, 1fr));
+
         grid-auto-rows: minmax(126px, auto);
+
         gap: 4px;
+
       }
+
       .office-room .trading-agent {
+
         min-height: 126px;
+
         padding: 22px 3px 5px;
+
       }
+
       .office-room .trading-avatar {
+
         width: 52px;
+
         height: 54px;
+
         transform: scale(.66);
+
         margin-bottom: -2px;
+
       }
+
       .office-room .trading-desk {
+
         left: 50%;
+
         bottom: 50px;
+
         width: 34px;
+
       }
+
       .office-room .trading-name { font-size: 11px; }
+
       .office-room .trading-action {
+
         min-height: 28px;
+
         font-size: 7px;
+
       }
+
       .trading-office-positions,
+
       .office-pipeline,
+
       .supervisor-review {
+
         width: 100%;
+
       }
+
       .kanban-row { grid-template-columns: 1fr 1fr; }
+
     }
+
     @media (max-width: 390px) {
+
       .metrics {
+
         grid-template-columns: 1fr 1fr;
+
         grid-template-areas:
+
           "hermes bot"
+
           "win pnl";
+
       }
+
       .metric.hermes { grid-area: hermes; }
+
       .metric.bot { grid-area: bot; }
+
       .metric.win { grid-area: win; }
+
       .metric.pnl { grid-area: pnl; }
+
       .conn input { width: 100%; }
+
       .vo-main { padding: 0; }
+
       .trading-office { padding: 0; }
+
       .office-room { padding-inline: 5px; }
+
       .room-agents { gap: 3px; }
+
       .office-room .trading-agent {
+
         min-height: 118px;
+
         padding-inline: 2px;
+
       }
+
       .office-room .trading-avatar {
+
         transform: scale(.58);
+
         margin-bottom: -8px;
+
       }
+
       .office-room .trading-name { font-size: 10px; }
+
       .office-room .trading-action { font-size: 6.5px; }
+
     }
+
   </style>
+
 </head>
+
 <body>
+
   <div class="vo-app">
+
     <aside class="vo-sidebar">
+
       <div class="vo-brand">
+
         <div class="vo-robot" aria-hidden="true">🤖</div>
+
         <div>
+
           <strong>Hermes Lab</strong>
+
           <span id="engineVer">—</span>
+
         </div>
+
       </div>
+
       <nav class="vo-nav" role="tablist" aria-label="Dashboard views">
+
         <button type="button" class="vo-tab active" data-tab="monitor">Office</button>
+
         <button type="button" class="vo-tab" data-tab="more">Logs</button>
+
       </nav>
+
       <div id="officeStatusPanel" class="vo-status-panel standby">
+
         <div id="officeStatusTitle" class="vo-status-title">STANDBY</div>
+
         <div class="vo-status-grid">
+
           <div class="vo-status-row"><span>Agents</span><b id="officeAgentsOnline">0/0</b></div>
+
           <div class="vo-status-row"><span>Tasks</span><b id="officeActiveTasks">0</b></div>
+
           <div class="vo-status-row"><span>Today</span><b id="officeTodayActivity">—</b></div>
+
           <div class="vo-status-row"><span>Hermes</span><b id="svcStatus">—</b></div>
+
           <div class="vo-status-row"><span>Bot</span><b id="botStatus">—</b></div>
-          <div class="vo-status-row"><span>TV MCP</span><b id="tvMcpStatus">—</b></div>
+
         </div>
+
       </div>
+
       <div class="vo-kpi-mini metrics">
+
         <div class="metric win">
+
           <div class="lbl">Win</div>
+
           <div class="val" id="winRate">—</div>
+
           <div class="sub" id="winRateSub"></div>
+
         </div>
+
         <div class="metric pnl">
+
           <div class="lbl">PnL</div>
+
           <div class="val" id="realizedPnl">—</div>
+
           <div class="sub" id="pnlSub"></div>
+
         </div>
+
       </div>
+
       <div class="vo-controls">
+
         <div class="conn">
+
           <label>cmux</label>
+
           <input id="baseUrl" value="" placeholder="http://127.0.0.1:8030" />
+
           <button id="btnRefresh" class="btn-primary sm">↻</button>
+
         </div>
+
         <div class="toolbar-mini">
+
           <button id="serviceToggle" class="btn-good sm">Svc</button>
+
           <button id="botToggle" class="btn-primary sm">Bot</button>
+
           <button id="loadProPreset" class="btn-ghost sm" type="button">PRO</button>
+
         </div>
+
         <div class="vo-field-grid">
+
           <div class="field-inline fld-symbol">
+
             <label>Symbol</label>
+
             <select id="cfgSymbol"><option value="AUTO">AUTO</option></select>
+
           </div>
+
           <div class="field-inline fld-usdt">
+
             <label>USDT</label>
+
             <input id="cfgUsdt" type="number" value="50" />
+
           </div>
+
           <div class="field-inline fld-mode">
+
             <label>Mode</label>
+
             <select id="cfgMode"><option>PAPER</option><option>LIVE</option></select>
+
           </div>
+
           <div class="field-inline fld-lev">
+
             <label>Lev</label>
+
             <div class="range-inline">
+
               <input id="cfgLevMin" type="hidden" value="1" />
+
               <input id="cfgLevMax" type="number" value="25" min="1" max="25" />
+
             </div>
+
           </div>
+
         </div>
+
         <div class="vo-meta">
+
           <span id="levCapHint">cap x—</span>
+
           <span id="publishIpHeader">IP —</span>
+
           <span class="badge" id="engineBadge">pro</span>
+
         </div>
+
       </div>
+
     </aside>
 
+
+
     <main class="vo-main">
+
       <div id="backendBanner" class="status-banner"></div>
 
+
+
     <div id="view-monitor" class="panel-view active">
+
       <div class="card trading-office-card" style="border:0;background:transparent;padding:0;box-shadow:none">
+
         <div id="hermesKanban" class="trading-office"></div>
+
         <div class="office-pipeline">
+
           <div class="office-pipeline-head">
+
             <span>Entry pipeline</span>
+
             <span>gate compact</span>
+
           </div>
+
           <div id="entryPipeline" class="pipeline-row"></div>
+
           <div id="pipelineSkip" style="font-size:10px;color:var(--warn);margin-top:6px"></div>
-          <div id="tradingViewMcpPanel" class="tv-mcp-panel"></div>
+
+          <div id="symbolProfileSummary" class="vo-profile-summary"></div>
+
         </div>
+
         <div class="trading-office-positions">
+
           <div class="sub-h">Positions <span>live/paper exposure</span></div>
+
           <div id="openPositions" class="log"></div>
+
         </div>
+
         <div id="hermesSupervisorReview" class="supervisor-review"></div>
+
       </div>
+
     </div>
+
+
 
     <div id="view-more" class="panel-view">
+
       <details class="advanced" open>
+
         <summary>Expert Settings · Benchmark · Pair lock · Learning</summary>
+
         <div class="adv-grid">
+
           <div class="fld"><label>Benchmark</label><input id="cfgBenchmarkSymbol" value="BTCUSDT" /></div>
+
           <div class="fld"><label>BM penalty %</label><input id="cfgBenchmarkPenalty" type="number" step="0.1" value="6" /></div>
+
           <div class="fld"><label>Max positions</label><input id="cfgMaxOpenPositions" type="number" min="1" max="20" value="6" /></div>
+
           <div class="fld"><label>Lock streak</label><input id="cfgPairLockStreak" type="number" value="2" /></div>
+
           <div class="fld"><label>Lock min</label><input id="cfgPairLockMinutes" type="number" value="45" /></div>
+
         </div>
+
         <div class="chk-row">
+
           <label><input id="cfgBenchmarkEnabled" type="checkbox" checked /> Benchmark filter</label>
+
           <label><input id="cfgPairLockEnabled" type="checkbox" checked /> Pair lock</label>
+
           <label><input id="cfgAutoLearn" type="checkbox" checked /> Auto learn</label>
+
         </div>
+
       </details>
 
+
+
       <div class="grid-2">
-        <div class="card">
-          <div class="card-h"><h2>Decision log</h2><span id="publicIp" style="font-size:10px;color:var(--muted);font-family:monospace"></span></div>
-          <div id="log" class="log tall"></div>
-        </div>
 
         <div class="card">
-          <div class="card-h">
-            <h2>Learning</h2>
-            <div class="group" style="display:flex;gap:6px">
-              <span id="learningAppliedBadge" class="learn-badge idle">IDLE</span>
-              <button id="learningTrainNow" class="btn-primary sm">Train</button>
-              <button id="learningRefresh" class="btn-ghost sm">Refresh</button>
-            </div>
-          </div>
-          <div id="learningApplied" style="font-size:11px;color:var(--muted);margin-bottom:8px">Applied: —</div>
-          <div class="learn-stats">
-            <div class="learn-stat"><div class="k">Last train</div><div class="v" id="learningLastTrain">—</div></div>
-            <div class="learn-stat"><div class="k">Scanned</div><div class="v" id="learningSymbols">—</div></div>
-            <div class="learn-stat"><div class="k">Promoted</div><div class="v" id="learningPromoted">—</div></div>
-            <div class="learn-stat"><div class="k">Hit threshold</div><div class="v" id="learningThreshold">—</div></div>
-          </div>
-          <div id="learningPromotedList" class="log" style="height:86px;margin-bottom:8px"></div>
-          <div id="learningRows" class="log"></div>
+
+          <div class="card-h"><h2>Decision log</h2><span id="publicIp" style="font-size:10px;color:var(--muted);font-family:monospace"></span></div>
+
+          <div id="log" class="log tall"></div>
+
         </div>
+
+
+
+        <div class="card">
+
+          <div class="card-h">
+
+            <h2>Learning</h2>
+
+            <div class="group" style="display:flex;gap:6px">
+
+              <span id="learningAppliedBadge" class="learn-badge idle">IDLE</span>
+
+              <button id="learningTrainNow" class="btn-primary sm">Train</button>
+
+              <button id="learningRefresh" class="btn-ghost sm">Refresh</button>
+
+            </div>
+
+          </div>
+
+          <div id="learningApplied" style="font-size:11px;color:var(--muted);margin-bottom:8px">Applied: —</div>
+
+          <div class="learn-stats">
+
+            <div class="learn-stat"><div class="k">Last train</div><div class="v" id="learningLastTrain">—</div></div>
+
+            <div class="learn-stat"><div class="k">Scanned</div><div class="v" id="learningSymbols">—</div></div>
+
+            <div class="learn-stat"><div class="k">Promoted</div><div class="v" id="learningPromoted">—</div></div>
+
+            <div class="learn-stat"><div class="k">Hit threshold</div><div class="v" id="learningThreshold">—</div></div>
+
+          </div>
+
+          <div id="learningPromotedList" class="log" style="height:86px;margin-bottom:8px"></div>
+
+          <div id="learningRows" class="log"></div>
+
+          <div id="learningTuneReco" class="vo-profile-summary" style="margin-top:10px"></div>
+
+        </div>
+
       </div>
+
     </div>
+
     </main>
+
   </div>
 
+
+
   <div id="busyOverlay" class="busy-overlay"></div>
+
   <div id="toasts" class="toasts"></div>
 
+
+
 <script>
+
 const $ = (id) => document.getElementById(id);
-const defaultCmuxUrl = window.location.origin;
-const MODE_KEY = "codex_dashboard_cfg_mode";
-const LEV_MIN_KEY = "codex_dashboard_lev_min";
-const LEV_MAX_KEY = "codex_dashboard_lev_max";
+
+const defaultCmuxUrl = window.location.origin || "http://127.0.0.1:8030";
+
+const MODE_KEY = "cmux_dashboard_cfg_mode";
+
+const LEV_MIN_KEY = "cmux_dashboard_lev_min";
+
+const LEV_MAX_KEY = "cmux_dashboard_lev_max";
+
 let SERVER_MAX_LEVERAGE = 25;
-const PAIR_LOCK_ENABLED_KEY = "codex_dashboard_pair_lock_enabled";
-const PAIR_LOCK_STREAK_KEY = "codex_dashboard_pair_lock_streak";
-const PAIR_LOCK_MINUTES_KEY = "codex_dashboard_pair_lock_minutes";
+
+const PAIR_LOCK_ENABLED_KEY = "cmux_dashboard_pair_lock_enabled";
+
+const PAIR_LOCK_STREAK_KEY = "cmux_dashboard_pair_lock_streak";
+
+const PAIR_LOCK_MINUTES_KEY = "cmux_dashboard_pair_lock_minutes";
+
 const ui = {
+
   baseUrl: $("baseUrl"), svcStatus: $("svcStatus"), botStatus: $("botStatus"),
-  tvMcpStatus: $("tvMcpStatus"), tradingViewMcpPanel: $("tradingViewMcpPanel"),
+
   publicIp: $("publicIp"), publishIpHeader: $("publishIpHeader"), winRate: $("winRate"), realizedPnl: $("realizedPnl"),
+
   winRateSub: $("winRateSub"), pnlSub: $("pnlSub"),
+
   levCapHint: $("levCapHint"), engineVer: $("engineVer"), engineBadge: $("engineBadge"),
+
   backendBanner: $("backendBanner"),
+
   log: $("log"), scanBoard: $("scanBoard"), entryPipeline: $("entryPipeline"),
+
   pipelineSkip: $("pipelineSkip"), openPositions: $("openPositions"),
+
   hermesKanban: $("hermesKanban"), hermesKanbanMeta: $("hermesKanbanMeta"), hermesMission: $("hermesMission"),
+
   hermesSupervisorReview: $("hermesSupervisorReview"),
+
   botToggle: $("botToggle"), serviceToggle: $("serviceToggle"),
+
   learningLastTrain: $("learningLastTrain"), learningSymbols: $("learningSymbols"),
+
   learningPromoted: $("learningPromoted"), learningThreshold: $("learningThreshold"),
+
   learningRows: $("learningRows"), learningApplied: $("learningApplied"),
+
   learningPromotedList: $("learningPromotedList"), learningAppliedBadge: $("learningAppliedBadge"),
+
 };
+
 if (ui.baseUrl && !ui.baseUrl.value) ui.baseUrl.value = defaultCmuxUrl;
+
 if (ui.scanBoard && !ui.scanBoard.innerHTML.trim()) {
+
   ui.scanBoard.innerHTML = `<div class="log-line" style="color:var(--muted)">กำลังโหลดสถานะ scan…</div>`;
+
 }
+
 if (ui.entryPipeline && !ui.entryPipeline.innerHTML.trim()) {
+
   ui.entryPipeline.innerHTML = `<span class="gate-chip" style="color:var(--muted)">idle</span>`;
+
 }
+
+
 
 document.querySelectorAll(".vo-tab").forEach((btn) => {
+
   btn.addEventListener("click", () => {
+
     document.querySelectorAll(".vo-tab").forEach((t) => t.classList.remove("active"));
+
     document.querySelectorAll(".panel-view").forEach((v) => v.classList.remove("active"));
+
     btn.classList.add("active");
+
     const id = btn.dataset.tab;
+
     const view = $("view-" + id);
+
     if (view) view.classList.add("active");
+
   });
+
 });
 
+
+
 if ($("cfgMode")) {
+
   const savedMode = localStorage.getItem(MODE_KEY);
+
   if (savedMode === "LIVE" || savedMode === "PAPER") $("cfgMode").value = savedMode;
+
   $("cfgMode").addEventListener("change", () => localStorage.setItem(MODE_KEY, $("cfgMode").value || "PAPER"));
-}
-if ($("cfgLevMin") && $("cfgLevMax")) {
-  const sMin = Number(localStorage.getItem(LEV_MIN_KEY) || "");
-  const sMax = Number(localStorage.getItem(LEV_MAX_KEY) || "");
-  if (Number.isFinite(sMin) && sMin >= 1) $("cfgLevMin").value = String(Math.floor(sMin));
-  if (Number.isFinite(sMax) && sMax >= 1) $("cfgLevMax").value = String(Math.floor(sMax));
-}
-if ($("cfgPairLockEnabled")) {
-  const saved = localStorage.getItem(PAIR_LOCK_ENABLED_KEY);
-  if (saved === "true" || saved === "false") $("cfgPairLockEnabled").checked = saved === "true";
-  $("cfgPairLockEnabled").addEventListener("change", async () => {
-    localStorage.setItem(PAIR_LOCK_ENABLED_KEY, $("cfgPairLockEnabled").checked ? "true" : "false");
-    try {
-      const rs = await req("/bot/config", "POST", { pairLockEnabled: !!$("cfgPairLockEnabled").checked });
-      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
-      safeAppendLog(`PairLock: ${$("cfgPairLockEnabled").checked}`, "ok");
-      await refreshStatus();
-    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
-  });
-}
-if ($("cfgPairLockStreak")) {
-  const saved = localStorage.getItem(PAIR_LOCK_STREAK_KEY);
-  if (saved && !Number.isNaN(Number(saved))) $("cfgPairLockStreak").value = saved;
-  $("cfgPairLockStreak").addEventListener("change", async () => {
-    localStorage.setItem(PAIR_LOCK_STREAK_KEY, $("cfgPairLockStreak").value || "2");
-    try {
-      const rs = await req("/bot/config", "POST", { pairLockLossStreak: Number($("cfgPairLockStreak").value || 2) });
-      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
-      await refreshStatus();
-    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
-  });
-}
-if ($("cfgPairLockMinutes")) {
-  const saved = localStorage.getItem(PAIR_LOCK_MINUTES_KEY);
-  if (saved && !Number.isNaN(Number(saved))) $("cfgPairLockMinutes").value = saved;
-  $("cfgPairLockMinutes").addEventListener("change", async () => {
-    localStorage.setItem(PAIR_LOCK_MINUTES_KEY, $("cfgPairLockMinutes").value || "45");
-    try {
-      const rs = await req("/bot/config", "POST", { pairLockMinutes: Number($("cfgPairLockMinutes").value || 45) });
-      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
-      await refreshStatus();
-    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
-  });
+
 }
 
+if ($("cfgLevMin") && $("cfgLevMax")) {
+
+  const sMin = Number(localStorage.getItem(LEV_MIN_KEY) || "");
+
+  const sMax = Number(localStorage.getItem(LEV_MAX_KEY) || "");
+
+  if (Number.isFinite(sMin) && sMin >= 1) $("cfgLevMin").value = String(Math.floor(sMin));
+
+  if (Number.isFinite(sMax) && sMax >= 1) $("cfgLevMax").value = String(Math.floor(sMax));
+
+}
+
+if ($("cfgPairLockEnabled")) {
+
+  const saved = localStorage.getItem(PAIR_LOCK_ENABLED_KEY);
+
+  if (saved === "true" || saved === "false") $("cfgPairLockEnabled").checked = saved === "true";
+
+  $("cfgPairLockEnabled").addEventListener("change", async () => {
+
+    localStorage.setItem(PAIR_LOCK_ENABLED_KEY, $("cfgPairLockEnabled").checked ? "true" : "false");
+
+    try {
+
+      const rs = await req("/bot/config", "POST", { pairLockEnabled: !!$("cfgPairLockEnabled").checked });
+
+      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
+
+      safeAppendLog(`PairLock: ${$("cfgPairLockEnabled").checked}`, "ok");
+
+      await refreshStatus();
+
+    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
+
+  });
+
+}
+
+if ($("cfgPairLockStreak")) {
+
+  const saved = localStorage.getItem(PAIR_LOCK_STREAK_KEY);
+
+  if (saved && !Number.isNaN(Number(saved))) $("cfgPairLockStreak").value = saved;
+
+  $("cfgPairLockStreak").addEventListener("change", async () => {
+
+    localStorage.setItem(PAIR_LOCK_STREAK_KEY, $("cfgPairLockStreak").value || "2");
+
+    try {
+
+      const rs = await req("/bot/config", "POST", { pairLockLossStreak: Number($("cfgPairLockStreak").value || 2) });
+
+      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
+
+      await refreshStatus();
+
+    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
+
+  });
+
+}
+
+if ($("cfgPairLockMinutes")) {
+
+  const saved = localStorage.getItem(PAIR_LOCK_MINUTES_KEY);
+
+  if (saved && !Number.isNaN(Number(saved))) $("cfgPairLockMinutes").value = saved;
+
+  $("cfgPairLockMinutes").addEventListener("change", async () => {
+
+    localStorage.setItem(PAIR_LOCK_MINUTES_KEY, $("cfgPairLockMinutes").value || "45");
+
+    try {
+
+      const rs = await req("/bot/config", "POST", { pairLockMinutes: Number($("cfgPairLockMinutes").value || 45) });
+
+      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
+
+      await refreshStatus();
+
+    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
+
+  });
+
+}
+
+
+
 let activeActionCount = 0, actionLockUntil = 0, levUpdateInFlight = false, toastId = 0, lastSeenPublicIp = null;
+
 let kpiSticky = { liveWinAll: 0, livePnlAll: 0, liveWinsToday: 0, liveLossToday: 0, liveWinToday: 0, livePnlToday: 0, lastTradeAt: 0 };
+
 let learningAutoTrainInFlight = false;
+
 let learningLastAutoTrainAt = 0;
+
 let openPositionsCache = { key: "", html: "", updatedAt: 0 };
+
 let scanTickerCache = { key: "", html: "", updatedAt: 0, durationMs: 56000 };
+
 let lastGoodStatus = null;
+
 let lastRichBotStatus = null;
+
 let statusRefreshInFlight = false;
+
 let lastStatusToastAt = 0;
+
 const num0 = (v, d = 0) => {
+
   const n = Number(v);
+
   return Number.isFinite(n) ? n : d;
+
 };
+
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+
 
 const CONTROL_BUTTON_IDS = ["btnRefresh", "serviceToggle", "botToggle", "learningTrainNow", "learningRefresh", "loadProPreset"];
 
+
+
 function setGlobalControlLock(locked) {
+
   $("busyOverlay")?.classList.toggle("show", !!locked);
+
   for (const id of CONTROL_BUTTON_IDS) {
+
     const btn = $(id);
+
     if (!btn) continue;
+
     if (locked && btn.dataset.busy !== "1") btn.disabled = true;
+
     else if (btn.dataset.busy !== "1") btn.disabled = false;
+
   }
+
 }
+
 function isControlLocked() { return activeActionCount > 0 || Date.now() < actionLockUntil; }
 
+
+
 function pillSignal(sig) {
+
   const s = String(sig || "WAIT").toUpperCase();
+
   const cls = s === "LONG" ? "pill-long" : s === "SHORT" ? "pill-short" : "pill-wait";
+
   return `<span class="pill ${cls}">${s}</span>`;
+
 }
+
+
 
 function scanTickSignal(sig) {
+
   const s = String(sig || "WAIT").toUpperCase();
+
   const cls = s === "LONG" ? "long" : s === "SHORT" ? "short" : "wait";
+
   return `<span class="scan-tick-side ${cls}">${esc(s)}</span>`;
+
 }
+
+
 
 function compactAge(ts) {
+
   const n = Number(ts || 0);
+
   if (!Number.isFinite(n) || n <= 0) return "—";
+
   const sec = Math.max(0, Math.floor(Date.now() / 1000 - n));
+
   if (sec < 60) return `${sec}s`;
+
   const min = Math.floor(sec / 60);
+
   if (min < 60) return `${min}m`;
+
   return `${Math.floor(min / 60)}h`;
+
 }
 
-function tradingViewMcpSummary(bot) {
-  const cfg = bot?.config || {};
-  const watcher = bot?.tradingViewWatcher && typeof bot.tradingViewWatcher === "object" ? bot.tradingViewWatcher : {};
-  const enabled = cfg.tradingViewWatcherEnabled !== false;
-  const updatedAt = Number(watcher.updatedAt || 0);
-  const ageSec = updatedAt > 0 ? Math.max(0, Math.floor(Date.now() / 1000 - updatedAt)) : 999999;
-  const interval = Math.max(60, Number(cfg.tradingViewWatcherIntervalSec || 300));
-  const findings = Array.isArray(watcher.findings) ? watcher.findings : [];
-  const dataFailure = findings.some((x) => String(x?.condition || "").toLowerCase() === "mcp_data_failure");
-  const recovery = watcher?.codexActionReport?.type === "tradingview_mcp_recovered";
-  const stale = enabled && updatedAt > 0 && ageSec > Math.max(180, interval * 2);
-  let cls = "off";
-  let label = "Off";
-  if (!enabled) {
-    label = "Off";
-  } else if (watcher.ok === false || dataFailure) {
-    cls = "fail";
-    label = "Fail";
-  } else if (!updatedAt) {
-    cls = "warn";
-    label = "Waiting";
-  } else if (stale) {
-    cls = "warn";
-    label = "Stale";
-  } else if (recovery) {
-    cls = "ok";
-    label = "Recovered";
-  } else if (watcher.ok === true) {
-    cls = findings.length ? "warn" : "ok";
-    label = findings.length ? "Signal" : "OK";
-  } else {
-    cls = "warn";
-    label = "Unknown";
-  }
-  return { watcher, findings, cls, label, updatedAt, ageSec, age: compactAge(updatedAt), stale, dataFailure, recovery };
-}
 
-function renderTradingViewMcpStatus(bot) {
-  const s = tradingViewMcpSummary(bot);
-  if (ui.tvMcpStatus) {
-    ui.tvMcpStatus.textContent = s.label;
-    ui.tvMcpStatus.style.color = s.cls === "ok" ? "var(--good)" : s.cls === "fail" ? "var(--bad)" : s.cls === "warn" ? "var(--warn)" : "var(--muted)";
-  }
-  if (!ui.tradingViewMcpPanel) return;
-  const watcher = s.watcher || {};
-  const first = s.findings[0] || {};
-  const targets = Array.isArray(watcher.targets) ? watcher.targets : [];
-  const targetText = targets.length
-    ? targets.slice(0, 4).map((x) => `${String(x?.symbol || "—").toUpperCase()}${x?.side ? "/" + String(x.side).toUpperCase() : ""}`).join(", ")
-    : "—";
-  const condition = first.condition ? `${first.symbol || "—"} · ${first.condition}` : (s.recovery ? "recovered" : "no actionable finding");
-  const signal = first.tradingViewSignal || first.alignment || watcher.error || "—";
-  const supervisor = watcher?.supervisorResult?.codexActionReport?.action
-    || watcher?.codexActionReport?.action
-    || watcher?.supervisorResult?.reason
-    || "—";
-  const portText = watcher.mcpPort
-    ? String(watcher.mcpPort) + (watcher.preferredMcpPort && watcher.preferredMcpPort !== watcher.mcpPort ? ` fallback from ${watcher.preferredMcpPort}` : "")
-    : "—";
-  ui.tradingViewMcpPanel.innerHTML = `
-    <div class="tv-mcp-head">
-      <span>TradingView MCP</span>
-      <span class="tv-mcp-badge ${esc(s.cls)}">${esc(s.label)}</span>
-    </div>
-    <div class="tv-mcp-body">
-      <div class="tv-mcp-line"><span>last</span> <b>${esc(s.age)}</b></div>
-      <div class="tv-mcp-line"><span>port</span> <b title="${esc(portText)}">${esc(portText)}</b></div>
-      <div class="tv-mcp-line"><span>targets</span> <b title="${esc(targetText)}">${esc(targets.length ? String(targets.length) : "0")}</b></div>
-      <div class="tv-mcp-line full"><span>watch</span> <b title="${esc(targetText)}">${esc(targetText)}</b></div>
-      <div class="tv-mcp-line full"><span>signal</span> <b title="${esc(signal)}">${esc(String(signal).slice(0, 120))}</b></div>
-      <div class="tv-mcp-line full"><span>condition</span> <b title="${esc(condition)}">${esc(String(condition).slice(0, 120))}</b></div>
-      <div class="tv-mcp-line full"><span>supervisor</span> <b title="${esc(supervisor)}">${esc(String(supervisor).slice(0, 120))}</b></div>
-    </div>
-  `;
-}
 
 function scanTickerPayload(bot) {
+
   const rows = Array.isArray(bot?.scanBoard) ? bot.scanBoard.slice(0, 8) : [];
+
   if (!rows.length) {
+
     const cfg = bot?.config || {};
+
     const cfgSymbol = String(cfg?.symbol || "").toUpperCase();
+
     const scanMode = !!cfg?.marketScan || cfgSymbol === "AUTO" || cfgSymbol === "SCAN";
+
     const decision = bot?.lastDecision || {};
+
     const decisionSymbol = String(decision?.symbol || cfgSymbol || "—").toUpperCase();
+
     const decisionSignal = String(decision?.signal || "").toUpperCase();
+
     const decisionConf = Number(decision?.confidence || 0);
+
     const skipCode = String(bot?.lastSkip?.code || "").toLowerCase();
+
     let text = "รอ market scan · Hermes กำลังเตรียมข้อมูล";
+
     if (!bot?.running) {
+
       text = "บอทหยุดทำงาน";
+
     } else if (!scanMode && decisionSignal) {
+
       const confText = Number.isFinite(decisionConf) && decisionConf > 0 ? ` c=${decisionConf.toFixed(2)}` : "";
+
       const waitText = skipCode === "signal_wait" || decisionSignal === "WAIT" ? " · รอสัญญาณ LONG/SHORT ชัดเจน" : "";
+
       text = `${decisionSymbol} ${decisionSignal}${confText}${waitText}`;
+
     } else if (!scanMode) {
+
       text = `${decisionSymbol} · วิเคราะห์เหรียญหลัก`;
+
     }
+
     return {
+
       key: `empty:${text}`,
+
       html: `<span class="scan-tick-item">${esc(text)}</span>`,
+
       durationMs: 42000,
+
     };
+
   }
+
   const parts = rows.map((row, idx) => {
+
     const symbol = String(row?.symbol || "—").toUpperCase();
+
     const side = String(row?.signal || row?.side || row?.decision || row?.action || "WAIT").toUpperCase();
+
     const conf = Number(row?.confidence || row?.conf || 0);
+
     const score = Number(row?.score || 0);
+
     const reason = String(row?.rejectReason || row?.reason || row?.status || row?.note || "").slice(0, 24);
+
     return {
+
       key: [idx + 1, symbol, side, conf.toFixed(2), score.toFixed(1), reason].join(":"),
+
       html: `<span class="scan-tick-item">#${idx + 1} <b>${esc(symbol)}</b> ${scanTickSignal(side)} c=${conf.toFixed(2)} s=${score.toFixed(1)} ${esc(reason)}</span>`,
+
     };
+
   });
+
   const textLen = parts.map((x) => x.key).join(" ").length;
+
   const durationMs = Math.max(48000, Math.min(140000, Math.round(textLen * 190)));
+
   return {
+
     key: parts.map((x) => x.key).join("|"),
+
     html: parts.map((x) => x.html).join(""),
+
     durationMs,
+
   };
+
 }
+
+
 
 function scanTickerLoopHtml(html) {
+
   const content = String(html || `<span class="scan-tick-item">รอ market scan</span>`);
+
   return `<span class="scan-tick-loop">${content}</span><span class="scan-tick-loop" aria-hidden="true">${content}</span>`;
+
 }
+
+
 
 function updateSymbolOptions(bot) {
+
   const sel = $("cfgSymbol");
+
   if (!sel) return;
+
   const current = String(sel.value || "AUTO").toUpperCase();
+
   const set = new Set(["AUTO"]);
+
   const add = (v) => {
+
     const s = String(v || "").toUpperCase().trim();
+
     if (s && s !== "AUTO" && s !== "SCAN" && /^[A-Z0-9]{3,20}USDT$/.test(s)) set.add(s);
+
   };
+
   add(bot?.config?.symbol);
+
   add(bot?.config?.primarySymbol);
+
   for (const r of (bot?.scanBoard || [])) add(r?.symbol);
+
   for (const r of (bot?.openLivePositions || [])) add(r?.symbol);
+
   for (const s of ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"]) set.add(s);
+
   sel.innerHTML = Array.from(set).map((s) => `<option value="${s}">${s}</option>`).join("");
+
   sel.value = set.has(current) ? current : "AUTO";
+
 }
+
+
 
 function hasHermesOfficeState(bot) {
+
   const agents = bot?.hermesAgents?.agents;
+
   return !!(agents && typeof agents === "object" && Object.keys(agents).length);
+
 }
+
+
 
 function withLastRichBotStatus(data) {
+
   if (!data || typeof data !== "object") return data;
+
   const bot = data.bot && typeof data.bot === "object" ? data.bot : {};
+
   if (hasHermesOfficeState(bot)) {
+
     lastRichBotStatus = { ...bot };
+
     return data;
+
   }
+
   if (!lastRichBotStatus || !hasHermesOfficeState(lastRichBotStatus)) return data;
+
   const mergedBot = {
+
     ...lastRichBotStatus,
+
     ...bot,
+
     hermesAgents: lastRichBotStatus.hermesAgents,
+
     hermesSupervisorReview: bot.hermesSupervisorReview || lastRichBotStatus.hermesSupervisorReview,
+
     scanBoard: Array.isArray(bot.scanBoard) && bot.scanBoard.length ? bot.scanBoard : lastRichBotStatus.scanBoard,
+
     openLivePositions: Array.isArray(bot.openLivePositions) && bot.openLivePositions.length
+
       ? bot.openLivePositions
+
       : lastRichBotStatus.openLivePositions,
+
     log: Array.isArray(bot.log) && bot.log.length ? bot.log : lastRichBotStatus.log,
+
     lastDecision: bot.lastDecision && typeof bot.lastDecision === "object" && Object.keys(bot.lastDecision).length
+
       ? bot.lastDecision
+
       : lastRichBotStatus.lastDecision,
-    tradingViewWatcher: bot.tradingViewWatcher && typeof bot.tradingViewWatcher === "object" && Object.keys(bot.tradingViewWatcher).length
-      ? bot.tradingViewWatcher
-      : lastRichBotStatus.tradingViewWatcher,
-    lastCodexReport: bot.lastCodexReport || lastRichBotStatus.lastCodexReport,
-    externalSignalGuard: bot.externalSignalGuard || lastRichBotStatus.externalSignalGuard,
+
   };
+
   return { ...data, bot: mergedBot, dashboardOfficeCached: true };
+
 }
+
+
 
 function renderHermesKanban(bot) {
+
   if (!ui.hermesKanban) return;
+
   const state = bot?.hermesAgents || {};
+
   const agents = state.agents && typeof state.agents === "object" ? state.agents : {};
+
   const agentSkin = {
+
     hermes_supervisor: { hair: "#111827", color: "#f43f5e", skin: "#f0c9a6", tool: "S", short: "Supervisor", role: "คุมจังหวะและ policy ของทีม" },
+
     market_analyst: { hair: "#1e3a5f", color: "#3b82f6", skin: "#f5d0b5", tool: "🔎", short: "Scan Lead", role: "สแกนตลาดหาโอกาส" },
+
     data_quality_guard: { hair: "#0e7490", color: "#22d3ee", skin: "#e8c4a8", tool: "✓", short: "Liquidity QC", role: "ตรวจคุณภาพข้อมูล" },
+
     news_sentiment_guard: { hair: "#713f12", color: "#60a5fa", skin: "#d4a574", tool: "📰", short: "News Pulse", role: "วิเคราะห์ sentiment" },
+
     risk_manager: { hair: "#14532d", color: "#22c55e", skin: "#f0c9a6", tool: "🛡", short: "Risk Gate", role: "กรองความเสี่ยง" },
+
     portfolio_manager: { hair: "#166534", color: "#4ade80", skin: "#e8b896", tool: "📊", short: "Size Desk", role: "จัดสรรขนาดพอร์ต" },
+
     position_guardian: { hair: "#064e3b", color: "#86efac", skin: "#f7c59f", tool: "👁", short: "Pos Watch", role: "เฝ้า position ค้าง" },
+
     strategy_builder: { hair: "#581c87", color: "#a78bfa", skin: "#f5d0b5", tool: "🧩", short: "Plan Maker", role: "สร้างแผนเข้าเทรด" },
+
     backtest_agent: { hair: "#4c1d95", color: "#c4b5fd", skin: "#d4a574", tool: "🧪", short: "WF Tester", role: "ทดสอบ walk-forward" },
+
     execution_agent: { hair: "#92400e", color: "#f59e0b", skin: "#f0c9a6", tool: "⚡", short: "Order Exec", role: "ส่งคำสั่งซื้อขาย" },
+
     reflection_agent: { hair: "#78350f", color: "#fbbf24", skin: "#e8c4a8", tool: "💭", short: "Trade Review", role: "ทบทวนผลเทรด" },
+
     memory_agent: { hair: "#374151", color: "#34d399", skin: "#f7c59f", tool: "📚", short: "Lesson Bank", role: "เก็บบทเรียน" },
+
   };
+
   const roomProps = {
+
     market: ["shelf", "map", "plant"],
+
     risk: ["clock", "plant", "shelf"],
+
     strategy: ["shelf", "clock", "plant"],
+
     ops: ["map", "clock", "plant"],
+
   };
+
   const orderedIds = [
+
     "hermes_supervisor",
+
     "market_analyst",
+
     "risk_manager",
+
     "portfolio_manager",
+
     "position_guardian",
+
     "strategy_builder",
+
     "backtest_agent",
+
     "execution_agent",
+
     "reflection_agent",
+
     "memory_agent",
+
   ];
+
   const rawAgentState = (agent) => {
+
     const s = String(agent?.state || "todo").toLowerCase();
+
     return ["todo", "doing", "done", "blocked"].includes(s) ? s : "todo";
+
   };
+
   const agentDisplayState = (agent) => {
+
     const raw = rawAgentState(agent);
+
     const runs = Number(agent?.runs || 0);
+
     const updatedAt = Number(agent?.updatedAt || 0);
+
     const ageSec = updatedAt > 0 ? (Date.now() / 1000) - updatedAt : Infinity;
+
     if (raw === "blocked") return { cls: "blocked", badge: "BLOCKED", label: "ติดเงื่อนไข" };
+
     if (raw === "doing" || ageSec <= 15) return { cls: "active", badge: "ACTIVE", label: "กำลังทำ" };
+
     if (raw === "done") return { cls: "done", badge: "DONE", label: "งานล่าสุดผ่าน" };
+
     if (runs > 0) return { cls: "idle", badge: "IDLE", label: "รอรอบถัดไป" };
+
     return { cls: "todo", badge: "TODO", label: "รอเริ่ม" };
+
   };
+
   const actionText = (agentId, agent) => {
+
     const display = agentDisplayState(agent);
+
     const runs = Number(agent?.runs || 0);
+
     const isFreshTodo = display.cls === "todo";
+
     const skin = agentSkin[agentId] || {};
+
     const fallbackRole = skin.role || agent.role || "รอรอบทำงาน";
+
     const action = isFreshTodo ? fallbackRole : (agent.lastAction || fallbackRole);
+
     const idleProgress = display.cls === "idle" && runs > 0 ? ` · เคยทำ ${runs} รอบ` : "";
+
     const reason = !isFreshTodo && agent.lastReason ? ` · ${agent.lastReason}` : "";
+
     return String(action + idleProgress + reason).slice(0, 62);
+
   };
+
   const renderAgentCard = (agentId, idx) => {
+
     const agent = agents[agentId] || {};
+
     const skin = agentSkin[agentId] || { hair: "#334155", color: "#38bdf8", skin: "#f7c59f", tool: "•", short: agentId };
+
     const display = agentDisplayState(agent);
+
     const name = skin.short || agent.name || agentId;
+
     const runs = Number(agent?.runs || 0);
+
     const runBadge = runs > 0 ? `<span class="trading-runs">×${runs}</span>` : "";
+
     const delay = ((idx % 5) * 0.42).toFixed(2);
+
     return `
+
       <div class="trading-agent ${display.cls}" style="--agent-hair:${skin.hair};--agent-color:${skin.color};--skin-tone:${skin.skin || "#f7c59f"};--agent-delay:${delay}s">
+
         <span class="trading-status-badge" title="${esc(name)} ${esc(display.badge)}">${esc(display.badge)}</span>
+
         <span class="trading-state"></span>
+
         <div class="trading-desk" aria-hidden="true">
+
           <div class="trading-monitor"><div class="trading-screen"></div></div>
+
           <div class="trading-chair"></div>
+
         </div>
+
         <div class="trading-avatar" aria-hidden="true">
+
           <div class="trading-hair"></div>
+
           <div class="trading-head">
+
             <div class="trading-eye left"></div>
+
             <div class="trading-eye right"></div>
+
             <div class="trading-blush left"></div>
+
             <div class="trading-blush right"></div>
+
             <div class="trading-mouth"></div>
+
           </div>
+
           <div class="trading-body"></div>
+
           <div class="trading-leg left"></div>
+
           <div class="trading-leg right"></div>
+
           <div class="trading-arm left"></div>
+
           <div class="trading-arm right"></div>
+
           <div class="trading-tool">${skin.tool}</div>
+
         </div>
+
         <div class="trading-name">${esc(name)}${runBadge}</div>
+
         <div class="trading-action"><b>${esc(display.label)}</b>${esc(actionText(agentId, agent))}</div>
+
       </div>`;
+
   };
+
   const rooms = [
+
     { key: "control", title: "Control", color: "#f43f5e", ids: ["hermes_supervisor"] },
+
     { key: "market", title: "Intel Core", color: "#2563eb", ids: ["market_analyst", "data_quality_guard", "news_sentiment_guard"] },
+
     { key: "risk", title: "Risk Core", color: "#16a34a", ids: ["risk_manager", "portfolio_manager", "position_guardian"] },
+
     { key: "strategy", title: "Strategy Lab", color: "#7c3aed", ids: ["strategy_builder", "backtest_agent"] },
+
     { key: "ops", title: "Trade Ops", color: "#d97706", ids: ["execution_agent", "reflection_agent", "memory_agent"] },
+
   ];
+
   const flatIds = rooms.flatMap((r) => r.ids);
+
   const counts = flatIds.reduce((acc, id) => {
+
     const display = agentDisplayState(agents[id] || {});
+
     acc.total += 1;
+
     acc[display.cls] = (acc[display.cls] || 0) + 1;
+
     return acc;
+
   }, { total: 0 });
+
   const openPositions = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions.length : 0;
+
   const activeTasks = (counts.active || 0) + openPositions;
+
   const statusText = bot?.running ? "All Systems Operational" : "Standby";
+
   const winsToday = num0(kpiSticky.liveWinsToday);
+
   const lossesToday = num0(kpiSticky.liveLossToday);
+
   const tradesToday = winsToday + lossesToday;
+
   const winToday = tradesToday > 0 ? num0(kpiSticky.liveWinToday).toFixed(0) : "—";
+
   const pnlToday = num0(kpiSticky.livePnlToday);
+
   const pnlTone = pnlToday < 0 ? "bad" : pnlToday > 0 ? "good" : "";
+
   const roomHtml = rooms.map((room) => `
+
     <section class="office-room room-${room.key}" style="--room-color:${room.color}">
+
       <div class="room-title">${esc(room.title)}</div>
+
       ${(roomProps[room.key] || []).map((p) => `<div class="room-prop ${p}" aria-hidden="true"></div>`).join("")}
+
       <div class="room-agents">
+
         ${room.ids.map((id) => renderAgentCard(id, flatIds.indexOf(id))).join("")}
+
       </div>
+
     </section>
+
   `).join("");
+
   const engine = state.engine && typeof state.engine === "object" ? state.engine : {};
+
   const mission = engine.mission || "analyze → plan → learn → hypothesize → reflect → optimize";
+
   const existingTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
+
   ui.hermesKanban.innerHTML = `
+
     <div class="office-topbar">
+
       <div class="office-brand"><b>Hermes Trading Lab Virtual Office</b><span>${esc(counts.total)} AI agents working together · ${esc(mission)}</span></div>
+
       <div class="office-status"><b><span class="dot"></span>${esc(statusText)}</b><span id="hermesKanbanMeta">cycle ${Number(state.cycle || 0) || "—"}</span></div>
+
       <div class="office-daily-kpis" title="Daily live trade performance">
+
         <div class="office-daily-kpi"><b>${esc(winToday)}${tradesToday > 0 ? "%" : ""}</b><span>Win วันนี้ · ${winsToday}/${lossesToday}</span></div>
+
         <div class="office-daily-kpi ${pnlTone}"><b>${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)}</b><span>PnL วันนี้ USDT</span></div>
+
       </div>
+
     </div>
+
     <div class="office-main">${roomHtml}</div>
+
     <div class="trading-scan-ticker"><span class="trading-scan-track"></span></div>`;
+
   const freshTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
+
   if (existingTicker && freshTicker) freshTicker.replaceWith(existingTicker);
+
   updateOfficeSidebar(bot, counts, activeTasks);
+
   const ticker = scanTickerPayload(bot);
+
   const tickerTrack = ui.hermesKanban.querySelector(".trading-scan-track");
+
   const tickerAge = Date.now() - Number(scanTickerCache.updatedAt || 0);
+
   const shouldUpdateTicker = ticker.key !== scanTickerCache.key && tickerAge >= Number(scanTickerCache.durationMs || 56000);
+
   if (tickerTrack && (!scanTickerCache.key || shouldUpdateTicker || !tickerTrack.innerHTML.trim())) {
+
     tickerTrack.innerHTML = scanTickerLoopHtml(ticker.html);
+
     tickerTrack.style.setProperty("--ticker-duration", `${Math.round(ticker.durationMs / 1000)}s`);
+
     scanTickerCache = { key: ticker.key, html: ticker.html, updatedAt: Date.now(), durationMs: ticker.durationMs };
+
   }
+
 }
+
+
 
 function updateOfficeSidebar(bot, counts, activeTasks) {
+
   const panel = $("officeStatusPanel");
+
   const title = $("officeStatusTitle");
+
   const agentsOnline = $("officeAgentsOnline");
+
   const activeEl = $("officeActiveTasks");
+
   const activityEl = $("officeTodayActivity");
+
   if (!panel || !title) return;
+
   const total = Number(counts?.total || 0);
+
   const online = total - Number(counts?.blocked || 0);
+
   const running = !!bot?.running;
+
   const pnlToday = num0(kpiSticky.livePnlToday);
+
   const winsToday = num0(kpiSticky.liveWinsToday);
+
   const lossesToday = num0(kpiSticky.liveLossToday);
+
   const activityPct = winsToday + lossesToday > 0
+
     ? `${((winsToday / (winsToday + lossesToday)) * 100).toFixed(0)}% win`
+
     : pnlToday !== 0 ? `${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)} USDT` : "—";
+
   if (agentsOnline) agentsOnline.textContent = `${online}/${total}`;
+
   if (activeEl) activeEl.textContent = String(activeTasks ?? 0);
+
   if (activityEl) activityEl.textContent = activityPct;
+
   panel.classList.remove("standby", "error");
+
   if (running) {
+
     title.textContent = "OPEN & ACTIVE";
+
   } else if (counts?.blocked) {
+
     panel.classList.add("error");
+
     title.textContent = "BLOCKED";
+
   } else {
+
     panel.classList.add("standby");
+
     title.textContent = "STANDBY";
+
   }
+
 }
+
+
 
 function renderHermesSupervisor(bot) {
+
   if (!ui.hermesSupervisorReview) return;
+
   const review = bot?.hermesSupervisorReview && typeof bot.hermesSupervisorReview === "object"
+
     ? bot.hermesSupervisorReview
+
     : null;
+
   if (!review) {
+
     ui.hermesSupervisorReview.innerHTML = `
+
       <div class="supervisor-head"><span>Hermes Supervisor</span><span class="supervisor-severity">WAIT</span></div>
+
       <div class="supervisor-summary">รอข้อมูล review จาก Hermes หลัก</div>`;
+
     return;
+
   }
+
   const severity = String(review.severity || "ok").toLowerCase();
+
   const issues = Array.isArray(review.issues) ? review.issues : [];
-  const handoff = Array.isArray(review.codexHandoff) ? review.codexHandoff : [];
+
+  const handoff = Array.isArray(review.cmuxHandoff) ? review.cmuxHandoff : [];
+
   const issueHtml = issues.length
+
     ? issues.slice(0, 4).map((x) => `
+
       <div class="supervisor-item">
+
         <div class="supervisor-agent">${esc(x.agent || "hermes")}</div>
+
         <div>
+
           <div class="supervisor-title">${esc(x.title || "Review issue")}</div>
+
           <div class="supervisor-detail">${esc(x.detail || x.suggestion || "-")}</div>
+
         </div>
+
       </div>`).join("")
-    : `<div class="supervisor-item"><div class="supervisor-agent">Hermes</div><div><div class="supervisor-title">Agent team healthy</div><div class="supervisor-detail">ยังไม่พบจุดที่ต้องให้ Codex แก้โค้ด</div></div></div>`;
-  const codexHtml = handoff.length
-    ? `<div class="supervisor-codex"><b>Codex handoff:</b> ${esc(handoff.slice(0, 2).map((x) => x.task || x.agent || "-").join(" · "))}</div>`
+
+    : `<div class="supervisor-item"><div class="supervisor-agent">Hermes</div><div><div class="supervisor-title">Agent team healthy</div><div class="supervisor-detail">ยังไม่พบจุดที่ต้องให้ Cmux แก้โค้ด</div></div></div>`;
+
+  const cmuxHtml = handoff.length
+
+    ? `<div class="supervisor-cmux"><b>Cmux handoff:</b> ${esc(handoff.slice(0, 2).map((x) => x.task || x.agent || "-").join(" · "))}</div>`
+
     : "";
+
   const copyHtml = handoff.length
-    ? `<button id="supervisorCopyTask" class="supervisor-copy" type="button">Copy Codex Task</button>`
+
+    ? `<button id="supervisorCopyTask" class="supervisor-copy" type="button">Copy Cmux Task</button>`
+
     : "";
+
   ui.hermesSupervisorReview.innerHTML = `
+
     <div class="supervisor-head">
+
       <span>Hermes Supervisor</span>
+
       <span class="supervisor-severity ${esc(severity)}">${esc(severity.toUpperCase())}</span>
+
     </div>
+
     <div class="supervisor-summary">${esc(review.summary || "ทีม agent ปกติ")}</div>
+
     ${issueHtml}
-    ${codexHtml}
+
+    ${cmuxHtml}
+
     ${copyHtml}`;
+
   const copyBtn = $("supervisorCopyTask");
+
   if (copyBtn) {
+
     copyBtn.addEventListener("click", async () => {
+
       const prompt = buildHermesSupervisorTaskPrompt(review, bot);
+
       try {
+
         await copyText(prompt);
-        showToast("ok", "Copied Hermes task for Codex");
+
+        showToast("ok", "Copied Hermes task for Cmux");
+
       } catch (e) {
+
         showToast("err", "Copy failed — select text manually");
+
       }
+
     });
+
   }
+
 }
+
+
 
 function buildHermesSupervisorTaskPrompt(review, bot) {
-  const handoff = Array.isArray(review?.codexHandoff) ? review.codexHandoff : [];
+
+  const handoff = Array.isArray(review?.cmuxHandoff) ? review.cmuxHandoff : [];
+
   const issues = Array.isArray(review?.issues) ? review.issues : [];
+
   const runs = review?.agentRuns && typeof review.agentRuns === "object" ? review.agentRuns : {};
+
   const lines = [
+
     "Hermes Supervisor Review task",
+
     "",
+
     `Severity: ${review?.severity || "unknown"}`,
+
     `Summary: ${review?.summary || "-"}`,
+
     `ReviewedAt: ${review?.reviewedAt || "-"}`,
+
     "",
-    "Codex tasks:",
-    ...(handoff.length ? handoff.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "hermes"} — ${x.task || "-"}`) : ["- ไม่มี codex handoff"]),
+
+    "Cmux tasks:",
+
+    ...(handoff.length ? handoff.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "hermes"} — ${x.task || "-"}`) : ["- ไม่มี cmux handoff"]),
+
     "",
+
     "Issues:",
+
     ...(issues.length ? issues.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "hermes"} — ${x.title || "-"} | ${x.detail || "-"} | suggestion: ${x.suggestion || "-"}`) : ["- ไม่มี issue"]),
+
     "",
+
     `Agent runs: ${JSON.stringify(runs)}`,
+
     `Bot running: ${!!bot?.running}`,
+
     `Execution mode: ${bot?.config?.executionMode || bot?.activePosition?.mode || "-"}`,
+
     "",
+
     "Please use GitNexus impact analysis first, then fix the code or structure safely, add/update tests, restart Hermes if needed, and summarize changed files.",
+
   ];
+
   return lines.join("\n");
+
 }
+
+
 
 async function copyText(text) {
+
   if (navigator.clipboard && window.isSecureContext) {
+
     await navigator.clipboard.writeText(text);
+
     return;
+
   }
+
   const ta = document.createElement("textarea");
+
   ta.value = text;
+
   ta.setAttribute("readonly", "");
+
   ta.style.position = "fixed";
+
   ta.style.left = "-9999px";
+
   document.body.appendChild(ta);
+
   ta.select();
+
   const ok = document.execCommand("copy");
+
   ta.remove();
+
   if (!ok) throw new Error("copy failed");
+
 }
+
+
 
 function normalizedLeverageRange() {
-  const cap = Math.max(1, Math.min(25, Math.floor(Number(SERVER_MAX_LEVERAGE || 25))));
+
+  const cap = 25;
+
   let min0 = Math.max(1, Math.floor(Number($("cfgLevMin")?.value || 1)));
+
   let max0 = Math.max(1, Math.floor(Number($("cfgLevMax")?.value || cap)));
+
   min0 = Math.min(min0, cap);
+
   max0 = Math.min(Math.max(max0, min0), cap);
+
   if ($("cfgLevMin")) $("cfgLevMin").value = String(min0);
+
   if ($("cfgLevMax")) $("cfgLevMax").value = String(max0);
+
   localStorage.setItem(LEV_MIN_KEY, String(min0));
+
   localStorage.setItem(LEV_MAX_KEY, String(max0));
+
   return { min: min0, max: max0 };
+
 }
+
+
 
 async function applyLeverageConfigIfRunning() {
+
   if (levUpdateInFlight) return;
+
   try {
+
     levUpdateInFlight = true;
+
     const rs = await req("/status");
+
     const lev = normalizedLeverageRange();
+
     if (!rs?.bot?.running) return;
+
     const cfgRs = await req("/bot/config", "POST", { leverageMin: lev.min, leverageMax: lev.max, leverage: Math.min(lev.max, Math.max(lev.min, Number($("cfgLevMax")?.value || lev.max))), leverageAutoEnabled: true, adaptiveLeverageEnabled: true, adaptiveLeverageMax: lev.max });
+
     if (cfgRs?.bot?.ok === false) {
+
       const e = String(cfgRs?.bot?.error || cfgRs?.bot?.reason || "");
+
       // Some backend builds do not support /autotrade/config.
+
       // Keep new values in UI and apply on next Start payload.
+
       if (e.includes("HTTP 404")) {
+
         showToast("info", `Lev max saved x${lev.max} (apply on next Start)`);
+
         return;
+
       }
+
       throw new Error(e || "Leverage update failed");
+
     }
+
     showToast("ok", `Lev max x${lev.max}`);
+
     await refreshStatus();
+
   } catch (e) { showToast("err", String(e.message || e).slice(0, 100)); }
+
   finally { levUpdateInFlight = false; }
+
 }
+
+
 
 function cmuxUnreachableHint(base) {
+
   return `ไม่เชื่อมต่อ cmux (${base}) — รัน: cd backend && python cmux_service.py serve`;
+
 }
+
+
 
 function reqTimeoutByPath(path, fallbackMs = 15000) {
+
   const p = String(path || "");
+
   if (p === "/status/quick") return 12000;
+
   if (p === "/status") return 18000;
+
   if (p.startsWith("/bot/start") || p.startsWith("/service/start")) return 45000;
+
   return fallbackMs;
+
 }
+
+
 
 async function req(path, method = "GET", payload = null, timeoutMs = 15000) {
+
   const primary = (ui.baseUrl.value || "").replace(/\/$/, "") || defaultCmuxUrl;
+
   const fallback = defaultCmuxUrl.replace(/\/$/, "");
+
   const targets = primary === fallback ? [primary] : [primary, fallback];
+
   const effectiveTimeout = reqTimeoutByPath(path, timeoutMs);
+
   let lastErr = null;
+
   for (let i = 0; i < targets.length; i++) {
+
     const base = targets[i];
+
     const ctrl = new AbortController();
+
     const timer = setTimeout(() => ctrl.abort(), effectiveTimeout);
+
     try {
+
       const res = await fetch(base + path, {
+
         method,
+
         signal: ctrl.signal,
+
         headers: { "Content-Type": "application/json" },
+
         body: payload ? JSON.stringify(payload) : undefined,
+
       });
+
       const txt = await res.text();
+
       const data = txt ? JSON.parse(txt) : { ok: res.ok };
+
       if (!res.ok || data?.ok === false) {
+
         throw new Error(humanizeErr(data?.error || data?.detail || `HTTP ${res.status}`));
+
       }
+
       if (ui.baseUrl.value !== base) ui.baseUrl.value = base;
+
       return data;
+
     } catch (e) {
+
       if (e?.name === "AbortError") lastErr = new Error(`cmux timeout (${base}) — ${cmuxUnreachableHint(base)}`);
+
       else if (!e?.message || e.message === "Failed to fetch") lastErr = new Error(cmuxUnreachableHint(base));
+
       else lastErr = e;
+
       if (i < targets.length - 1) await new Promise((r) => setTimeout(r, 300));
+
     } finally {
+
       clearTimeout(timer);
+
     }
+
   }
+
   throw lastErr || new Error(cmuxUnreachableHint(primary));
+
 }
+
+
 
 function humanizeErr(detail) {
+
   const s = String(detail || "");
+
   if (s.includes("-4411") || s.includes("agreement contract fapi")) {
+
     return "ต้องยอมรับข้อตกลง Binance Futures ก่อน LIVE";
+
   }
+
   if (s.includes("-2015") || s.includes("Invalid API-key, IP, or permissions")) {
+
     return "API-key / IP / permission ของ Binance Futures ยังไม่ผ่าน";
+
   }
+
   return s;
+
 }
+
+
 
 async function precheckLiveBeforeStart(payload) {
+
   if (String(payload?.executionMode || "PAPER").toUpperCase() !== "LIVE") return;
+
   let sym = String(payload?.symbol || "BTCUSDT").toUpperCase();
+
   if (!sym || sym === "AUTO" || sym === "SCAN") sym = "BTCUSDT";
+
   try {
+
     const rs = await req(`/bot/precheck-live?symbol=${encodeURIComponent(sym)}`);
+
     const pre = rs?.precheck || {};
+
     // Hard block only when server explicitly confirms agreement is required.
+
     if (pre.agreementRequired === true) {
+
       throw new Error("LIVE pre-check ไม่ผ่าน — ยอมรับข้อตกลง Binance ก่อน");
+
     }
+
     // If precheck endpoint is unavailable/404, continue start (server has its own fallback).
+
     if (pre.ok === false) {
+
       showToast("info", "LIVE pre-check ไม่สมบูรณ์ — จะเริ่มต่อและให้ระบบตรวจซ้ำ");
+
     }
+
   } catch (e) {
+
     const msg = String(e?.message || e);
+
     if (msg.includes("LIVE pre-check ไม่ผ่าน")) throw e;
+
     showToast("info", "ข้าม pre-check ชั่วคราว แล้วเริ่ม LIVE ต่อ");
+
   }
+
 }
+
+
 
 function showToast(type, message) {
+
   const root = $("toasts");
+
   if (!root) return;
+
   const el = document.createElement("div");
+
   el.className = `toast ${type}`;
+
   el.textContent = message;
+
   root.appendChild(el);
+
   while (root.children.length > 3) root.removeChild(root.firstChild);
+
   setTimeout(() => el.remove(), 2400);
+
 }
+
+
 
 function safeAppendLog(message, type = "info") {
+
   if (!ui.log) return;
+
   const color = type === "ok" ? "var(--good)" : type === "err" ? "var(--bad)" : "var(--muted)";
+
   ui.log.innerHTML = `<div class="log-line" style="color:${color}">[${new Date().toLocaleTimeString()}] ${esc(message)}</div>` + ui.log.innerHTML;
+
 }
+
+
 
 async function withBusy(button, fn) {
+
   if (!button || button.dataset.busy === "1" || isControlLocked()) return;
+
   const oldText = button.textContent;
+
   button.dataset.busy = "1";
+
   button.disabled = true;
+
   button.classList.add("busy");
+
   activeActionCount++;
+
   setGlobalControlLock(true);
+
   try {
+
     return await fn();
+
   } catch (e) {
+
     showToast("err", String(e.message || e).slice(0, 140));
+
     throw e;
+
   } finally {
+
     button.dataset.busy = "0";
+
     button.disabled = false;
+
     button.classList.remove("busy");
+
     button.textContent = oldText;
+
     activeActionCount = Math.max(0, activeActionCount - 1);
+
     if (!activeActionCount) setGlobalControlLock(false);
+
   }
+
 }
+
+
 
 function statusHtml(color, text) {
+
   return `<span class="dot" style="background:${color}"></span>${text}`;
+
 }
+
+
 
 function positionRenderKey(items) {
+
   return items.map((x) => [
+
     String(x.symbol || "").toUpperCase(),
+
     String(x.side || "").toUpperCase(),
+
     Number(x.qty || 0).toFixed(6),
+
     Number(x.leverage || 0).toFixed(0),
+
     Number(x.unRealizedProfit || 0).toFixed(6),
+
     Number(x.profitLockUsdt || 0).toFixed(6),
+
     Number(x.peakUnrealizedPnl || 0).toFixed(6),
+
     x.profitLockArmed ? "1" : "0",
+
   ].join("|")).join(";");
+
 }
+
+
 
 function renderOpenPositions(opens, liveCtx) {
+
   if (!Array.isArray(opens) || !ui.openPositions) return;
+
   const key = positionRenderKey(opens);
+
   if (key && key === openPositionsCache.key) return;
+
   const live = liveCtx || {};
+
   const liveSide = String(live.side || "FLAT").toUpperCase();
+
   const liveQty = Number(live.qty || 0);
+
   const liveHeader = `open ${opens.length} · live ${liveSide}${liveQty > 0 ? ` x${liveQty.toFixed(4)}` : ""}`;
+
   const err = String(live.openLivePositionsError || "").trim();
+
   const body = opens.length
+
     ? opens.map((x, i) => {
+
       let lock = "";
+
       const armed = !!x.profitLockArmed;
+
       const lockUsdt = Number(x.profitLockUsdt || 0);
+
       const peak = Number(x.peakUnrealizedPnl || 0);
+
       if (armed || peak !== 0 || lockUsdt > 0) {
+
         lock = armed
+
           ? ` · <span style="color:var(--good)">LOCK ${lockUsdt.toFixed(3)} USDT</span> peak=${peak.toFixed(3)}`
+
           : ` · <span style="color:var(--muted)">guarding</span> peak=${peak.toFixed(3)}`;
+
       }
+
       const upnl = Number(x.unRealizedProfit || 0);
+
       const upnlColor = upnl < 0 ? "var(--bad)" : upnl > 0 ? "var(--good)" : "var(--text)";
+
       const lev = Number(x.leverage || 0);
+
       const levText = lev > 0 ? ` <span style="color:var(--accent);font-weight:800">x${Math.floor(lev)}</span>` : "";
+
       return `<div class="log-line">#${i + 1} ${x.symbol}${levText} ${pillSignal(x.side)} uPnL <b style="color:${upnlColor}">${upnl.toFixed(3)}</b>${lock}</div>`;
+
     }).join("")
+
     : `<div class="log-line" style="color:var(--muted)">ไม่มี position ค้าง</div>
+
        <div class="log-line" style="color:var(--muted)">สถานะ live: ${liveHeader}</div>`;
+
   const errLine = err ? `<div class="log-line" style="color:var(--warn)">อ่าน Binance positions ไม่ได้: ${err}</div>` : "";
+
   const html = `<div class="log-line" style="color:var(--muted)">${liveHeader}</div>${errLine}${body}`;
+
   ui.openPositions.innerHTML = html;
+
   openPositionsCache = { key, html, updatedAt: Date.now() };
+
 }
+
+
+
+
+
+
+
+
+
+function renderSymbolProfileSummary(bot) {
+
+  const wrap = $("symbolProfileSummary");
+
+  if (!wrap) return;
+
+  const symbols = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions : [];
+
+  const fallback = Array.isArray(bot?.symbolProfiles) ? bot.symbolProfiles : [];
+
+  if (!symbols.length && !fallback.length) {
+
+    wrap.innerHTML = `<div class="metric-sub">ยังไม่มี symbol profile — เริ่ม trade เพื่อสะสม samples หรือตั้ง override ผ่าน /hermes/symbol/profile</div>`;
+
+    return;
+
+  }
+
+  const rows = symbols.length ? symbols.map((p) => ({
+
+    symbol: p.symbol || "—",
+
+    group: p.group || (p.state?.entryVolatilityTier) || "—",
+
+    source: p.source || "—",
+
+    samples: p.sampleTrades ?? p.learnedTrades ?? "—",
+
+    winRate: p.perf?.winRatePct ?? p.learnedWinRatePct ?? null,
+
+    pnl: p.perf?.pnl ?? p.learnedPnl ?? null,
+
+    pf: p.learnedProfitFactor ?? null,
+
+    recent: p.learnedRecentScore ?? null,
+
+    minConf: p.minConfidence ?? null,
+
+    tpPct: p.tpPct ?? null,
+
+    slPct: p.slPct ?? null,
+
+    lock: p.profitLockTriggerUsdt ?? null,
+
+  })) : fallback.slice(0, 8);
+
+  rows.sort((a, b) => (Number(b.samples) || 0) - (Number(a.samples) || 0));
+
+  wrap.innerHTML = `
+
+    <div class="vo-profile-head">
+
+      <span>Symbol Profile (3-tier)</span>
+
+      <span class="vo-profile-hint">low-vol → tight TP, high-vol → wide TP, low-liq → tiny cap</span>
+      <span class="vo-profile-hint" style="margin-left:8px;color:var(--accent)">PF = profit factor · Rec = recent score</span>
+
+    </div>
+
+    <div class="vo-profile-list">
+
+      ${rows.slice(0, 8).map((r) => {
+
+        const pf = r.pf !== null && r.pf !== undefined ? Number(r.pf) : null;
+
+        const pfTone = pf === null ? '' : (pf >= 1.2 ? 'good' : pf <= 0.9 ? 'bad' : '');
+
+        const minConf = r.minConf !== null && r.minConf !== undefined ? Number(r.minConf) : null;
+
+        const tpPct = r.tpPct !== null && r.tpPct !== undefined ? Number(r.tpPct) : null;
+
+        const slPct = r.slPct !== null && r.slPct !== undefined ? Number(r.slPct) : null;
+
+        const lock = r.lock !== null && r.lock !== undefined ? Number(r.lock) : null;
+
+        const recent = r.recent !== null && r.recent !== undefined ? Number(r.recent) : null;
+
+        return `
+
+        <div class="vo-profile-row">
+
+          <span class="vo-profile-sym">${esc(r.symbol)}</span>
+
+          <span class="vo-profile-grp">${esc(r.group)}</span>
+
+          <span class="vo-profile-src">${esc(r.source)}</span>
+
+          <span class="vo-profile-n" title="samples learned">${r.samples}</span>
+
+          ${r.winRate !== null ? `<span class="vo-profile-wr">WR ${(r.winRate || 0).toFixed(1)}%</span>` : ''}
+
+          ${r.pnl !== null ? `<span class="vo-profile-pnl ${(r.pnl||0) >= 0 ? 'pos' : 'neg'}">${(r.pnl||0).toFixed(2)}</span>` : ''}
+
+          <span class="vo-profile-meta ${pfTone}" title="profit factor (learned)">PF ${pf === null ? '—' : (pf >= 999 ? '∞' : pf.toFixed(2))}</span>
+
+          <span class="vo-profile-meta" title="min confidence (learned)">Conf ${minConf === null ? '—' : (minConf * 100).toFixed(0)}%</span>
+
+          <span class="vo-profile-meta" title="TP / SL % (learned)">TP/SL ${tpPct === null ? '—' : tpPct.toFixed(2)}% / ${slPct === null ? '—' : slPct.toFixed(2)}%</span>
+
+          <span class="vo-profile-meta" title="profit-lock trigger (learned)">Lock ${lock === null ? '—' : lock.toFixed(2)}$</span>
+
+          <span class="vo-profile-meta" title="recent score (learned)">Rec ${recent === null ? '—' : recent.toFixed(2)}</span>
+
+        </div>
+
+      `;
+
+      }).join("")}
+
+    </div>
+
+  `;
+
+}
+
+
+
+
+
+function marketContextMcpSummary(bot) {
+
+  return "";
+
+}
+
+
 
 function renderKpiCards(bot) {
+
   const liveStats = bot?.liveStatsAll || bot?.liveStats || {};
+
   const kpiToday = bot?.kpiTodayAllSymbols?.live || {};
+
   const incoming = {
+
     liveWinAll: num0(liveStats.winRatePct),
+
     livePnlAll: num0(liveStats.realizedPnl),
+
     liveWinsToday: num0(kpiToday.wins),
+
     liveLossToday: num0(kpiToday.losses),
+
     liveWinToday: num0(liveStats.winRatePctToday),
+
     livePnlToday: num0(liveStats.realizedPnlToday),
+
     lastTradeAt: num0(bot?.lastTradeAt, 0),
+
   };
+
   const hasData = (incoming.liveWinsToday + incoming.liveLossToday) > 0 || incoming.lastTradeAt > 0;
+
   if (hasData || kpiSticky.lastTradeAt === 0) kpiSticky = incoming;
+
   const pnl = num0(kpiSticky.livePnlAll);
+
   if (ui.winRate) ui.winRate.textContent = `${num0(kpiSticky.liveWinAll).toFixed(1)}%`;
+
   if (ui.winRateSub) ui.winRateSub.textContent = `วันนี้ ${num0(kpiSticky.liveWinsToday, 0)}/${num0(kpiSticky.liveLossToday, 0)} · ${num0(kpiSticky.liveWinToday).toFixed(0)}%`;
+
   if (ui.realizedPnl) {
+
     ui.realizedPnl.textContent = `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`;
+
     ui.realizedPnl.style.color = pnl >= 0 ? "var(--good)" : "var(--bad)";
+
   }
+
   if (ui.pnlSub) ui.pnlSub.textContent = `วันนี้ ${num0(kpiSticky.livePnlToday) >= 0 ? "+" : ""}${num0(kpiSticky.livePnlToday).toFixed(2)} USDT`;
+
 }
+
+
 
 function paintStatus(data) {
+
   data = withLastRichBotStatus(data);
+
   const hermes = data?.hermes || {};
+
   const bot = data?.bot || {};
+
   if (data && !data.dashboardSoftStale) lastGoodStatus = data;
+
   const stale = !!data?.stale || !!bot?.stale || !hermes.healthy;
-  const capLev = Number(bot?.riskLimits?.maxLeverage ?? 125);
-  if (Number.isFinite(capLev) && capLev > 0) SERVER_MAX_LEVERAGE = Math.min(25, capLev);
-  if ($("cfgLevMin")) $("cfgLevMin").max = String(Math.floor(SERVER_MAX_LEVERAGE));
-  if ($("cfgLevMax")) $("cfgLevMax").max = String(Math.floor(SERVER_MAX_LEVERAGE));
-  if (ui.levCapHint) ui.levCapHint.textContent = `x${Math.floor(SERVER_MAX_LEVERAGE)}`;
+
+  const activeLevMax = Number(bot?.config?.leverageMax ?? bot?.config?.adaptiveLeverageMax ?? SERVER_MAX_LEVERAGE ?? 25);
+
+  SERVER_MAX_LEVERAGE = 25;
+
+  if ($("cfgLevMin")) $("cfgLevMin").max = "25";
+
+  if ($("cfgLevMax")) $("cfgLevMax").max = "25";
+
+  if (ui.levCapHint) ui.levCapHint.textContent = `Lev.max x${Math.max(1, Math.min(25, Math.floor(activeLevMax || 25)))}`;
+
   normalizedLeverageRange();
+
   updateSymbolOptions(bot);
 
+
+
   const svcText = hermes.healthy ? "Healthy" : hermes.running ? "Degraded" : "Off";
+
   if (ui.svcStatus) ui.svcStatus.textContent = svcText;
 
+
+
   const running = !!bot.running;
+
   const botText = running ? "Running" : stale ? "Cached" : "Idle";
+
   if (ui.botStatus) ui.botStatus.textContent = botText;
 
+
+
   if (ui.backendBanner) {
+
     if (stale) {
+
       const reason = !hermes.healthy
+
         ? "Hermes/backend ไม่พร้อม"
+
         : "ข้อมูลอาจยังไม่สด";
+
       ui.backendBanner.textContent = `${reason} - ระบบกำลังพยายามกู้ตัวเองอัตโนมัติ`;
+
       ui.backendBanner.classList.add("show");
+
     } else {
+
       ui.backendBanner.textContent = "";
+
       ui.backendBanner.classList.remove("show");
+
     }
+
   }
+
+
 
   if (ui.serviceToggle) {
+
     const on = !!(hermes.running || hermes.healthy);
+
     ui.serviceToggle.textContent = on ? "Off" : "Svc";
+
     ui.serviceToggle.title = on ? "Stop Hermes" : "Start Hermes";
+
     ui.serviceToggle.className = on ? "btn-danger sm" : "btn-good sm";
+
   }
+
   if (ui.botToggle) {
+
     ui.botToggle.textContent = running ? "Halt" : "Bot";
+
     ui.botToggle.title = running ? "Stop bot" : "Start bot";
+
     ui.botToggle.className = running ? "btn-warn sm" : "btn-primary sm";
+
   }
+
+
 
   const pub = data?.network?.publicIp || {};
+
   const ip = String(pub.ip || "").trim();
+
   if (ui.publicIp) ui.publicIp.textContent = ip ? `IP ${ip}` : "";
+
   if (ui.publishIpHeader) {
+
     ui.publishIpHeader.textContent = ip ? `IP ${ip}` : "IP —";
+
   }
+
   if (ip && lastSeenPublicIp && ip !== lastSeenPublicIp) showToast("info", `IP ${lastSeenPublicIp} → ${ip}`);
+
   if (ip) lastSeenPublicIp = ip;
 
+
+
   const liveMode = String(bot?.activePosition?.mode || bot?.config?.executionMode || "").toUpperCase();
+
   if ($("cfgMode") && running && (liveMode === "LIVE" || liveMode === "PAPER")) {
+
     $("cfgMode").value = liveMode;
+
     localStorage.setItem(MODE_KEY, liveMode);
+
   }
+
   if (bot?.config && !levUpdateInFlight) {
+
     const f = document.activeElement;
+
     if (f !== $("cfgLevMin") && f !== $("cfgLevMax")) {
+
       const savedMin = Number(localStorage.getItem(LEV_MIN_KEY) || "");
+
       const savedMax = Number(localStorage.getItem(LEV_MAX_KEY) || "");
+
       const lmin = Number(bot.config.leverageMin ?? 1);
+
       const serverMax = Number(bot.config.adaptiveLeverageMax ?? bot.config.leverageMax ?? bot.config.leverage ?? Math.max(lmin, 25));
-      const cap = Math.max(1, Math.min(25, Math.floor(Number(SERVER_MAX_LEVERAGE || 25))));
+
+      const cap = 25;
+
       const displayMin = Number.isFinite(savedMin) && savedMin >= 1 ? Math.min(cap, Math.floor(savedMin)) : lmin;
+
       const displayMax = Math.max(
+
         Number.isFinite(serverMax) ? Math.floor(serverMax) : 1,
+
         Number.isFinite(savedMax) && savedMax >= 1 ? Math.floor(savedMax) : 1
+
       );
+
       if (Number.isFinite(displayMin) && $("cfgLevMin")) $("cfgLevMin").value = String(Math.max(1, Math.min(cap, Math.floor(displayMin))));
+
       if (Number.isFinite(displayMax) && $("cfgLevMax")) $("cfgLevMax").value = String(Math.max(1, Math.min(cap, Math.floor(displayMax))));
+
       normalizedLeverageRange();
+
     }
+
     if ($("cfgBenchmarkSymbol") && bot.config.benchmarkSymbol) $("cfgBenchmarkSymbol").value = bot.config.benchmarkSymbol;
+
     if ($("cfgBenchmarkPenalty") && bot.config.benchmarkConflictPenaltyPct != null) $("cfgBenchmarkPenalty").value = String(bot.config.benchmarkConflictPenaltyPct);
+
     if ($("cfgMaxOpenPositions") && bot.config.maxOpenPositions != null) $("cfgMaxOpenPositions").value = String(bot.config.maxOpenPositions);
+
     if ($("cfgPairLockStreak") && bot.config.pairLockLossStreak != null) $("cfgPairLockStreak").value = String(bot.config.pairLockLossStreak);
+
     if ($("cfgPairLockMinutes") && bot.config.pairLockMinutes != null) $("cfgPairLockMinutes").value = String(bot.config.pairLockMinutes);
+
     if ($("cfgBenchmarkEnabled") && bot.config.benchmarkFilterEnabled != null) $("cfgBenchmarkEnabled").checked = !!bot.config.benchmarkFilterEnabled;
+
     if ($("cfgPairLockEnabled") && bot.config.pairLockEnabled != null) $("cfgPairLockEnabled").checked = !!bot.config.pairLockEnabled;
+
   }
+
+
 
   renderKpiCards(bot);
-  renderTradingViewMcpStatus(bot);
+
+  renderSymbolProfileSummary(bot);
+
   renderHermesKanban(bot);
+
   renderHermesSupervisor(bot);
 
+
+
   const logs = Array.isArray(bot.log) ? bot.log : [];
+
   const extra = bot?.continuity?.orphanLive;
+
   const extraLine = extra ? `<div class="log-line">orphan ${esc(extra.symbol)} ${esc(extra.side)} qty=${Number(extra.qty || 0).toFixed(4)}</div>` : "";
+
   ui.log.innerHTML = logs.length
+
     ? extraLine + logs.slice(0, 80).map((x) => `<div class="log-line">[${new Date((x.ts || 0) * 1000).toLocaleTimeString()}] ${esc(x.msg || "-")}</div>`).join("")
+
     : extraLine || `<div class="log-line" style="color:var(--muted)">ยังไม่มี log</div>`;
 
+
+
   try {
+
     const board = Array.isArray(bot.scanBoard) ? bot.scanBoard : [];
+
     const scanOn = !!bot?.config?.marketScan;
+
     const orderedBoard = board.slice().sort((a, b) => Number(!!b.qualified) - Number(!!a.qualified) || Number(b.score || 0) - Number(a.score || 0));
+
     const scanSkip = bot.scanStatus || bot.lastSkip || null;
+
     const scanCode = String(scanSkip?.code || "").toUpperCase();
+
     const scanMsg = String(scanSkip?.msg || "");
+
     const scanRelevant = /SCAN|TIMEOUT|ANALYZE|INTEL/i.test(`${scanCode} ${scanMsg}`);
+
     const scanFallback = stale
+
       ? "backend stale / waiting recovery…"
+
       : !scanOn
+
         ? "scan ปิด"
+
         : scanRelevant && (scanCode || scanMsg)
+
           ? `${scanCode || "SCAN"}${scanMsg ? ` · ${scanMsg.replace(/^Skip:\s*/i, "")}` : ""}`
+
           : "scan กำลังทำงาน · ยังไม่มี candidate";
+
   if (ui.scanBoard) {
+
     ui.scanBoard.innerHTML = board.length
+
       ? orderedBoard.slice(0, 10).map((x, i) => {
+
           const extra = x.hardLocked ? " 🔒" : "";
+
           const q = x.qualified ? `<span style="color:var(--good)">READY</span>` : `<span style="color:var(--muted)">${esc(x.rejectReason || "-")}</span>`;
+
           const perf = (x.perfTrades || x.perfPnl || x.perfWinRatePct)
+
             ? ` · perf ${Number(x.perfWinRatePct || 0).toFixed(0)}%/${Number(x.perfPnl || 0).toFixed(2)} (${Number(x.perfTrades || 0)})`
+
             : "";
+
           return `<div class="log-line">#${i + 1} <b>${esc(x.symbol)}</b> ${pillSignal(x.signal)} c=${Number(x.confidence || 0).toFixed(2)} s=${Number(x.spreadBps || 0).toFixed(1)} ${q}${extra}${perf}</div>`;
+
         }).join("")
+
         : `<div class="log-line" style="color:var(--muted)">${scanFallback}</div>`;
+
     }
+
   } catch (_) {
+
     if (ui.scanBoard) ui.scanBoard.innerHTML = `<div class="log-line" style="color:var(--muted)">scan render error</div>`;
+
   }
+
+
 
   const hasOpenArray = Array.isArray(bot.openLivePositions);
+
   let opens = hasOpenArray ? bot.openLivePositions.slice() : [];
+
   // Fallback for builds that return only activePosition.live (no openLivePositions array).
+
   if (!hasOpenArray) {
+
     const live = bot?.activePosition?.live || {};
+
     const side = String(live.side || "FLAT").toUpperCase();
+
     const qty = Number(live.qty || 0);
+
     if ((side === "LONG" || side === "SHORT") && qty > 0) {
+
       opens = [{
+
         symbol: bot?.config?.symbol || "LIVE",
+
         side,
+
         qty,
+
         unRealizedProfit: Number(live.unRealizedProfit ?? live.uPnL ?? 0),
+
         leverage: Number(live.leverage || bot?.config?.leverage || 0),
+
       }];
+
     }
+
   }
+
   const shouldHoldLast = (
+
     opens.length === 0
+
     && openPositionsCache.html
+
     && (stale || !!bot.running)
+
     && (Date.now() - openPositionsCache.updatedAt) < 15000
+
   );
+
   if (!shouldHoldLast) {
+
     renderOpenPositions(opens, bot);
+
   }
+
+
 
   const ld = bot.lastDecision && typeof bot.lastDecision === "object" ? bot.lastDecision : {};
+
   let pipe = Array.isArray(ld.entryPipeline) ? ld.entryPipeline : [];
+
   if (!pipe.length && ld && Object.keys(ld).length) {
+
     const cfg = bot?.config || {};
+
     const conf = Number(ld.confidence ?? 0);
+
     const minConf = Number(cfg.minConfidence ?? 0.65);
+
     const ex = (ld.execution && typeof ld.execution === "object") ? ld.execution : {};
+
     const spread = Number(ex.spreadBps ?? 0);
+
     const maxSpread = Number(cfg.maxSpreadBps ?? 999);
+
     const sig = String(ld.signal || "WAIT").toUpperCase();
+
     pipe = [
+
       { gate: "SIGNAL", passed: sig === "LONG" || sig === "SHORT", detail: sig },
+
       { gate: "CONF", passed: conf >= minConf, detail: `${conf.toFixed(2)} >= ${minConf.toFixed(2)}` },
+
       { gate: "SPREAD", passed: spread <= maxSpread, detail: `${spread.toFixed(2)} <= ${maxSpread.toFixed(2)}` },
+
     ];
+
     if (bot?.lastSkip?.code) {
+
       pipe.push({ gate: "RESULT", passed: false, detail: String(bot.lastSkip.code) });
+
     } else {
+
       pipe.push({ gate: "RESULT", passed: true, detail: "pass" });
+
     }
+
   }
+
   // Fallback: when lastDecision is absent (timeout/scan-only cycle),
+
   // still show pipeline context from scanBoard + lastSkip.
+
   if (!pipe.length) {
+
     const board0 = Array.isArray(bot.scanBoard) ? bot.scanBoard : [];
+
     const top = board0[0] || {};
+
     const sig0 = String(top.signal || "WAIT").toUpperCase();
+
     const conf0 = Number(top.confidence || 0);
+
     const spread0 = Number(top.spreadBps || 0);
+
     const cfg0 = bot?.config || {};
+
     const minConf0 = Number(cfg0.minConfidence ?? 0.65);
+
     const maxSpread0 = Number(cfg0.maxSpreadBps ?? 999);
+
     pipe = [
+
       { gate: "SIGNAL", passed: sig0 === "LONG" || sig0 === "SHORT", detail: sig0 || "WAIT" },
+
       { gate: "CONF", passed: conf0 >= minConf0, detail: `${conf0.toFixed(2)} >= ${minConf0.toFixed(2)}` },
+
       { gate: "SPREAD", passed: spread0 <= maxSpread0, detail: `${spread0.toFixed(2)} <= ${maxSpread0.toFixed(2)}` },
+
     ];
+
     if (bot?.lastSkip?.code) pipe.push({ gate: "RESULT", passed: false, detail: String(bot.lastSkip.code) });
+
   }
+
   const ev = ld.engineVersion || bot.config?.engineVersion || "—";
+
   if (ui.engineVer) ui.engineVer.textContent = ev;
+
   if (ui.engineBadge) ui.engineBadge.textContent = String(ev).replace("pro-", "") || "desk";
 
+
+
   try {
+
     const skip = bot.lastSkip;
+
     if (ui.pipelineSkip) {
+
       ui.pipelineSkip.textContent = skip?.code ? `Skip: ${skip.code} - ${(skip.msg || "").slice(0, 80)}` : "";
+
     }
+
     if (ui.entryPipeline) {
+
       ui.entryPipeline.innerHTML = pipe.length
+
         ? pipe.map((g) => {
+
           const ok = !!g.passed;
+
           const short = (g.detail || "").slice(0, 28);
+
           return `<span class="gate-chip ${ok ? "ok" : "fail"}" title="${esc(g.detail || "")}">${ok ? "✓" : "✗"} ${esc(g.gate)}${short ? " · " + esc(short) : ""}</span>`;
+
         }).join("")
+
         : `<span class="gate-chip" style="color:var(--muted)">idle</span>`;
+
     }
+
   } catch (_) {
+
     if (ui.entryPipeline) ui.entryPipeline.innerHTML = `<span class="gate-chip" style="color:var(--muted)">pipeline render error</span>`;
+
   }
+
   const la = data?.learning?.lastApplied || {};
+
   if (ui.learningApplied) {
+
     const ts = Number(la.ts || 0);
+
     const dt = ts > 0 ? new Date(ts * 1000).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" }) : "—";
+
     const sym = String(la.symbol || "-");
+
     const st = la.applied ? "applied" : (la.note || "idle");
+
     ui.learningApplied.textContent = `Applied: ${st} · ${sym} · ${dt}`;
+
   }
+
   if (ui.learningAppliedBadge) {
+
     if (la.applied === true) {
+
       ui.learningAppliedBadge.className = "learn-badge ok";
+
       ui.learningAppliedBadge.textContent = "APPLIED";
+
     } else if (la.note === "train_now_completed") {
+
       ui.learningAppliedBadge.className = "learn-badge warn";
+
       ui.learningAppliedBadge.textContent = "PENDING";
+
     } else {
+
       ui.learningAppliedBadge.className = "learn-badge idle";
+
       ui.learningAppliedBadge.textContent = "IDLE";
+
     }
+
   }
+
 }
+
+
 
 function safePaintStatus(data) {
+
   try {
+
     paintStatus(data);
+
     return true;
+
   } catch (e) {
+
     console.error("dashboard paintStatus failed", e);
+
     if (ui.backendBanner) {
+
       ui.backendBanner.textContent = `Dashboard render error - ${String(e?.message || e).slice(0, 100)}`;
+
       ui.backendBanner.classList.add("show");
+
     }
+
     if (ui.log) {
+
       ui.log.innerHTML = `<div class="log-line" style="color:var(--bad)">Dashboard render error: ${esc(e?.message || e)}</div>`;
+
     }
+
     return false;
+
   }
+
 }
+
+
 
 function paintLearning(report) {
+
   if (!report?.ok) {
+
     ["learningLastTrain","learningSymbols","learningPromoted","learningThreshold"].forEach((id) => { if ($(id)) $(id).textContent = "—"; });
+
     ui.learningRows.innerHTML = `<div class="log-line" style="color:var(--muted)">ไม่มีรายงาน</div>`;
+
     if (ui.learningPromotedList) ui.learningPromotedList.innerHTML = `<div class="log-line" style="color:var(--muted)">ยังไม่มี promoted</div>`;
+
     return;
+
   }
+
   ui.learningLastTrain.textContent = new Date((report.trainedAt || 0) * 1000).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" });
+
   ui.learningSymbols.textContent = String(report.symbolsScanned ?? 0);
+
   ui.learningPromoted.textContent = String(report.promotedCount ?? 0);
+
   ui.learningThreshold.textContent = `${report.promoteHitRatePct ?? 0}%`;
+
   const promoted = Array.isArray(report.promoted) ? report.promoted : [];
+
   if (ui.learningPromotedList) {
+
     ui.learningPromotedList.innerHTML = promoted.length
+
       ? promoted.slice(0, 8).map((p, i) => {
+
         const rec = p.recommended || {};
+
         const m = rec.loosen ? "loosen" : rec.tighten ? "tighten" : "hold";
+
         return `<div class="log-line">#${i + 1} <b>${p.symbol}</b> hit=${Number(p.hitRatePct || 0).toFixed(0)}% ${m}</div>`;
+
       }).join("")
+
       : `<div class="log-line" style="color:var(--muted)">ไม่มี promoted ในรอบล่าสุด</div>`;
+
   }
+
   const rows = report.results || [];
+
   ui.learningRows.innerHTML = rows.length
-    ? rows.slice(0, 12).map((r) => `<div class="log-line">${r.symbol} wf=${Number(r.walkForwardHitRatePct || 0).toFixed(0)}% ${r.proposalOk ? "✓" : "—"}</div>`).join("")
+
+    ? rows.slice(0, 12).map((r) => {
+
+        const wf = Number(r.walkForwardHitRatePct || 0);
+
+        const ok = r.proposalOk ? "✓" : "—";
+
+        const tone = wf >= 55 ? "var(--good)" : wf <= 45 ? "var(--bad)" : "var(--muted)";
+
+        return `<div class="log-line" style="color:${tone}">${r.symbol} wf=${wf.toFixed(0)}% ${ok}</div>`;
+
+      }).join("")
+
     : `<div class="log-line" style="color:var(--muted)">ไม่มีผล symbol</div>`;
+
+  // --- Auto tune recommendation panel ---
+  try {
+    const tunePanel = document.getElementById("learningTuneReco");
+    if (tunePanel) {
+      const recos = [];
+      const promoted = Array.isArray(report.promoted) ? report.promoted : [];
+      for (const p of promoted) {
+        const r = p.recommended || {};
+        if (r.tighten) recos.push(`<div class="log-line" style="color:var(--bad)">🔻 <b>${esc(p.symbol)}</b> → tighten: hit-rate below threshold, ลด size / leverage</div>`);
+        else if (r.loosen) recos.push(`<div class="log-line" style="color:var(--good)">🔺 <b>${esc(p.symbol)}</b> → loosen: hit-rate ดีต่อเนื่อง, เพิ่ม size เล็กน้อย</div>`);
+      }
+      const weak = rows.filter((r) => Number(r.walkForwardHitRatePct || 0) < 45).slice(0, 5);
+      for (const r of weak) {
+        recos.push(`<div class="log-line" style="color:var(--warn)">⚠ <b>${esc(r.symbol)}</b> → walk-forward hit <45%: ควรพักหรือลด notional</div>`);
+      }
+      if (!recos.length) {
+        recos.push(`<div class="log-line" style="color:var(--muted)">ยังไม่มีข้อเสนอแนะ — learning กำลังสะสมข้อมูล</div>`);
+      }
+      tunePanel.innerHTML = `
+        <div class="vo-profile-head"><span>Auto Tune Recommendation</span><span class="vo-profile-hint">อิง walk-forward + promoted</span></div>
+        ${recos.join("")}
+      `;
+    }
+  } catch (e) { /* ignore */ }
+
 }
+
+
 
 async function refreshStatus() {
+
   if (statusRefreshInFlight) return;
+
   statusRefreshInFlight = true;
+
   try {
+
     let rs;
+
     try {
+
       rs = await req("/status/quick");
+
     } catch (quickErr) {
+
       if (lastGoodStatus) {
+
         safePaintStatus({
+
           ...lastGoodStatus,
+
           stale: false,
+
           dashboardSoftStale: true,
+
           dashboardWarning: String(quickErr?.message || quickErr || "status quick timeout").slice(0, 120),
+
         });
+
         return;
+
       }
+
       rs = await req("/status", "GET", null, 18000);
+
     }
+
     safePaintStatus(rs);
+
   } catch (e) {
+
     if (lastGoodStatus) {
+
       safePaintStatus({ ...lastGoodStatus, dashboardSoftStale: true });
+
     }
+
     ui.svcStatus.innerHTML = statusHtml("var(--bad)", "Error");
+
     ui.botStatus.textContent = "—";
+
     if (ui.log) ui.log.innerHTML = `<div class="log-line">${esc(e)}</div>`;
+
     if ((Date.now() - lastStatusToastAt) > 15000) {
+
       lastStatusToastAt = Date.now();
+
       showToast("err", String(e.message || e).slice(0, 80));
+
     }
+
   } finally {
+
     statusRefreshInFlight = false;
+
   }
+
 }
+
+
 
 async function refreshLearningReport() {
+
   try { paintLearning(await req("/learning/report")); }
+
   catch (e) {
+
     ui.learningRows.innerHTML = `<div class="log-line">${e}</div>`;
+
     showToast("err", "Learning error");
+
   }
+
 }
+
+
 
 async function ensureLearningAuto() {
+
   if (learningAutoTrainInFlight) return;
+
   try {
+
     const rep = await req("/learning/report");
+
     const trainedAt = Number(rep?.trainedAt || 0);
+
     const now = Math.floor(Date.now() / 1000);
+
     const staleSec = 30 * 60;
+
     const needsTrain = !rep?.ok || trainedAt <= 0 || (now - trainedAt) > staleSec;
+
     if (!needsTrain) return;
+
     if ((Date.now() - learningLastAutoTrainAt) < 10 * 60 * 1000) return;
+
     learningAutoTrainInFlight = true;
+
     learningLastAutoTrainAt = Date.now();
+
     await req("/learning/train-now", "POST", {});
+
     await refreshLearningReport();
+
     await refreshStatus();
+
     showToast("info", "Auto learning train complete");
+
   } catch (_) {
+
   } finally {
+
     learningAutoTrainInFlight = false;
+
   }
+
 }
+
+
 
 const PRO_FORM_PRESET = {
+
   cfgLevMin: 1, cfgLevMax: 25,
+
   minConfidence: 0.66, intervalSec: 25, cooldownSec: 20,
+
   maxSpreadBps: 16, maxSlippageBps: 18, slToTpRatio: 0.5, minRiskRewardRatio: 1.5,
+
   earlyEntryScoreGapMin: 1.4, earlyEntryMinConfidence: 0.60,
+
   lateEntryMaxBbPctB: 0.90, lateEntryMaxVwapDistancePct: 0.32,
+
 };
 
+
+
 function applyProFormPreset() {
+
   if ($("cfgLevMin")) $("cfgLevMin").value = String(PRO_FORM_PRESET.cfgLevMin);
+
   if ($("cfgLevMax")) $("cfgLevMax").value = String(PRO_FORM_PRESET.cfgLevMax);
+
   if ($("cfgMaxOpenPositions")) $("cfgMaxOpenPositions").value = "6";
+
   if ($("cfgPairLockMinutes")) $("cfgPairLockMinutes").value = "60";
+
   showToast("info", "โหลด PRO preset แล้ว");
+
 }
+
+
 
 function botPayload() {
+
   const lev = normalizedLeverageRange();
+
   return {
+
     symbol: $("cfgSymbol").value || "AUTO",
+
     usdtAmount: Number($("cfgUsdt").value || 50),
+
     leverage: Math.min(lev.max, Math.max(lev.min, Number($("cfgLevMax")?.value || lev.max))), leverageMin: lev.min, leverageMax: lev.max, leverageAutoEnabled: true, adaptiveLeverageEnabled: true, adaptiveLeverageMax: lev.max,
+
     marginType: "CROSSED",
+
     minRiskRewardRatio: PRO_FORM_PRESET.minRiskRewardRatio,
+
     atrTpSlEnabled: true, ema200StrictEnabled: true, engineVersion: "pro-2.0",
+
     intervalSec: PRO_FORM_PRESET.intervalSec, minConfidence: PRO_FORM_PRESET.minConfidence,
+
     htfStrictEnabled: true, htfMinStrength: 0.22,
+
     cooldownSec: PRO_FORM_PRESET.cooldownSec,
+
     allowFlip: false, strongFlipEnabled: true, strongFlipMinConfidence: 0.76, strongFlipMinScoreGap: 1.5, strongFlipUltraScoreGap: 2.2, strongFlipUltraConfRelax: 0.08,
+
     maxSpreadBps: PRO_FORM_PRESET.maxSpreadBps, maxSlippageBps: PRO_FORM_PRESET.maxSlippageBps,
+
     earlyEntryEnabled: true, earlyEntryScoreGapMin: PRO_FORM_PRESET.earlyEntryScoreGapMin, earlyEntryMinConfidence: PRO_FORM_PRESET.earlyEntryMinConfidence,
+
     lateEntryMaxBbPctB: PRO_FORM_PRESET.lateEntryMaxBbPctB, lateEntryMaxVwapDistancePct: PRO_FORM_PRESET.lateEntryMaxVwapDistancePct,
+
     executionMode: $("cfgMode").value || "PAPER",
+
     holdWinners: true, holdMinConfidence: 0.78, holdTrailPct: 0.32,
+
     marketScan: true, scanTopLiquid: 25, scanAnalyzeTop: 6,
+
     slToTpRatio: PRO_FORM_PRESET.slToTpRatio,
+
     benchmarkFilterEnabled: !!$("cfgBenchmarkEnabled").checked,
+
     benchmarkSymbol: ($("cfgBenchmarkSymbol").value || "BTCUSDT").toUpperCase(),
+
     benchmarkConflictPenaltyPct: Number($("cfgBenchmarkPenalty").value || 6),
+
     liveBadUtcHours: [],
+
     pairLockEnabled: !!$("cfgPairLockEnabled").checked,
+
     pairLockLossStreak: Number($("cfgPairLockStreak").value || 2),
+
     pairLockMinutes: Number($("cfgPairLockMinutes").value || 45),
+
     aiTpSlFromLearning: true, autoLearn: !!$("cfgAutoLearn").checked,
+
     feeMinNetProfitUSDT: 0.1, feeMinEdgeVsCostMultiple: 1.55,
+
     tpSlTargetUsdtEnabled: true, tpTargetMinUsdt: 0.55, tpTargetMaxUsdt: 2.2,
+
     volTargetEnabled: true, volTargetPct: 0.2, maxOpenPositions: Math.max(1, Math.min(20, Number($("cfgMaxOpenPositions")?.value || 6))),
+
     orphanAutoAdoptEnabled: true, orphanAutoAdoptForceSingleSymbol: false, orphanAutoAdoptMultiEnabled: true, learningRewardEnabled: true,
+
   };
+
 }
 
+
+
 $("loadProPreset")?.addEventListener("click", applyProFormPreset);
+
 $("btnRefresh")?.addEventListener("click", () => withBusy($("btnRefresh"), refreshStatus));
+
 $("serviceToggle")?.addEventListener("click", () => withBusy($("serviceToggle"), async () => {
+
   const rs = await req("/status");
+
   const on = !!(rs?.hermes?.running || rs?.hermes?.healthy);
+
   await req(on ? "/service/stop" : "/service/start", "POST", {});
+
   await refreshStatus();
+
 }));
+
 $("botToggle")?.addEventListener("click", () => withBusy($("botToggle"), async () => {
+
   const rs = await req("/status");
+
   if (rs?.bot?.running) {
+
     await req("/bot/stop", "POST", { force: true });
+
   } else {
+
     let payload = botPayload();
+
     await precheckLiveBeforeStart(payload);
+
     try {
+
       await req("/bot/start", "POST", payload);
+
     } catch (e) {
+
       const m = String(e?.message || "").match(/server max\s+(\d+)/i);
+
       if (m) {
+
         SERVER_MAX_LEVERAGE = Math.min(25, Math.max(1, Number(m[1])));
+
         normalizedLeverageRange();
+
         await req("/bot/start", "POST", botPayload());
+
       } else throw e;
+
     }
+
   }
+
   await refreshStatus();
+
 }));
+
 $("learningTrainNow")?.addEventListener("click", () => withBusy($("learningTrainNow"), async () => {
+
   await req("/learning/train-now", "POST", {});
+
   await refreshLearningReport();
+
   await refreshStatus();
+
 }));
+
 $("learningRefresh")?.addEventListener("click", () => withBusy($("learningRefresh"), refreshLearningReport));
+
 $("cfgLevMin")?.addEventListener("change", () => { normalizedLeverageRange(); applyLeverageConfigIfRunning(); });
+
 $("cfgLevMax")?.addEventListener("change", () => { normalizedLeverageRange(); applyLeverageConfigIfRunning(); });
+
 $("cfgMaxOpenPositions")?.addEventListener("change", async () => {
+
   try {
+
     const v = Math.max(1, Math.min(20, Number($("cfgMaxOpenPositions").value || 6)));
+
     $("cfgMaxOpenPositions").value = String(Math.floor(v));
+
     const rs = await req("/status");
+
     if (rs?.bot?.running) await req("/bot/config", "POST", { maxOpenPositions: Math.floor(v) });
+
     await refreshStatus();
+
   } catch (e) {
+
     showToast("err", String(e.message || e).slice(0, 120));
+
   }
+
 });
 
+
+
 setInterval(refreshStatus, 5000);
+
 setInterval(refreshLearningReport, 15000);
+
 setInterval(ensureLearningAuto, 60000);
+
 refreshStatus();
+
 refreshLearningReport();
+
 ensureLearningAuto();
+
 </script>
+
 </body>
+
 </html>
+

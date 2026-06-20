@@ -125,7 +125,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
 def main():
     server = HTTPServer(("127.0.0.1", LAUNCHER_PORT), LauncherHandler)
-    print(f"Binance Copilot launcher http://127.0.0.1:{LAUNCHER_PORT} (backend :{BACKEND_PORT})")
+    print(f"Cmux + Hermes launcher http://127.0.0.1:{LAUNCHER_PORT} (backend :{BACKEND_PORT})")
     server.serve_forever()
 
 

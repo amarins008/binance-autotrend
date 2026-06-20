@@ -1,4 +1,4 @@
-﻿# Binance AI Copilot (Futures-First)
+﻿# Binance Autotrend (Cmux + Hermes)
 
 ## What is production-upgraded
 
@@ -35,10 +35,10 @@ Docs: `docs/TRADING_ARCHITECTURE.md`
 API: `GET /trading/playbook`
 
 ```bash
-python codex_cli.py start --config autotrade.pro.json
+python cmux_cli.py start --config autotrade.pro.json
 ```
 
-### Standalone Bot (No Chrome Extension)
+### Cmux + Hermes Runtime (No Chrome Extension)
 
 ```bash
 cd backend
@@ -54,30 +54,30 @@ Run `cmux` control-plane:
 python cmux_service.py serve
 ```
 
-Start bot via `Codex` CLI (calls `cmux`, which manages `Hermes`):
+Start bot via `Cmux` CLI (calls `cmux`, which manages `Hermes`):
 
 ```bash
-python codex_cli.py start --config autotrade.standalone.json
+python cmux_cli.py start --config autotrade.standalone.json
 ```
 
 Stop bot:
 
 ```bash
-python codex_cli.py stop --force
+python cmux_cli.py stop --force
 ```
 
 Status:
 
 ```bash
-python codex_cli.py status
+python cmux_cli.py status
 ```
 
 Service-only controls:
 
 ```bash
-python codex_cli.py service start
-python codex_cli.py service status
-python codex_cli.py service stop
+python cmux_cli.py service start
+python cmux_cli.py service status
+python cmux_cli.py service stop
 ```
 
 ### Professional Dashboard
@@ -113,8 +113,8 @@ Dashboard features:
 - CLI train now:
 
 ```bash
-python backend/codex_cli.py learning train-now
-python backend/codex_cli.py learning report
+python backend/cmux_cli.py learning train-now
+python backend/cmux_cli.py learning report
 ```
 
 - Scheduler (daily by default in `cmux`):

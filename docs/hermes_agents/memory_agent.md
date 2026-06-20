@@ -23,7 +23,7 @@ Recommended memory windows:
 - 15 days: medium confidence behavior, symbol quality, payoff checks.
 - 30 days: durable policy evidence, but only with backtest/reflection support.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Memory does not persist after closed trades.
 - Snapshot data omits required runtime safety state.

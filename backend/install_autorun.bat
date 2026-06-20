@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set TASK_NAME=BinanceCopilotLauncher
+set TASK_NAME=CmuxHermesLauncher
 set SCRIPT=%~dp0run_launcher_hidden.ps1
 
 if not exist "%SCRIPT%" (

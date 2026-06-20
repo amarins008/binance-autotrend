@@ -1,7 +1,7 @@
 {
-  "name": "binance-autotrend-copilot",
+  "name": "binance-autotrend-cmux-hermes",
   "version": "0.1.0",
-  "description": "AI Copilot overlay for Binance built with Plasmo",
+  "description": "Binance autotrend control plane built on Cmux + Hermes",
   "author": "KGB008",
   "scripts": {
     "build": "node build.mjs",
@@ -9,16 +9,16 @@
     "build:plasmo": "plasmo build",
     "dev": "plasmo dev",
     "cmux:serve": "python backend/cmux_service.py serve",
-    "cmux:start": "python backend/codex_cli.py cmux start",
-    "cmux:stop": "python backend/codex_cli.py cmux stop",
-    "cmux:status": "python backend/codex_cli.py cmux status",
-    "dashboard:serve": "python -m http.server 8040 --directory backend/dashboard",
-    "bot:start": "python backend/codex_cli.py start",
-    "bot:stop": "python backend/codex_cli.py stop --force",
-    "bot:status": "python backend/codex_cli.py status",
-    "service:start": "python backend/codex_cli.py service start",
-    "service:stop": "python backend/codex_cli.py service stop",
-    "service:status": "python backend/codex_cli.py service status"
+    "cmux:start": "python backend/cmux_cli.py cmux start",
+    "cmux:stop": "python backend/cmux_cli.py cmux stop",
+    "cmux:status": "python backend/cmux_cli.py cmux status",
+    "dashboard:serve": "python backend/dashboard_server.py --host 0.0.0.0 --port 8040",
+    "hermes:start": "python backend/cmux_cli.py start",
+    "hermes:stop": "python backend/cmux_cli.py stop --force",
+    "hermes:status": "python backend/cmux_cli.py status",
+    "hermes:service:start": "python backend/cmux_cli.py service start",
+    "hermes:service:stop": "python backend/cmux_cli.py service stop",
+    "hermes:service:status": "python backend/cmux_cli.py service status"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -34,8 +34,8 @@
   },
   "manifest": {
     "manifest_version": 3,
-    "name": "Binance AI Copilot",
-    "description": "AI overlay, order book analytics, and one-click trade actions for Binance",
+    "name": "Binance Cmux Hermes",
+    "description": "Cmux + Hermes overlay, order book analytics, and one-click trade actions for Binance",
     "version": "0.2.0",
     "permissions": [
       "storage",

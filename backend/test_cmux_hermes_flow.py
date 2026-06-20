@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 import cmux_service
-import codex_cli
+import cmux_cli
 import hermes_service
 
 
@@ -24,7 +24,7 @@ class _FakeHttpResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
-class TestCodexToCmux(unittest.TestCase):
+class TestCmuxBootstrap(unittest.TestCase):
     def test_req_starts_cmux_before_sending_command(self):
         calls = []
 
@@ -39,19 +39,19 @@ class TestCodexToCmux(unittest.TestCase):
             )
             return _FakeHttpResponse({"ok": True, "from": "cmux"})
 
-        with mock.patch.object(codex_cli, "_ensure_cmux_running", return_value={"ok": True}) as ensure_cmux:
-            with mock.patch.object(codex_cli.urllib.request, "urlopen", side_effect=fake_urlopen):
-                out = codex_cli._req("POST", "/bot/start", {"symbol": "BTCUSDT"})
+        with mock.patch.object(cmux_cli, "_ensure_cmux_running", return_value={"ok": True}) as ensure_cmux:
+            with mock.patch.object(cmux_cli.urllib.request, "urlopen", side_effect=fake_urlopen):
+                out = cmux_cli._req("POST", "/bot/start", {"symbol": "BTCUSDT"})
 
         self.assertEqual(out, {"ok": True, "from": "cmux"})
         ensure_cmux.assert_called_once()
-        self.assertEqual(calls[0]["url"], f"{codex_cli.CMUX_BASE}/bot/start")
+        self.assertEqual(calls[0]["url"], f"{cmux_cli.CMUX_BASE}/bot/start")
         self.assertEqual(calls[0]["method"], "POST")
         self.assertEqual(calls[0]["payload"], {"symbol": "BTCUSDT"})
 
     def test_cmd_service_start_routes_through_cmux(self):
-        with mock.patch.object(codex_cli, "_req", return_value={"ok": True, "service": {"ok": True}}) as req:
-            out = codex_cli.cmd_service(argparse.Namespace(action="start"))
+        with mock.patch.object(cmux_cli, "_req", return_value={"ok": True, "service": {"ok": True}}) as req:
+            out = cmux_cli.cmd_service(argparse.Namespace(action="start"))
 
         self.assertTrue(out["ok"])
         req.assert_called_once_with("POST", "/service/start", {})

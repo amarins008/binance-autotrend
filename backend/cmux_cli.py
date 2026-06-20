@@ -243,7 +243,7 @@ def cmd_learning(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Codex CLI (control plane)")
+    parser = argparse.ArgumentParser(description="Cmux CLI (control plane)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start", help="Start bot via cmux")

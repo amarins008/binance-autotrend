@@ -17,7 +17,7 @@ Allowed self-heal:
 - Retry live order only for configured retryable timeout cases.
 - Normalize hedge-side issues when the closeable side is clear.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - -4411 repeats without a symbol lock.
 - A locked or rejected symbol is repeatedly selected for execution.

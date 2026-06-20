@@ -17,7 +17,7 @@ Allowed self-heal:
 - Downgrade to neutral-only behavior when the news connector is not wired.
 - Keep the issue informational if trading logic does not depend on live news.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Config says news guard is enabled but no data arrives for repeated cycles.
 - News guard blocks entries without evidence fields.

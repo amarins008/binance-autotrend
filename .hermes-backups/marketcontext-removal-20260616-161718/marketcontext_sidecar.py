@@ -6,6 +6,7 @@ import urllib.request
 
 HERMES = "http://127.0.0.1:8020"
 MCP = "http://127.0.0.1:8877/mcp"
+DEFAULT_DENY_SYMBOLS = {"XAUUSDT", "XAGUSDT", "SPCXUSDT", "CLUSDT", "MRVLUSDT", "INTCUSDT"}
 
 
 def _http_json(method, url, payload=None, headers=None, timeout=30):
@@ -114,16 +115,36 @@ def _signal_from_analysis(analysis):
     }
 
 
-def _target_from_status(status):
+def _deny_symbols(status):
+    cfg = status.get("config") if isinstance(status.get("config"), dict) else {}
+    rows = cfg.get("scanDenySymbols")
+    if not isinstance(rows, list):
+        return set(DEFAULT_DENY_SYMBOLS)
+    return {str(x or "").upper().replace("/", "").strip() for x in rows if str(x or "").strip()}
+
+
+def _targets_from_status(status):
+    denied = _deny_symbols(status)
+    targets = []
+
+    def add(symbol, side, target):
+        sym = str(symbol or "").upper().replace("/", "").strip()
+        sd = str(side or "").upper().strip()
+        if not sym or sd not in {"LONG", "SHORT"} or sym in denied:
+            return
+        item = {"symbol": sym, "side": sd, "target": target}
+        if not any(x["symbol"] == sym and x["side"] == sd and x["target"] == target for x in targets):
+            targets.append(item)
+
     open_rows = status.get("openLivePositions") if isinstance(status.get("openLivePositions"), list) else []
-    if open_rows:
-        row = open_rows[0]
-        return str(row.get("symbol", "")).upper(), str(row.get("side", "")).upper(), "open_position"
+    for row in open_rows:
+        if isinstance(row, dict):
+            add(row.get("symbol"), row.get("side"), "open_position")
+
     last = status.get("lastDecision") if isinstance(status.get("lastDecision"), dict) else {}
-    sym = str(last.get("symbol") or "").upper()
     intel = last.get("intel") if isinstance(last.get("intel"), dict) else {}
-    side = str(intel.get("signal") or last.get("side") or "").upper()
-    return sym, side, "pending_entry"
+    add(last.get("symbol"), intel.get("signal") or last.get("side"), "pending_entry")
+    return targets
 
 
 def _submit(symbol, side, target, signal):
@@ -131,7 +152,7 @@ def _submit(symbol, side, target, signal):
     contradicted = (side == "LONG" and signal["score"] <= -2) or (side == "SHORT" and signal["score"] >= 2)
     condition = "direction_context"
     severity = "medium"
-    action = "Use TradingView sidecar context as confirmation only."
+    action = "Use MarketContext sidecar context as confirmation only."
     if contradicted:
         condition = "strong_mtf_contradiction"
         severity = "high"
@@ -141,7 +162,7 @@ def _submit(symbol, side, target, signal):
         severity = "low"
         action = "Allow only if internal Hermes gates also pass."
     payload = {
-        "source": "tradingview_mcp_sidecar",
+        "source": "marketcontext_mcp_sidecar",
         "findings": [
             {
                 "symbol": symbol,
@@ -149,10 +170,44 @@ def _submit(symbol, side, target, signal):
                 "target": target,
                 "condition": condition,
                 "severity": severity,
-                "tradingViewSignal": json.dumps(signal, ensure_ascii=False),
+                "marketContextSignal": json.dumps(signal, ensure_ascii=False),
                 "alignment": signal["status"],
-                "hermesState": "TradingView MCP sidecar healthy; internal watcher bridge bypass active",
+                "hermesState": "MarketContext MCP sidecar healthy; internal watcher bridge bypass active",
                 "recommendedAction": action,
+            }
+        ],
+    }
+    _http_json("POST", f"{HERMES}/hermes/supervisor/external-signal", payload, timeout=20)
+
+
+def _submit_failure(symbol, side, target, message):
+    msg = str(message)
+    low = msg.lower()
+    unsupported = any(
+        token in low
+        for token in ("no data found", "not found for", "symbol not found", "invalid symbol", "no candles")
+    )
+    payload = {
+        "source": "marketcontext_mcp_sidecar",
+        "findings": [
+            {
+                "symbol": symbol,
+                "side": side,
+                "target": target,
+                "condition": "mcp_unsupported_symbol" if unsupported else "mcp_data_failure",
+                "severity": "medium" if unsupported else "high",
+                "marketContextSignal": msg[:500],
+                "alignment": "UNKNOWN",
+                "hermesState": (
+                    "MarketContext MCP has no data for this symbol"
+                    if unsupported
+                    else "MarketContext MCP sidecar failed while checking target"
+                ),
+                "recommendedAction": (
+                    "Skip this symbol in MarketContext-gated scans."
+                    if unsupported
+                    else "Pause or down-rank this symbol until MarketContext context recovers."
+                ),
             }
         ],
     }
@@ -163,14 +218,22 @@ def main():
     while True:
         try:
             status = _status()
-            symbol, side, target = _target_from_status(status)
-            if symbol and side in {"LONG", "SHORT"}:
-                analysis = _mcp_call(
-                    "coin_analysis",
-                    {"exchange": "BINANCE", "symbol": symbol, "timeframe": "1h"},
-                )
-                signal = _signal_from_analysis(analysis)
-                _submit(symbol, side, target, signal)
+            for item in _targets_from_status(status):
+                symbol = item["symbol"]
+                side = item["side"]
+                target = item["target"]
+                try:
+                    analysis = _mcp_call(
+                        "coin_analysis",
+                        {"exchange": "BINANCE", "symbol": symbol, "timeframe": "1h"},
+                    )
+                    signal = _signal_from_analysis(analysis)
+                    _submit(symbol, side, target, signal)
+                except Exception as exc:
+                    try:
+                        _submit_failure(symbol, side, target, exc)
+                    except Exception:
+                        pass
         except (urllib.error.URLError, TimeoutError, Exception):
             pass
         time.sleep(45)

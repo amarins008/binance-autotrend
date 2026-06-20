@@ -1,0 +1,2899 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Cmux + Hermes API",
+    "version": "0.4.0"
+  },
+  "paths": {
+    "/trade": {
+      "post": {
+        "summary": "Trade",
+        "operationId": "trade_trade_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/config": {
+      "post": {
+        "summary": "Autotrade Update Config",
+        "operationId": "autotrade_update_config_autotrade_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/adopt-live": {
+      "post": {
+        "summary": "Autotrade Adopt Live",
+        "operationId": "autotrade_adopt_live_autotrade_adopt_live_post",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/close-orphan": {
+      "post": {
+        "summary": "Autotrade Close Orphan",
+        "operationId": "autotrade_close_orphan_autotrade_close_orphan_post",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/update-sl-tp": {
+      "post": {
+        "summary": "Autotrade Update Sl Tp",
+        "operationId": "autotrade_update_sl_tp_autotrade_update_sl_tp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/start": {
+      "post": {
+        "summary": "Autotrade Start",
+        "operationId": "autotrade_start_autotrade_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoTradeStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/stop": {
+      "post": {
+        "summary": "Autotrade Stop",
+        "operationId": "autotrade_stop_autotrade_stop_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AutoTradeControlRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/reset": {
+      "post": {
+        "summary": "Autotrade Reset",
+        "operationId": "autotrade_reset_autotrade_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AutoTradeControlRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/status": {
+      "get": {
+        "summary": "Autotrade Status",
+        "operationId": "autotrade_status_autotrade_status_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hermes/supervisor-review": {
+      "get": {
+        "summary": "Hermes Supervisor Review",
+        "operationId": "hermes_supervisor_review_hermes_supervisor_review_get",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hermes/supervisor/external-signal": {
+      "post": {
+        "summary": "Hermes Supervisor External Signal",
+        "operationId": "hermes_supervisor_external_signal_hermes_supervisor_external_signal_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hermes/marketcontext/status": {
+      "get": {
+        "summary": "Hermes Tradingview Status",
+        "operationId": "hermes_marketcontext_status_hermes_marketcontext_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hermes/marketcontext/refresh": {
+      "post": {
+        "summary": "Hermes Tradingview Refresh",
+        "operationId": "hermes_marketcontext_refresh_hermes_marketcontext_refresh_post",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Wait"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/autotrade/status-lite": {
+      "get": {
+        "summary": "Autotrade Status Lite",
+        "operationId": "autotrade_status_lite_autotrade_status_lite_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/learning/status": {
+      "get": {
+        "summary": "Learning Status",
+        "operationId": "learning_status_learning_status_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/learning/propose-config": {
+      "get": {
+        "summary": "Learning Propose Config",
+        "operationId": "learning_propose_config_learning_propose_config_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/learning/walk-forward": {
+      "get": {
+        "summary": "Learning Walk Forward",
+        "operationId": "learning_walk_forward_learning_walk_forward_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ALL",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "train_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Train Size"
+            }
+          },
+          {
+            "name": "test_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Test Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/restart": {
+      "post": {
+        "summary": "System Restart",
+        "description": "Spawn a detached uvicorn on the same port, then exit (Windows-friendly).",
+        "operationId": "system_restart_system_restart_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/debug/env-status": {
+      "get": {
+        "summary": "Debug Env Status",
+        "operationId": "debug_env_status_debug_env_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/debug/binance-auth-check": {
+      "get": {
+        "summary": "Debug Binance Auth Check",
+        "operationId": "debug_binance_auth_check_debug_binance_auth_check_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTCUSDT",
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/risk-config": {
+      "get": {
+        "summary": "Get Risk Config",
+        "operationId": "get_risk_config_risk_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Set Risk Config",
+        "operationId": "set_risk_config_risk_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/symbol-meta": {
+      "get": {
+        "summary": "Symbol Meta",
+        "operationId": "symbol_meta_symbol_meta_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze": {
+      "post": {
+        "summary": "Analyze",
+        "operationId": "analyze_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze-vision": {
+      "post": {
+        "summary": "Analyze Vision",
+        "operationId": "analyze_vision_analyze_vision_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisionAnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/intel/analyze": {
+      "post": {
+        "summary": "Intel Analyze",
+        "operationId": "intel_analyze_intel_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntelAnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/intel/rank": {
+      "post": {
+        "summary": "Rank Coins",
+        "operationId": "rank_coins_intel_rank_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoinRankRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/risk-alerts": {
+      "get": {
+        "summary": "Risk Alerts",
+        "operationId": "risk_alerts_risk_alerts_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/strategy/parse": {
+      "post": {
+        "summary": "Parse Strategy",
+        "operationId": "parse_strategy_strategy_parse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyParseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AnalyzeRequest": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "orderBook": {
+            "$ref": "#/components/schemas/OrderBookSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "orderBook"
+        ],
+        "title": "AnalyzeRequest"
+      },
+      "AutoTradeControlRequest": {
+        "properties": {
+          "sessionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessionid"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AutoTradeControlRequest"
+      },
+      "AutoTradeStartRequest": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol",
+            "default": "AUTO"
+          },
+          "usdtAmount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Usdtamount"
+          },
+          "leverage": {
+            "type": "integer",
+            "maximum": 25,
+            "minimum": 1,
+            "title": "Leverage",
+            "default": 5
+          },
+          "leverageMin": {
+            "type": "integer",
+            "maximum": 25,
+            "minimum": 1,
+            "title": "Leveragemin",
+            "default": 3
+          },
+          "leverageMax": {
+            "type": "integer",
+            "maximum": 25,
+            "minimum": 1,
+            "title": "Leveragemax",
+            "default": 25
+          },
+          "leverageAutoEnabled": {
+            "type": "boolean",
+            "title": "Leverageautoenabled",
+            "default": true
+          },
+          "adaptiveLeverageEnabled": {
+            "type": "boolean",
+            "title": "Adaptiveleverageenabled",
+            "default": true
+          },
+          "adaptiveLeverageMax": {
+            "type": "integer",
+            "maximum": 25,
+            "minimum": 1,
+            "title": "Adaptiveleveragemax",
+            "default": 25
+          },
+          "marginType": {
+            "type": "string",
+            "enum": [
+              "ISOLATED",
+              "CROSSED"
+            ],
+            "title": "Margintype",
+            "default": "ISOLATED"
+          },
+          "takeProfitPct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Takeprofitpct",
+            "default": 1.8
+          },
+          "stopLossPct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stoplosspct",
+            "default": 0.8
+          },
+          "intervalSec": {
+            "type": "integer",
+            "maximum": 120,
+            "minimum": 5,
+            "title": "Intervalsec",
+            "default": 20
+          },
+          "minConfidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Minconfidence",
+            "default": 0.72
+          },
+          "htfStrictEnabled": {
+            "type": "boolean",
+            "title": "Htfstrictenabled",
+            "default": true
+          },
+          "htfMinStrength": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Htfminstrength",
+            "default": 0.22
+          },
+          "requireVisionConsensus": {
+            "type": "boolean",
+            "title": "Requirevisionconsensus",
+            "default": false
+          },
+          "cooldownSec": {
+            "type": "integer",
+            "maximum": 3600,
+            "minimum": 0,
+            "title": "Cooldownsec",
+            "default": 120
+          },
+          "maxTradesPerHour": {
+            "type": "integer",
+            "maximum": 60,
+            "minimum": 1,
+            "title": "Maxtradesperhour",
+            "default": 6
+          },
+          "allowFlip": {
+            "type": "boolean",
+            "title": "Allowflip",
+            "default": false
+          },
+          "strongFlipEnabled": {
+            "type": "boolean",
+            "title": "Strongflipenabled",
+            "default": true
+          },
+          "strongFlipMinConfidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.5,
+            "title": "Strongflipminconfidence",
+            "default": 0.82
+          },
+          "strongFlipMinScoreGap": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Strongflipminscoregap",
+            "default": 1.5
+          },
+          "strongFlipUltraScoreGap": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Strongflipultrascoregap",
+            "default": 2.2
+          },
+          "strongFlipUltraConfRelax": {
+            "type": "number",
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Strongflipultraconfrelax",
+            "default": 0.08
+          },
+          "strongFlipStructureConfirmEnabled": {
+            "type": "boolean",
+            "title": "Strongflipstructureconfirmenabled",
+            "default": true
+          },
+          "strongFlipConfirmationsRequired": {
+            "type": "integer",
+            "maximum": 5,
+            "minimum": 1,
+            "title": "Strongflipconfirmationsrequired",
+            "default": 2
+          },
+          "strongFlipVwapConfirmPct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Strongflipvwapconfirmpct",
+            "default": 0.06
+          },
+          "strongFlipBbConfirmPctB": {
+            "type": "number",
+            "maximum": 0.49,
+            "minimum": 0.05,
+            "title": "Strongflipbbconfirmpctb",
+            "default": 0.42
+          },
+          "maxSpreadBps": {
+            "type": "number",
+            "maximum": 200,
+            "minimum": 0,
+            "title": "Maxspreadbps",
+            "default": 22
+          },
+          "maxSlippageBps": {
+            "type": "number",
+            "maximum": 300,
+            "minimum": 0,
+            "title": "Maxslippagebps",
+            "default": 28
+          },
+          "noTradeWindows": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notradewindows"
+          },
+          "trailingStopPct": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Trailingstoppct",
+            "default": 0
+          },
+          "executionMode": {
+            "type": "string",
+            "enum": [
+              "PAPER",
+              "LIVE"
+            ],
+            "title": "Executionmode",
+            "default": "PAPER"
+          },
+          "aggressiveScalp": {
+            "type": "boolean",
+            "title": "Aggressivescalp",
+            "default": false
+          },
+          "waitOverrideImbalance": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Waitoverrideimbalance",
+            "default": 0.08
+          },
+          "earlyEntryEnabled": {
+            "type": "boolean",
+            "title": "Earlyentryenabled",
+            "default": true
+          },
+          "earlyEntryScoreGapMin": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0.5,
+            "title": "Earlyentryscoregapmin",
+            "default": 1.4
+          },
+          "earlyEntryMinConfidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.3,
+            "title": "Earlyentryminconfidence",
+            "default": 0.6
+          },
+          "earlyEntryPullbackResetEnabled": {
+            "type": "boolean",
+            "title": "Earlyentrypullbackresetenabled",
+            "default": true
+          },
+          "earlyEntryMaxBbPctB": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.5,
+            "title": "Earlyentrymaxbbpctb",
+            "default": 0.82
+          },
+          "earlyEntryMinBbPctBShort": {
+            "type": "number",
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Earlyentryminbbpctbshort",
+            "default": 0.18
+          },
+          "earlyEntryMaxVwapDistancePct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0.05,
+            "title": "Earlyentrymaxvwapdistancepct",
+            "default": 0.24
+          },
+          "lateEntryMaxBbPctB": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.5,
+            "title": "Lateentrymaxbbpctb",
+            "default": 0.9
+          },
+          "lateEntryMaxVwapDistancePct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0.05,
+            "title": "Lateentrymaxvwapdistancepct",
+            "default": 0.32
+          },
+          "skipFundingAgainst": {
+            "type": "number",
+            "maximum": 0.05,
+            "minimum": 0,
+            "title": "Skipfundingagainst",
+            "default": 0
+          },
+          "holdWinners": {
+            "type": "boolean",
+            "title": "Holdwinners",
+            "default": true
+          },
+          "holdMinConfidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Holdminconfidence",
+            "default": 0.72
+          },
+          "holdTrailPct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0.05,
+            "title": "Holdtrailpct",
+            "default": 0.35
+          },
+          "aiTpSlFromLearning": {
+            "type": "boolean",
+            "title": "Aitpslfromlearning",
+            "default": true
+          },
+          "marketScan": {
+            "type": "boolean",
+            "title": "Marketscan",
+            "default": true
+          },
+          "scanTopLiquid": {
+            "type": "integer",
+            "maximum": 120,
+            "minimum": 5,
+            "title": "Scantopliquid",
+            "default": 60
+          },
+          "scanAnalyzeTop": {
+            "type": "integer",
+            "maximum": 30,
+            "minimum": 3,
+            "title": "Scananalyzetop",
+            "default": 12
+          },
+          "scanPerSymbolTimeoutSec": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 2,
+            "title": "Scanpersymboltimeoutsec",
+            "default": 7.5
+          },
+          "scanFallbackNearEnabled": {
+            "type": "boolean",
+            "title": "Scanfallbacknearenabled",
+            "default": true
+          },
+          "scanFallbackNearConfRelax": {
+            "type": "number",
+            "maximum": 0.15,
+            "minimum": 0,
+            "title": "Scanfallbacknearconfrelax",
+            "default": 0.04
+          },
+          "scanSidePreference": {
+            "type": "string",
+            "enum": [
+              "score",
+              "long",
+              "short"
+            ],
+            "title": "Scansidepreference",
+            "default": "score"
+          },
+          "whitelistSymbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Whitelistsymbols"
+          },
+          "scanDenySymbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scandenysymbols"
+          },
+          "adaptiveSizing": {
+            "type": "boolean",
+            "title": "Adaptivesizing",
+            "default": true
+          },
+          "adaptiveSizeBoostMaxPct": {
+            "type": "number",
+            "maximum": 150,
+            "minimum": 0,
+            "title": "Adaptivesizeboostmaxpct",
+            "default": 18
+          },
+          "tradeNotionalCapUsdt": {
+            "type": "number",
+            "maximum": 500,
+            "minimum": 20,
+            "title": "Tradenotionalcapusdt",
+            "default": 80
+          },
+          "autoScanTradeNotionalCapUsdt": {
+            "type": "number",
+            "maximum": 250,
+            "minimum": 20,
+            "title": "Autoscantradenotionalcapusdt",
+            "default": 80
+          },
+          "supervisorSizeStreakEnabled": {
+            "type": "boolean",
+            "title": "Supervisorsizestreakenabled",
+            "default": true
+          },
+          "supervisorSizeMultiplier": {
+            "type": "number",
+            "maximum": 2,
+            "minimum": 0.2,
+            "title": "Supervisorsizemultiplier",
+            "default": 0.75
+          },
+          "supervisorSizeWinStreakMin": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 2,
+            "title": "Supervisorsizewinstreakmin",
+            "default": 3
+          },
+          "supervisorSizeLossStreakMin": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Supervisorsizelossstreakmin",
+            "default": 2
+          },
+          "supervisorSizeWinStepPct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Supervisorsizewinsteppct",
+            "default": 10
+          },
+          "supervisorSizeLossStepPct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Supervisorsizelosssteppct",
+            "default": 15
+          },
+          "supervisorSizeMaxMultiplier": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 1,
+            "title": "Supervisorsizemaxmultiplier",
+            "default": 1.35
+          },
+          "supervisorSizeMinMultiplier": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.1,
+            "title": "Supervisorsizeminmultiplier",
+            "default": 0.5
+          },
+          "supervisorSizeDiversifiedMinMultiplier": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.1,
+            "title": "Supervisorsizediversifiedminmultiplier",
+            "default": 0.65
+          },
+          "supervisorReviewSchedulerEnabled": {
+            "type": "boolean",
+            "title": "Supervisorreviewschedulerenabled",
+            "default": true
+          },
+          "supervisorReviewIntervalSec": {
+            "type": "integer",
+            "maximum": 21600,
+            "minimum": 300,
+            "title": "Supervisorreviewintervalsec",
+            "default": 3600
+          },
+          "supervisorReviewFullClosedTrades": {
+            "type": "integer",
+            "maximum": 50,
+            "minimum": 4,
+            "title": "Supervisorreviewfullclosedtrades",
+            "default": 8
+          },
+          "supervisorReviewFastClosedTrades": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 2,
+            "title": "Supervisorreviewfastclosedtrades",
+            "default": 4
+          },
+          "supervisorReviewLossStreakTrigger": {
+            "type": "integer",
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Supervisorreviewlossstreaktrigger",
+            "default": 2
+          },
+          "supervisorReviewDrawdownTriggerUsdt": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0.1,
+            "title": "Supervisorreviewdrawdowntriggerusdt",
+            "default": 2
+          },
+          "supervisorReviewPollSec": {
+            "type": "integer",
+            "maximum": 600,
+            "minimum": 15,
+            "title": "Supervisorreviewpollsec",
+            "default": 60
+          },
+          "supervisorSymbolReviewEnabled": {
+            "type": "boolean",
+            "title": "Supervisorsymbolreviewenabled",
+            "default": true
+          },
+          "supervisorSymbolReviewMinClosedTrades": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 2,
+            "title": "Supervisorsymbolreviewminclosedtrades",
+            "default": 4
+          },
+          "supervisorSymbolReviewFullClosedTrades": {
+            "type": "integer",
+            "maximum": 50,
+            "minimum": 4,
+            "title": "Supervisorsymbolreviewfullclosedtrades",
+            "default": 8
+          },
+          "supervisorSymbolTuneTtlMinutes": {
+            "type": "integer",
+            "maximum": 1440,
+            "minimum": 30,
+            "title": "Supervisorsymboltunettlminutes",
+            "default": 360
+          },
+          "supervisorSymbolTunePauseMinutes": {
+            "type": "integer",
+            "maximum": 720,
+            "minimum": 5,
+            "title": "Supervisorsymboltunepauseminutes",
+            "default": 45
+          },
+          "supervisorDailyBaselineMinTrades": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 4,
+            "title": "Supervisordailybaselinemintrades",
+            "default": 8
+          },
+          "supervisorDailyWrDropAlertPct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Supervisordailywrdropalertpct",
+            "default": 18
+          },
+          "supervisorSmallProfitWinUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0.01,
+            "title": "Supervisorsmallprofitwinusdt",
+            "default": 0.25
+          },
+          "sessionBiasEnabled": {
+            "type": "boolean",
+            "title": "Sessionbiasenabled",
+            "default": true
+          },
+          "sessionBiasMinSamples": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 3,
+            "title": "Sessionbiasminsamples",
+            "default": 10
+          },
+          "sessionBiasMaxConfShift": {
+            "type": "number",
+            "maximum": 0.2,
+            "minimum": 0,
+            "title": "Sessionbiasmaxconfshift",
+            "default": 0.05
+          },
+          "sessionBiasMaxSizeShiftPct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Sessionbiasmaxsizeshiftpct",
+            "default": 25
+          },
+          "sessionBiasGoodWinRatePct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Sessionbiasgoodwinratepct",
+            "default": 50
+          },
+          "sessionBiasBadWinRatePct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Sessionbiasbadwinratepct",
+            "default": 42
+          },
+          "sessionBiasLowVolMovePct": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Sessionbiaslowvolmovepct",
+            "default": 0.45
+          },
+          "sessionBiasHighVolMovePct": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Sessionbiashighvolmovepct",
+            "default": 0.9
+          },
+          "todayPerformanceGuardEnabled": {
+            "type": "boolean",
+            "title": "Todayperformanceguardenabled",
+            "default": true
+          },
+          "todayPerformanceGuardMinTrades": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Todayperformanceguardmintrades",
+            "default": 8
+          },
+          "todayPerformanceGuardMaxWinRatePct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Todayperformanceguardmaxwinratepct",
+            "default": 40
+          },
+          "todayPerformanceGuardMaxPnlUsdt": {
+            "type": "number",
+            "maximum": 500,
+            "minimum": -500,
+            "title": "Todayperformanceguardmaxpnlusdt",
+            "default": 0
+          },
+          "hybridScan": {
+            "type": "boolean",
+            "title": "Hybridscan",
+            "default": false
+          },
+          "hybridMinScore": {
+            "type": "number",
+            "maximum": 2,
+            "minimum": 0.2,
+            "title": "Hybridminscore",
+            "default": 0.72
+          },
+          "hybridMinEdge": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Hybridminedge",
+            "default": 0.06
+          },
+          "maxOpenPositions": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Maxopenpositions",
+            "default": 5
+          },
+          "volTargetEnabled": {
+            "type": "boolean",
+            "title": "Voltargetenabled",
+            "default": true
+          },
+          "volTargetPct": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 0.05,
+            "title": "Voltargetpct",
+            "default": 0.22
+          },
+          "volLookback": {
+            "type": "integer",
+            "maximum": 240,
+            "minimum": 10,
+            "title": "Vollookback",
+            "default": 30
+          },
+          "volSizeMinMult": {
+            "type": "number",
+            "maximum": 1.2,
+            "minimum": 0.2,
+            "title": "Volsizeminmult",
+            "default": 0.6
+          },
+          "volSizeMaxMult": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 0.8,
+            "title": "Volsizemaxmult",
+            "default": 1.4
+          },
+          "newsDailyEnabled": {
+            "type": "boolean",
+            "title": "Newsdailyenabled",
+            "default": true
+          },
+          "newsRefreshHours": {
+            "type": "integer",
+            "maximum": 24,
+            "minimum": 1,
+            "title": "Newsrefreshhours",
+            "default": 6
+          },
+          "newsMinHeadlines": {
+            "type": "integer",
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Newsminheadlines",
+            "default": 5
+          },
+          "newsMaxHeadlines": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 5,
+            "title": "Newsmaxheadlines",
+            "default": 25
+          },
+          "newsConfidenceMaxBoostPct": {
+            "type": "number",
+            "maximum": 30,
+            "minimum": 0,
+            "title": "Newsconfidencemaxboostpct",
+            "default": 8
+          },
+          "qualityLessonsLiveOnly": {
+            "type": "boolean",
+            "title": "Qualitylessonsliveonly",
+            "default": true
+          },
+          "qualityLessonsUseRegime": {
+            "type": "boolean",
+            "title": "Qualitylessonsuseregime",
+            "default": true
+          },
+          "qualityRecencyHalfLifeDays": {
+            "type": "number",
+            "maximum": 60,
+            "minimum": 1,
+            "title": "Qualityrecencyhalflifedays",
+            "default": 7
+          },
+          "qualityMaxSamples": {
+            "type": "integer",
+            "maximum": 500,
+            "minimum": 10,
+            "title": "Qualitymaxsamples",
+            "default": 60
+          },
+          "qualityMinSamples": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 3,
+            "title": "Qualityminsamples",
+            "default": 8
+          },
+          "benchmarkFilterEnabled": {
+            "type": "boolean",
+            "title": "Benchmarkfilterenabled",
+            "default": true
+          },
+          "benchmarkSymbol": {
+            "type": "string",
+            "title": "Benchmarksymbol",
+            "default": "BTCUSDT"
+          },
+          "benchmarkRefreshSec": {
+            "type": "integer",
+            "maximum": 600,
+            "minimum": 10,
+            "title": "Benchmarkrefreshsec",
+            "default": 45
+          },
+          "benchmarkConflictPenaltyPct": {
+            "type": "number",
+            "maximum": 30,
+            "minimum": 0,
+            "title": "Benchmarkconflictpenaltypct",
+            "default": 6
+          },
+          "pairLockEnabled": {
+            "type": "boolean",
+            "title": "Pairlockenabled",
+            "default": true
+          },
+          "pairLockLossStreak": {
+            "type": "integer",
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Pairlocklossstreak",
+            "default": 2
+          },
+          "pairLockMinutes": {
+            "type": "integer",
+            "maximum": 1440,
+            "minimum": 1,
+            "title": "Pairlockminutes",
+            "default": 45
+          },
+          "liveBadUtcHours": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Livebadutchours"
+          },
+          "maxDailyTradesPerSymbol": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Maxdailytradespersymbol",
+            "default": 14
+          },
+          "perfGateMinSamples": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 3,
+            "title": "Perfgateminsamples",
+            "default": 8
+          },
+          "perfGateMinWinRatePct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Perfgateminwinratepct",
+            "default": 40
+          },
+          "perfGateMinPnlUsdt": {
+            "type": "number",
+            "maximum": 500,
+            "minimum": -500,
+            "title": "Perfgateminpnlusdt",
+            "default": -0.5
+          },
+          "perfGateEarlyMinSamples": {
+            "type": "integer",
+            "maximum": 50,
+            "minimum": 3,
+            "title": "Perfgateearlyminsamples",
+            "default": 4
+          },
+          "perfGateEarlyMinWinRatePct": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Perfgateearlyminwinratepct",
+            "default": 35
+          },
+          "perfGateEarlyMinPnlUsdt": {
+            "type": "number",
+            "maximum": 500,
+            "minimum": -500,
+            "title": "Perfgateearlyminpnlusdt",
+            "default": -0.35
+          },
+          "perfGateMinRewardScore": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": -100,
+            "title": "Perfgateminrewardscore",
+            "default": -1.25
+          },
+          "perfLockMinutes": {
+            "type": "integer",
+            "maximum": 1440,
+            "minimum": 1,
+            "title": "Perflockminutes",
+            "default": 90
+          },
+          "memoryPrimaryDays": {
+            "type": "integer",
+            "maximum": 30,
+            "minimum": 1,
+            "title": "Memoryprimarydays",
+            "default": 7
+          },
+          "memoryConfirmDays": {
+            "type": "integer",
+            "maximum": 60,
+            "minimum": 2,
+            "title": "Memoryconfirmdays",
+            "default": 15
+          },
+          "memoryBaselineDays": {
+            "type": "integer",
+            "maximum": 120,
+            "minimum": 7,
+            "title": "Memorybaselinedays",
+            "default": 30
+          },
+          "memoryArchiveWeightPct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Memoryarchiveweightpct",
+            "default": 0
+          },
+          "riskCooldownEnabled": {
+            "type": "boolean",
+            "title": "Riskcooldownenabled",
+            "default": true
+          },
+          "riskCooldownLookback": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 2,
+            "title": "Riskcooldownlookback",
+            "default": 8
+          },
+          "riskCooldownLossStreak": {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 2,
+            "title": "Riskcooldownlossstreak",
+            "default": 3
+          },
+          "riskCooldownMinutes": {
+            "type": "integer",
+            "maximum": 1440,
+            "minimum": 1,
+            "title": "Riskcooldownminutes",
+            "default": 30
+          },
+          "riskCooldownAdaptiveMarket": {
+            "type": "boolean",
+            "title": "Riskcooldownadaptivemarket",
+            "default": true
+          },
+          "riskCooldownAdaptiveCheckSec": {
+            "type": "integer",
+            "maximum": 600,
+            "minimum": 10,
+            "title": "Riskcooldownadaptivechecksec",
+            "default": 30
+          },
+          "riskCooldownLightScanEnabled": {
+            "type": "boolean",
+            "title": "Riskcooldownlightscanenabled",
+            "default": true
+          },
+          "riskCooldownLightScanSec": {
+            "type": "integer",
+            "maximum": 600,
+            "minimum": 20,
+            "title": "Riskcooldownlightscansec",
+            "default": 45
+          },
+          "riskCooldownLightScanAnalyzeTop": {
+            "type": "integer",
+            "maximum": 12,
+            "minimum": 3,
+            "title": "Riskcooldownlightscananalyzetop",
+            "default": 6
+          },
+          "riskCooldownPauseOnVolatile": {
+            "type": "boolean",
+            "title": "Riskcooldownpauseonvolatile",
+            "default": true
+          },
+          "riskCooldownVolatileMinutes": {
+            "type": "integer",
+            "maximum": 240,
+            "minimum": 1,
+            "title": "Riskcooldownvolatileminutes",
+            "default": 10
+          },
+          "riskCooldownResumeScoreGapMin": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Riskcooldownresumescoregapmin",
+            "default": 2
+          },
+          "selfReviewMinHourSamples": {
+            "type": "integer",
+            "maximum": 200,
+            "minimum": 3,
+            "title": "Selfreviewminhoursamples",
+            "default": 8
+          },
+          "usdtTooSmallAction": {
+            "type": "string",
+            "enum": [
+              "multiply",
+              "skip"
+            ],
+            "title": "Usdttoosmallaction",
+            "default": "multiply"
+          },
+          "usdtTooSmallMultiplierMin": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Usdttoosmallmultipliermin",
+            "default": 5
+          },
+          "usdtTooSmallMultiplierMax": {
+            "type": "number",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Usdttoosmallmultipliermax",
+            "default": 10
+          },
+          "feeMinNetProfitUSDT": {
+            "type": "number",
+            "maximum": 50,
+            "minimum": 0,
+            "title": "Feeminnetprofitusdt",
+            "default": 0.03
+          },
+          "feeMinEdgeVsCostMultiple": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 1,
+            "title": "Feeminedgevscostmultiple",
+            "default": 1.2
+          },
+          "feeMinOrderUsdt": {
+            "type": "number",
+            "maximum": 200,
+            "minimum": 5,
+            "title": "Feeminorderusdt",
+            "default": 20
+          },
+          "feeAdaptiveNetEnabled": {
+            "type": "boolean",
+            "title": "Feeadaptivenetenabled",
+            "default": true
+          },
+          "feeAdaptiveVolLowPct": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 0.01,
+            "title": "Feeadaptivevollowpct",
+            "default": 0.08
+          },
+          "feeAdaptiveVolHighPct": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0.02,
+            "title": "Feeadaptivevolhighpct",
+            "default": 0.35
+          },
+          "feeAdaptiveMinFactor": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.6,
+            "title": "Feeadaptiveminfactor",
+            "default": 0.8
+          },
+          "feeAdaptiveMaxFactor": {
+            "type": "number",
+            "maximum": 1.6,
+            "minimum": 1,
+            "title": "Feeadaptivemaxfactor",
+            "default": 1.15
+          },
+          "tpSlTargetUsdtEnabled": {
+            "type": "boolean",
+            "title": "Tpsltargetusdtenabled",
+            "default": true
+          },
+          "tpTargetMinUsdt": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0.05,
+            "title": "Tptargetminusdt",
+            "default": 0.5
+          },
+          "tpTargetMaxUsdt": {
+            "type": "number",
+            "maximum": 50,
+            "minimum": 0.1,
+            "title": "Tptargetmaxusdt",
+            "default": 2
+          },
+          "profitLockTriggerUsdt": {
+            "type": "number",
+            "maximum": 50,
+            "minimum": 0.01,
+            "title": "Profitlocktriggerusdt",
+            "default": 0.22
+          },
+          "profitLockKeepUsdt": {
+            "type": "number",
+            "maximum": 50,
+            "minimum": 0,
+            "title": "Profitlockkeepusdt",
+            "default": 0.15
+          },
+          "profitLockMaxGivebackUsdt": {
+            "type": "number",
+            "maximum": 50,
+            "minimum": 0.01,
+            "title": "Profitlockmaxgivebackusdt",
+            "default": 0.14
+          },
+          "slToTpRatio": {
+            "type": "number",
+            "maximum": 0.85,
+            "minimum": 0.35,
+            "title": "Sltotpratio",
+            "default": 0.55
+          },
+          "minRiskRewardRatio": {
+            "type": "number",
+            "maximum": 4,
+            "minimum": 1,
+            "title": "Minriskrewardratio",
+            "default": 1.35
+          },
+          "atrTpSlEnabled": {
+            "type": "boolean",
+            "title": "Atrtpslenabled",
+            "default": true
+          },
+          "ema200StrictEnabled": {
+            "type": "boolean",
+            "title": "Ema200Strictenabled",
+            "default": true
+          },
+          "learningPnlClipEnabled": {
+            "type": "boolean",
+            "title": "Learningpnlclipenabled",
+            "default": true
+          },
+          "learningPnlClipAbsUsdt": {
+            "type": "number",
+            "maximum": 5000,
+            "minimum": 0.5,
+            "title": "Learningpnlclipabsusdt",
+            "default": 25
+          },
+          "learningBehaviorRewardEnabled": {
+            "type": "boolean",
+            "title": "Learningbehaviorrewardenabled",
+            "default": true
+          },
+          "learningRewardTpHitBase": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Learningrewardtphitbase",
+            "default": 0.2
+          },
+          "learningRewardTpScalePerUsdt": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Learningrewardtpscaleperusdt",
+            "default": 0.35
+          },
+          "learningRewardEntryTiming": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Learningrewardentrytiming",
+            "default": 0.25
+          },
+          "learningRewardHoldWinner": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Learningrewardholdwinner",
+            "default": 0.2
+          },
+          "learningRewardFlipGood": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Learningrewardflipgood",
+            "default": 0.1
+          },
+          "learningPenaltyEarlySl": {
+            "type": "number",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Learningpenaltyearlysl",
+            "default": 0.35
+          },
+          "learningPenaltyMemoryMiss": {
+            "type": "number",
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Learningpenaltymemorymiss",
+            "default": 0.15
+          },
+          "learningBehaviorDeltaCap": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0.1,
+            "title": "Learningbehaviordeltacap",
+            "default": 2.5
+          },
+          "learningFastWinMinutes": {
+            "type": "integer",
+            "maximum": 1440,
+            "minimum": 1,
+            "title": "Learningfastwinminutes",
+            "default": 45
+          },
+          "orphanAutoAdoptEnabled": {
+            "type": "boolean",
+            "title": "Orphanautoadoptenabled",
+            "default": true
+          },
+          "orphanAutoAdoptForceSingleSymbol": {
+            "type": "boolean",
+            "title": "Orphanautoadoptforcesinglesymbol",
+            "default": false
+          },
+          "orphanAutoAdoptMultiEnabled": {
+            "type": "boolean",
+            "title": "Orphanautoadoptmultienabled",
+            "default": true
+          },
+          "learningRewardEnabled": {
+            "type": "boolean",
+            "title": "Learningrewardenabled",
+            "default": true
+          },
+          "learningRewardWin": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Learningrewardwin",
+            "default": 1
+          },
+          "learningPenaltyLoss": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Learningpenaltyloss",
+            "default": 0.8
+          },
+          "learningRewardDecay": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.9,
+            "title": "Learningrewarddecay",
+            "default": 0.985
+          },
+          "learningRewardCap": {
+            "type": "number",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Learningrewardcap",
+            "default": 50
+          },
+          "marketContextWatcherEnabled": {
+            "type": "boolean",
+            "title": "Tradingviewwatcherenabled",
+            "default": false
+          },
+          "marketContextWatcherIntervalSec": {
+            "type": "integer",
+            "maximum": 3600,
+            "minimum": 60,
+            "title": "Tradingviewwatcherintervalsec",
+            "default": 300
+          },
+          "marketContextWatcherMaxSymbols": {
+            "type": "integer",
+            "maximum": 30,
+            "minimum": 1,
+            "title": "Tradingviewwatchermaxsymbols",
+            "default": 10
+          },
+          "marketContextWatcherExchange": {
+            "type": "string",
+            "title": "Tradingviewwatcherexchange",
+            "default": "BINANCE"
+          },
+          "marketContextWatcherTimeframe": {
+            "type": "string",
+            "title": "Tradingviewwatchertimeframe",
+            "default": "1h"
+          },
+          "marketContextWatcherMcpPort": {
+            "type": "integer",
+            "maximum": 65535,
+            "minimum": 1024,
+            "title": "Tradingviewwatchermcpport",
+            "default": 8877
+          },
+          "marketContextWatcherMcpStartupSec": {
+            "type": "integer",
+            "maximum": 300,
+            "minimum": 20,
+            "title": "Tradingviewwatchermcpstartupsec",
+            "default": 120
+          },
+          "marketContextWatcherMcpCallTimeoutSec": {
+            "type": "integer",
+            "maximum": 120,
+            "minimum": 10,
+            "title": "Tradingviewwatchermcpcalltimeoutsec",
+            "default": 45
+          },
+          "marketContextWatcherBatchTimeoutSec": {
+            "type": "integer",
+            "maximum": 300,
+            "minimum": 60,
+            "title": "Tradingviewwatcherbatchtimeoutsec",
+            "default": 180
+          },
+          "supervisorExternalSignalTuneEnabled": {
+            "type": "boolean",
+            "title": "Supervisorexternalsignaltuneenabled",
+            "default": true
+          },
+          "guardianMarketContextContextEnabled": {
+            "type": "boolean",
+            "title": "Guardianmarketcontextcontextenabled",
+            "default": false
+          },
+          "guardianMarketContextContextMaxAgeSec": {
+            "type": "integer",
+            "maximum": 3600,
+            "minimum": 60,
+            "title": "Guardianmarketcontextcontextmaxagesec",
+            "default": 420
+          },
+          "guardianMarketContextTightenSlPct": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0.05,
+            "title": "Guardianmarketcontexttightenslpct",
+            "default": 0.22
+          },
+          "guardianMarketContextMinProfitLockUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Guardianmarketcontextminprofitlockusdt",
+            "default": 0.06
+          },
+          "guardianMarketContextBlockTpExtension": {
+            "type": "boolean",
+            "title": "Guardianmarketcontextblocktpextension",
+            "default": true
+          },
+          "guardianWeakSignalExitEnabled": {
+            "type": "boolean",
+            "title": "Guardianweaksignalexitenabled",
+            "default": true
+          },
+          "guardianWeakExitMinPeakUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Guardianweakexitminpeakusdt",
+            "default": 0.08
+          },
+          "guardianWeakExitConfBuffer": {
+            "type": "number",
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Guardianweakexitconfbuffer",
+            "default": 0.08
+          },
+          "guardianUnclearPositiveExitEnabled": {
+            "type": "boolean",
+            "title": "Guardianunclearpositiveexitenabled",
+            "default": true
+          },
+          "guardianUnclearPositiveMinProfitUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Guardianunclearpositiveminprofitusdt",
+            "default": 0.04
+          },
+          "guardianUnclearPositiveMinPeakUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Guardianunclearpositiveminpeakusdt",
+            "default": 0.06
+          },
+          "guardianUnclearPositiveGivebackUsdt": {
+            "type": "number",
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Guardianunclearpositivegivebackusdt",
+            "default": 0.03
+          },
+          "guardianUnclearSignalMaxConfidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Guardianunclearsignalmaxconfidence",
+            "default": 0.68
+          },
+          "guardianUnclearMomentumAbsPct": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Guardianunclearmomentumabspct",
+            "default": 0.02
+          },
+          "guardianUnclearScoreGapMax": {
+            "type": "number",
+            "maximum": 20,
+            "minimum": 0,
+            "title": "Guardianunclearscoregapmax",
+            "default": 0.8
+          },
+          "entryMarketContextGateEnabled": {
+            "type": "boolean",
+            "title": "Entrymarketcontextgateenabled",
+            "default": false
+          },
+          "entryMarketContextGateMaxAgeSec": {
+            "type": "integer",
+            "maximum": 3600,
+            "minimum": 60,
+            "title": "Entrymarketcontextgatemaxagesec",
+            "default": 420
+          },
+          "entryMarketContextDirectionalAuthorityEnabled": {
+            "type": "boolean",
+            "title": "Entrymarketcontextdirectionalauthorityenabled",
+            "default": false
+          },
+          "entryMarketContextRequireDirectionalConfirmation": {
+            "type": "boolean",
+            "title": "Entrymarketcontextrequiredirectionalconfirmation",
+            "default": false
+          },
+          "entryMarketContextBlockMissingContext": {
+            "type": "boolean",
+            "title": "Entrymarketcontextblockmissingcontext",
+            "default": false
+          },
+          "entryMarketContextBlockContradiction": {
+            "type": "boolean",
+            "title": "Entrymarketcontextblockcontradiction",
+            "default": true
+          },
+          "entryMarketContextBlockWeakSignal": {
+            "type": "boolean",
+            "title": "Entrymarketcontextblockweaksignal",
+            "default": false
+          },
+          "entryMarketContextWeakExtraConfidence": {
+            "type": "number",
+            "maximum": 0.2,
+            "minimum": 0,
+            "title": "Entrymarketcontextweakextraconfidence",
+            "default": 0.03
+          },
+          "entryMarketContextConfirmConfidenceBoost": {
+            "type": "number",
+            "maximum": 0.2,
+            "minimum": 0,
+            "title": "Entrymarketcontextconfirmconfidenceboost",
+            "default": 0.015
+          }
+        },
+        "type": "object",
+        "required": [
+          "usdtAmount"
+        ],
+        "title": "AutoTradeStartRequest"
+      },
+      "CoinRankRequest": {
+        "properties": {
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "scanMarket": {
+            "type": "boolean",
+            "title": "Scanmarket",
+            "default": true
+          },
+          "scanTopLiquid": {
+            "type": "integer",
+            "maximum": 120,
+            "minimum": 5,
+            "title": "Scantopliquid",
+            "default": 60
+          },
+          "scanAnalyzeTop": {
+            "type": "integer",
+            "maximum": 30,
+            "minimum": 3,
+            "title": "Scananalyzetop",
+            "default": 12
+          },
+          "whitelistSymbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Whitelistsymbols"
+          },
+          "topN": {
+            "type": "integer",
+            "maximum": 30,
+            "minimum": 1,
+            "title": "Topn",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "title": "CoinRankRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IntelAnalyzeRequest": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol"
+        ],
+        "title": "IntelAnalyzeRequest"
+      },
+      "OrderBookLevel": {
+        "properties": {
+          "price": {
+            "type": "number",
+            "title": "Price"
+          },
+          "qty": {
+            "type": "number",
+            "title": "Qty"
+          }
+        },
+        "type": "object",
+        "required": [
+          "price",
+          "qty"
+        ],
+        "title": "OrderBookLevel"
+      },
+      "OrderBookSummary": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "bidNotional": {
+            "type": "number",
+            "title": "Bidnotional"
+          },
+          "askNotional": {
+            "type": "number",
+            "title": "Asknotional"
+          },
+          "imbalance": {
+            "type": "number",
+            "title": "Imbalance"
+          },
+          "spoofingRisk": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ],
+            "title": "Spoofingrisk"
+          },
+          "buyWall": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderBookLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sellWall": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderBookLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "bidNotional",
+          "askNotional",
+          "imbalance",
+          "spoofingRisk"
+        ],
+        "title": "OrderBookSummary"
+      },
+      "RiskConfig": {
+        "properties": {
+          "killSwitch": {
+            "type": "boolean",
+            "title": "Killswitch"
+          },
+          "maxNotionalUSDT": {
+            "type": "number",
+            "title": "Maxnotionalusdt"
+          },
+          "maxLeverage": {
+            "type": "number",
+            "maximum": 25,
+            "minimum": 1,
+            "title": "Maxleverage"
+          },
+          "maxDailyLossUSDT": {
+            "type": "number",
+            "title": "Maxdailylossusdt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "killSwitch",
+          "maxNotionalUSDT",
+          "maxLeverage",
+          "maxDailyLossUSDT"
+        ],
+        "title": "RiskConfig"
+      },
+      "StrategyParseRequest": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "symbol"
+        ],
+        "title": "StrategyParseRequest"
+      },
+      "TradeRequest": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "LONG",
+              "SHORT",
+              "WAIT",
+              "CLOSE"
+            ],
+            "title": "Side"
+          },
+          "qty": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Qty"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "takeProfitPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeprofitpct"
+          },
+          "stopLossPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stoplosspct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "side",
+          "qty"
+        ],
+        "title": "TradeRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VisionAnalyzeRequest": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "imageDataUrl": {
+            "type": "string",
+            "title": "Imagedataurl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "imageDataUrl"
+        ],
+        "title": "VisionAnalyzeRequest"
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Binance AI Copilot",
+  "name": "Cmux + Hermes",
   "description": "AI overlay, order book analytics, and one-click trade actions for Binance",
   "version": "0.3.1",
   "permissions": ["storage", "notifications"],

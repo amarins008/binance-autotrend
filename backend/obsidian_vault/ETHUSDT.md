@@ -1,26 +1,34 @@
 # ETHUSDT
 
 ## Performance
-- Wins: 0
-- Losses: 4
-- Trades: 4
-- WinRate: 0.0%
-- RealizedPnL: -0.464254
-- AvgPnL/Trade: -0.116064
+- Wins: 2
+- Losses: 5
+- Trades: 7
+- WinRate: 28.57%
+- RealizedPnL: -1.170503
+- AvgPnL/Trade: -0.167215
+- RewardScore: -1.311104
+- RewardDelta: -0.601291
+- RewardBehaviorDelta: -0.11
+- RewardWinStreak: 0
+- RewardLossStreak: 4
+- LearningRankScore: -0.131481
+
+## Risk Tune
+- Active: True
+- Window: 8
+- WinRate: 37.5%
+- PnL: -0.876522
+- SizeMult: 0.6371
+- LeverageMult: 0.6929
+- RecommendedLeverageMax: 17
+- Reason: reduce_after_symbol_drawdown
 
 ## Scan Behavior
-- Observations: 1865
-- PickedCount: 273
-- PickRate: 14.64%
+- Observations: 522
+- PickedCount: 12
+- PickRate: 2.3%
 - LastSignal: LONG
-- LastConfidence: 0.76
-- LastScanScore: 0.759766
-- UpdatedAt: 1779175690
-
-## Last Trade
-- Side: LONG
-- Entry: 2138.51
-- Exit: 2138.04
-- PnL: -0.01692
-- Reason: LIVE_CLOSE
-- ClosedAt: 1779175690
+- LastConfidence: 0.64
+- LastScanScore: 0.513227
+- UpdatedAt: 1781931413

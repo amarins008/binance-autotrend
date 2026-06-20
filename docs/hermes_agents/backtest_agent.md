@@ -17,7 +17,7 @@ Allowed self-heal:
 - Mark missing validation after recent trades and request a focused review.
 - Prefer narrow validation windows for urgent live tuning and longer windows for stable changes.
 
-Escalate to Codex when:
+Escalate to Cmux when:
 
 - Backtest never runs after repeated trade windows.
 - Validation contradicts live performance but no config change is proposed.

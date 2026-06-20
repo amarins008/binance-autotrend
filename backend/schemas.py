@@ -233,8 +233,8 @@ class AutoTradeStartRequest(BaseModel):
     # Adaptive multiplier range when USDT is too small (5x-10x).
     usdtTooSmallMultiplierMin: float = Field(default=5.0, ge=1.0, le=100.0)
     usdtTooSmallMultiplierMax: float = Field(default=10.0, ge=1.0, le=200.0)
-    feeMinNetProfitUSDT: float = Field(default=0.03, ge=0.0, le=50.0)
-    feeMinEdgeVsCostMultiple: float = Field(default=1.2, ge=1.0, le=5.0)
+    feeMinNetProfitUSDT: float = Field(default=0.15, ge=0.0, le=50.0)
+    feeMinEdgeVsCostMultiple: float = Field(default=3.0, ge=1.0, le=5.0)
     feeMinOrderUsdt: float = Field(default=20.0, ge=5.0, le=200.0)
     feeAdaptiveNetEnabled: bool = True
     feeAdaptiveVolLowPct: float = Field(default=0.08, ge=0.01, le=3.0)
@@ -271,26 +271,6 @@ class AutoTradeStartRequest(BaseModel):
     learningPenaltyLoss: float = Field(default=0.8, ge=0.0, le=20.0)
     learningRewardDecay: float = Field(default=0.985, ge=0.9, le=1.0)
     learningRewardCap: float = Field(default=50.0, ge=1.0, le=500.0)
-    tradingViewWatcherEnabled: bool = False
-    tradingViewWatcherIntervalSec: int = Field(default=300, ge=60, le=3600)
-    tradingViewWatcherMaxSymbols: int = Field(default=3, ge=1, le=8)
-    tradingViewWatcherExchange: str = "BINANCE"
-    tradingViewWatcherTimeframe: str = "1h"
-    tradingViewWatcherMcpPort: int = Field(default=8877, ge=1024, le=65535)
-    tradingViewWatcherMcpStartupSec: int = Field(default=120, ge=20, le=300)
-    tradingViewWatcherMcpCallTimeoutSec: int = Field(default=45, ge=10, le=120)
-    tradingViewWatcherBatchTimeoutSec: int = Field(default=180, ge=60, le=300)
-    guardianTradingViewContextEnabled: bool = False
-    guardianTradingViewContextMaxAgeSec: int = Field(default=420, ge=60, le=3600)
-    guardianTradingViewTightenSlPct: float = Field(default=0.22, ge=0.05, le=1.0)
-    guardianTradingViewMinProfitLockUsdt: float = Field(default=0.06, ge=0.0, le=10.0)
-    guardianTradingViewBlockTpExtension: bool = True
-    entryTradingViewGateEnabled: bool = True
-    entryTradingViewGateMaxAgeSec: int = Field(default=420, ge=60, le=3600)
-    entryTradingViewBlockContradiction: bool = True
-    entryTradingViewBlockWeakSignal: bool = True
-    entryTradingViewWeakExtraConfidence: float = Field(default=0.03, ge=0.0, le=0.2)
-    entryTradingViewConfirmConfidenceBoost: float = Field(default=0.015, ge=0.0, le=0.2)
 
 
 class AutoTradeControlRequest(BaseModel):
