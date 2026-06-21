@@ -617,6 +617,17 @@ def _build_status_payload_live() -> dict[str, Any]:
     bot_soft_stale = isinstance(bot_status, dict) and bool(bot_status.get("softStale"))
     bot_hard_stale = isinstance(bot_status, dict) and bool(bot_status.get("stale")) and not bot_soft_stale
 
+    # Per-symbol profiles so the dashboard "Symbol Profile (3-tier)" table has
+    # something to render. Loaded lazily and quietly — never block the cycle.
+    symbol_profiles_payload: dict[str, Any] = {}
+    try:
+        import main as _main  # local import to avoid circular dependency at module load
+        _profiles = _main._load_symbol_profiles() or {}
+        if isinstance(_profiles, dict):
+            symbol_profiles_payload = _profiles
+    except Exception:
+        symbol_profiles_payload = {}
+
     out = {
         "ok": True,
         "cmux": {"running": True, "port": CMUX_PORT},
@@ -629,6 +640,7 @@ def _build_status_payload_live() -> dict[str, Any]:
             "reason": desired_state.get("reason", ""),
         },
         "learning": learning_summary,
+    "symbolProfiles": symbol_profiles_payload,
         "stale": bool(hermes_down or bot_hard_stale),
     }
     with _STATUS_LOCK:

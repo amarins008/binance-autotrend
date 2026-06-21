@@ -18,10 +18,10 @@
 - Active: False
 
 ## Scan Behavior
-- Observations: 315
+- Observations: 476
 - PickedCount: 0
 - PickRate: 0.0%
-- LastSignal: LONG
-- LastConfidence: 0.795
-- LastScanScore: 0.79403
-- UpdatedAt: 1781931422
+- LastSignal: SHORT
+- LastConfidence: 0.895
+- LastScanScore: 0.890726
+- UpdatedAt: 1782028120

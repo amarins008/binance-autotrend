@@ -2,44 +2,33 @@
 
 ## Performance
 - Wins: 10
-- Losses: 8
-- Trades: 18
-- WinRate: 55.56%
-- RealizedPnL: 0.817611
-- AvgPnL/Trade: 0.045423
-- RewardScore: 4.878788
-- RewardDelta: -0.602026
-- RewardBehaviorDelta: -0.03268
+- Losses: 10
+- Trades: 20
+- WinRate: 50.0%
+- RealizedPnL: 0.509178
+- AvgPnL/Trade: 0.025459
+- RewardScore: 4.289066
+- RewardDelta: -0.601688
+- RewardBehaviorDelta: 0.208841
 - RewardWinStreak: 0
-- RewardLossStreak: 4
-- LearningRankScore: -0.07312
+- RewardLossStreak: 6
+- LearningRankScore: -0.087674
 
 ## Risk Tune
 - Active: True
 - Window: 8
-- WinRate: 37.5%
-- PnL: -0.437868
-- SizeMult: 0.7029
-- LeverageMult: 0.7486
-- RecommendedLeverageMax: 19
+- WinRate: 25.0%
+- PnL: -0.568625
+- SizeMult: 0.6275
+- LeverageMult: 0.6848
+- RecommendedLeverageMax: 17
 - Reason: reduce_after_symbol_drawdown
 
 ## Scan Behavior
-- Observations: 147
-- PickedCount: 40
-- PickRate: 27.21%
-- LastSignal: SHORT
-- LastConfidence: 0.807
-- LastScanScore: 0.784766
-- UpdatedAt: 1781932303
-
-## Last Trade
-- Side: SHORT
-- Entry: 468.53
-- Exit: 475.37388976
-- PnL: -0.253224
-- Reason: LIVE_CUT_LOSING_SIDE
-- ClosedAt: 1781932302
-- PatternTags: ['5m_bearish_engulfing', 'bearish_engulfing', '15m_shooting_star', 'shooting_star']
-- PatternBias: -0.032
-- PatternScore: -1.92
+- Observations: 272
+- PickedCount: 45
+- PickRate: 16.54%
+- LastSignal: LONG
+- LastConfidence: 0.828
+- LastScanScore: 0.744258
+- UpdatedAt: 1782027428

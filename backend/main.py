@@ -6040,7 +6040,9 @@ def _symbol_sample_count(symbol: str) -> int:
 # Symbol profile storage: persisted in obsidian_vault alongside learning
 # profiles. Each profile contains user-overrideable policy fields; only the
 # fields explicitly set are used (others fall through to group / system).
-SYMBOL_PROFILES_PATH = Path("obsidian_vault") / "symbol_profiles.json"
+# Use __file__ (backend/main.py) to resolve path relative to script location,
+# not the current working directory.
+SYMBOL_PROFILES_PATH = Path(__file__).parent / "obsidian_vault" / "symbol_profiles.json"
 
 
 def _load_symbol_profiles() -> dict:
@@ -6080,6 +6082,53 @@ def _save_symbol_profiles(profiles: dict) -> None:
         )
     except Exception:
         pass
+
+
+# Fields the dashboard "Symbol Profile (3-tier)" table reads from each
+# openLivePositions row. Only these are copied from the profile; everything
+# else stays in the profile store. Keep this list in sync with the frontend
+# renderSymbolProfileSummary() in backend/dashboard/index.html.
+_SYMBOL_PROFILE_DASHBOARD_FIELDS = (
+    "group",
+    "minConfidence",
+    "tpPct",
+    "slPct",
+    "profitLockTriggerUsdt",
+    "learnedProfitFactor",
+    "learnedRecentScore",
+    "learnedTrades",
+    "learnedWinRatePct",
+    "learnedPnl",
+    "notionalCapUsdt",
+    "leverageMax",
+    "positionSizeMult",
+    "chaseSpeed",
+    "longBias",
+)
+
+
+def _attach_symbol_profile(position: dict, profiles: dict | None) -> None:
+    """Merge per-symbol profile fields onto an openLivePositions row in place.
+
+    Without this, the dashboard falls back to the empty `bot.symbolProfiles`
+    list only when openLivePositions is empty — so any open live position
+    shows `—` for PF/Conf/TP/SL/Lock/Rec even though the profile is saved.
+    The merge makes the dashboard read work whether or not a position is open.
+    """
+    if not isinstance(position, dict):
+        return
+    sym = str(position.get("symbol", "") or "").upper().strip()
+    if not sym or not isinstance(profiles, dict):
+        return
+    prof = profiles.get(sym)
+    if not isinstance(prof, dict):
+        return
+    for key in _SYMBOL_PROFILE_DASHBOARD_FIELDS:
+        if key in prof and position.get(key) is None:
+            position[key] = prof.get(key)
+    # Mark source so the frontend can tell "position with profile" vs raw.
+    if position.get("source") is None:
+        position["source"] = "live+profile"
 
 
 def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
@@ -6123,7 +6172,17 @@ def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
 
     wr = float(win.get("winRatePct", 0.0) or 0.0)
     pnl = float(win.get("pnl", 0.0) or 0.0)
-    pf = float(pr.get("profitFactor", 0.0) or 0.0)
+    # Compute profit factor from the window's win/loss breakdown so we don't
+    # depend on a missing profitFactor field on the learning profile.
+    gross_win = float(win.get("grossWin", 0.0) or 0.0)
+    gross_loss = float(win.get("grossLoss", 0.0) or 0.0)
+    if gross_loss > 0:
+        pf = gross_win / gross_loss
+    elif gross_win > 0:
+        pf = 999.0
+    else:
+        pf = float(pr.get("profitFactor", 0.0) or 0.0)
+    pf = min(pf, 999.0)
     ql = int(pr.get("quickLosses", 0) or 0)
     obs = int(pr.get("observations", 0) or 0)
     picks = int(pr.get("pickedCount", 0) or 0)
@@ -9312,6 +9371,7 @@ async def autotrade_status(symbol: str | None = None):
             )
             if open_live_positions:
                 lock_map = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
+                _profiles = _load_symbol_profiles() or {}
                 for op in open_live_positions:
                     k = _live_lock_key(str(op.get("symbol", "")), str(op.get("side", "")))
                     lk = lock_map.get(k) if isinstance(lock_map, dict) else None
@@ -9322,6 +9382,7 @@ async def autotrade_status(symbol: str | None = None):
                         op["localTp"] = lk.get("tp")
                         op["localSl"] = lk.get("sl")
                     op["leverage"] = _position_display_leverage(op.get("symbol"), cfg, op.get("leverage"))
+                    _attach_symbol_profile(op, _profiles)
                 lead = open_live_positions[0]
                 live_position = {
                     "symbol": str(lead.get("symbol", "") or ""),
@@ -11021,6 +11082,7 @@ def autotrade_status_lite():
         _sync_autotrade_leverage_cap_from_cfg(cfg)
     live_guardian = AUTO_TRADE.get("liveGuardian") if isinstance(AUTO_TRADE.get("liveGuardian"), dict) else None
     live_locks = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
+    _profiles = _load_symbol_profiles() or {}
     open_live_positions: list[dict] = []
     for lock in live_locks.values():
         if not isinstance(lock, dict):
@@ -11030,42 +11092,42 @@ def autotrade_status_lite():
         qty = float(lock.get("qty", 0.0) or 0.0)
         if not symbol or side not in ("LONG", "SHORT") or qty <= 0:
             continue
-        open_live_positions.append(
-            {
-                "symbol": symbol,
-                "side": side,
-                "qty": qty,
-                "entryMark": lock.get("entryMark"),
-                "markPrice": lock.get("markPrice"),
-                "notionalUsdtApprox": round(float(lock.get("notionalUsdtApprox", 0.0) or 0.0), 6),
-                "unRealizedProfit": round(float(lock.get("unRealizedProfit", 0.0) or 0.0), 6),
-                "leverage": _position_display_leverage(symbol, cfg, lock.get("leverage")),
-                "profitLockArmed": bool(lock.get("armed", False)),
-                "profitLockUsdt": round(float(lock.get("lockUsdt", 0.0) or 0.0), 6),
-                "peakUnrealizedPnl": round(float(lock.get("peak", 0.0) or 0.0), 6),
-                "localTp": lock.get("tp"),
-                "localSl": lock.get("sl"),
-            }
-        )
+        op = {
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "entryMark": lock.get("entryMark"),
+            "markPrice": lock.get("markPrice"),
+            "notionalUsdtApprox": round(float(lock.get("notionalUsdtApprox", 0.0) or 0.0), 6),
+            "unRealizedProfit": round(float(lock.get("unRealizedProfit", 0.0) or 0.0), 6),
+            "leverage": _position_display_leverage(symbol, cfg, lock.get("leverage")),
+            "profitLockArmed": bool(lock.get("armed", False)),
+            "profitLockUsdt": round(float(lock.get("lockUsdt", 0.0) or 0.0), 6),
+            "peakUnrealizedPnl": round(float(lock.get("peak", 0.0) or 0.0), 6),
+            "localTp": lock.get("tp"),
+            "localSl": lock.get("sl"),
+        }
+        _attach_symbol_profile(op, _profiles)
+        open_live_positions.append(op)
     if not open_live_positions and live_guardian and live_guardian.get("active"):
         symbol = str(live_guardian.get("symbol", "") or "").upper().strip()
         side = str(live_guardian.get("side", "") or "").upper().strip()
         qty = float(live_guardian.get("qty", 0.0) or 0.0)
         entry = float(live_guardian.get("entryMark", 0.0) or 0.0)
         if symbol and side in ("LONG", "SHORT") and qty > 0:
-            open_live_positions.append(
-                {
-                    "symbol": symbol,
-                    "side": side,
-                    "qty": qty,
-                    "entryMark": entry,
-                    "notionalUsdtApprox": round(abs(qty * entry), 6),
-                    "leverage": _position_display_leverage(symbol, cfg, live_guardian.get("leverage")),
-                    "localTp": live_guardian.get("tp"),
-                    "localSl": live_guardian.get("sl"),
-                    "guardian": True,
-                }
-            )
+            op = {
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "entryMark": entry,
+                "notionalUsdtApprox": round(abs(qty * entry), 6),
+                "leverage": _position_display_leverage(symbol, cfg, live_guardian.get("leverage")),
+                "localTp": live_guardian.get("tp"),
+                "localSl": live_guardian.get("sl"),
+                "guardian": True,
+            }
+            _attach_symbol_profile(op, _profiles)
+            open_live_positions.append(op)
     open_live_positions.sort(key=lambda pos: float(pos.get("notionalUsdtApprox", 0.0) or 0.0), reverse=True)
     _position_guardian_status_heartbeat(open_live_positions)
     lead_live = open_live_positions[0] if open_live_positions else {}
