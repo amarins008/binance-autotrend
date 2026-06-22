@@ -4458,7 +4458,9 @@ function renderHermesKanban(bot) {
 
   const winToday = tradesToday > 0 ? num0(kpiSticky.liveWinToday).toFixed(0) : "—";
 
-  const pnlToday = num0(kpiSticky.livePnlToday);
+  const pnlTodayAll = num0(kpiSticky.livePnlToday);
+  const pnlTodaySymbol = num0(bot?.liveStats?.realizedPnlToday);
+  const pnlToday = pnlTodayAll !== 0 ? pnlTodayAll : pnlTodaySymbol;
 
   const pnlTone = pnlToday < 0 ? "bad" : pnlToday > 0 ? "good" : "";
 
@@ -4498,7 +4500,7 @@ function renderHermesKanban(bot) {
 
         <div class="office-daily-kpi"><b>${esc(winToday)}${tradesToday > 0 ? "%" : ""}</b><span>Win วันนี้ · ${winsToday}/${lossesToday}</span></div>
 
-        <div class="office-daily-kpi ${pnlTone}"><b>${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)}</b><span>PnL วันนี้ USDT</span></div>
+        <div class="office-daily-kpi ${pnlTone}"><b>${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)}</b><span>PnL วันนี้ (Live) USDT</span></div>
 
       </div>
 
