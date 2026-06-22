@@ -260,45 +260,30 @@ def _append_trade_log(entry: dict):
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         if str(entry.get("mode", "")).upper() == "LIVE" and "pnl" in entry:
             _LIVE_STATS_VERSION += 1
-            _LIVE_STATS_CACHE.clear()
+            # NOTE: do NOT clear _LIVE_STATS_CACHE here. Cache key is keyed by
+            # (symbol, mtime, size) so a stale entry is naturally invalidated
+            # on the next read; clearing on every append forced a full re-parse
+            # of the 100k+ line trade log per call which made /autotrade/status
+            # and cmux /status flap between healthy and stale under heavy
+            # trade flow (see also _aggregate_live_trade_stats_from_log).
             _SESSION_BIAS_CACHE["builtAt"] = 0.0
     except Exception:
         pass
 
 
-def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
+def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
     """
-    Build LIVE KPI from trade log only (source-of-truth), with light anomaly filtering.
-    Cached until a LIVE closed trade is appended; SCAN observations must not move KPI.
+    Apply new trade-log lines (oldest → newest) on top of a previously
+    computed stats dict. Updates wins/losses/pnl/today counters and
+    prepends new entries to ``lastTrades`` (most recent first, capped at 10).
     """
-    sym = str(symbol or "").upper().strip()
-    now = time.time()
-    try:
-        cache_key = (sym, _LIVE_STATS_VERSION)
-        cached = _LIVE_STATS_CACHE.get(cache_key)
-        if cached:
-            return dict(cached[1])
-    except Exception:
-        cache_key = None
-
-    stats = {
-        "wins": 0,
-        "losses": 0,
-        "realizedPnl": 0.0,
-        "winsToday": 0,
-        "lossesToday": 0,
-        "realizedPnlToday": 0.0,
-        "lastTrades": [],
-    }
-    if not TRADES_LOG_PATH.exists():
+    if not lines:
         return stats
+    sym = (symbol or "").upper().strip()
     now_local = time.localtime()
     today_key = (now_local.tm_year, now_local.tm_mon, now_local.tm_mday)
-    try:
-        rows = TRADES_LOG_PATH.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return stats
-    for line in reversed(rows):
+    new_last_trades: list[dict] = []
+    for line in lines:
         if not line.strip():
             continue
         try:
@@ -315,18 +300,14 @@ def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
             pnl = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl):
-            continue
-        # Defensive: skip clearly-corrupt historical rows so KPI does not explode.
-        if abs(pnl) > 5000.0:
+        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
             continue
         if pnl >= 0:
             stats["wins"] += 1
         else:
             stats["losses"] += 1
         stats["realizedPnl"] = round(float(stats["realizedPnl"]) + pnl, 6)
-        if len(stats["lastTrades"]) < 10:
-            stats["lastTrades"].append(obj)
+        new_last_trades.append(obj)
         ts_raw = obj.get("closedAt", obj.get("ts", 0))
         try:
             ts = int(float(ts_raw or 0))
@@ -340,11 +321,185 @@ def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
                 else:
                     stats["lossesToday"] += 1
                 stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl, 6)
-    if cache_key is not None:
-        _LIVE_STATS_CACHE[cache_key] = (now, dict(stats))
-        if len(_LIVE_STATS_CACHE) > 32:
-            oldest_key = min(_LIVE_STATS_CACHE, key=lambda k: _LIVE_STATS_CACHE[k][0])
-            _LIVE_STATS_CACHE.pop(oldest_key, None)
+    # Merge new (most recent first) on top of existing lastTrades; cap at 10.
+    if new_last_trades:
+        existing = stats.get("lastTrades") if isinstance(stats.get("lastTrades"), list) else []
+        merged: list[dict] = []
+        # New trades are already in newest-first order (we read forward but
+        # the file is append-only so the last line is most recent).
+        for obj in reversed(new_last_trades):
+            merged.append(obj)
+            if len(merged) >= 10:
+                break
+        for obj in existing:
+            if len(merged) >= 10:
+                break
+            merged.append(obj)
+        stats["lastTrades"] = merged
+    return stats
+
+
+def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
+    """
+    Build LIVE KPI from trade log only (source-of-truth), with light anomaly filtering.
+
+    Performance: the trade log can grow to 100k+ lines; full re-parse on every
+    call would make `/autotrade/status-lite` block for several seconds during
+    heavy trade flow. We cache by ``(symbol, mtime, size)`` and, on miss, look
+    for a previous entry with the same symbol and a smaller size to apply only
+    the appended delta (file is append-only; truncation is detected via mtime
+    change and falls back to a full parse).
+    """
+    sym = str(symbol or "").upper().strip()
+    now = time.time()
+    if not TRADES_LOG_PATH.exists():
+        return {
+            "wins": 0, "losses": 0, "realizedPnl": 0.0,
+            "winsToday": 0, "lossesToday": 0, "realizedPnlToday": 0.0,
+            "lastTrades": [],
+        }
+
+    try:
+        stat = TRADES_LOG_PATH.stat()
+        mtime = float(stat.st_mtime)
+        size = int(stat.st_size)
+    except Exception:
+        return {
+            "wins": 0, "losses": 0, "realizedPnl": 0.0,
+            "winsToday": 0, "lossesToday": 0, "realizedPnlToday": 0.0,
+            "lastTrades": [],
+        }
+
+    cache_key = (sym, mtime, size)
+    try:
+        cached = _LIVE_STATS_CACHE.get(cache_key)
+        if cached:
+            return dict(cached[1])
+    except Exception:
+        cached = None
+
+    # Try incremental update from the most recent cache entry for this symbol
+    # whose recorded file size is <= current size. If mtime changed but size
+    # is non-monotonic (truncation/rewrite) we fall through to full re-parse.
+    base_stats: dict | None = None
+    base_size = -1
+    try:
+        candidates = [
+            (k, v) for k, v in _LIVE_STATS_CACHE.items()
+            if isinstance(k, tuple) and len(k) == 3 and k[0] == sym
+        ]
+        candidates.sort(key=lambda kv: kv[0][2], reverse=True)  # largest size first
+        for k, v in candidates:
+            prev_mtime, prev_size = k[1], k[2]
+            if prev_size <= size and abs(prev_mtime - mtime) < 1e-3:
+                # Same mtime window → file is append-only since this cache
+                base_stats = dict(v[1])
+                base_size = prev_size
+                break
+            if prev_size <= size:
+                # mtime drifted but size only grew → still safe to apply delta.
+                # Only zero today's counters if the local date of the cached
+                # entry is actually a different day than today. Every append
+                # changes mtime, so mtime drift alone does NOT mean the day
+                # rolled — and the delta only sees new appends, which are
+                # mostly SCAN entries, so blindly zeroing erases real today's
+                # trades that aren't in the delta window.
+                base_stats = dict(v[1])
+                try:
+                    prev_tloc = time.localtime(prev_mtime)
+                    prev_day_key = (prev_tloc.tm_year, prev_tloc.tm_mon, prev_tloc.tm_mday)
+                except Exception:
+                    prev_day_key = None
+                if prev_day_key != today_key:
+                    base_stats["winsToday"] = 0
+                    base_stats["lossesToday"] = 0
+                    base_stats["realizedPnlToday"] = 0.0
+                base_size = prev_size
+                break
+    except Exception:
+        base_stats = None
+        base_size = -1
+
+    if base_stats is not None and base_size >= 0 and base_size < size:
+        try:
+            with TRADES_LOG_PATH.open("rb") as f:
+                f.seek(base_size)
+                tail = f.read(size - base_size)
+            new_text = tail.decode("utf-8", errors="replace")
+            new_lines = new_text.splitlines()
+            stats = _apply_trade_log_delta(base_stats, new_lines, sym)
+        except Exception:
+            stats = None
+        if stats is not None:
+            _LIVE_STATS_CACHE[cache_key] = (now, dict(stats))
+            if len(_LIVE_STATS_CACHE) > 32:
+                oldest_key = min(
+                    _LIVE_STATS_CACHE,
+                    key=lambda k: _LIVE_STATS_CACHE[k][0] if isinstance(_LIVE_STATS_CACHE[k], tuple) and len(_LIVE_STATS_CACHE[k]) >= 2 else 0,
+                )
+                _LIVE_STATS_CACHE.pop(oldest_key, None)
+            return stats
+
+    # Full re-parse fallback (cold cache or truncation detected).
+    stats = {
+        "wins": 0, "losses": 0, "realizedPnl": 0.0,
+        "winsToday": 0, "lossesToday": 0, "realizedPnlToday": 0.0,
+        "lastTrades": [],
+    }
+    now_local = time.localtime()
+    today_key = (now_local.tm_year, now_local.tm_mon, now_local.tm_mday)
+    try:
+        rows = TRADES_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return stats
+    parsed: list[dict] = []
+    for line in rows:
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if str(obj.get("mode", "")).upper() != "LIVE":
+            continue
+        if sym and str(obj.get("symbol", "")).upper() != sym:
+            continue
+        if "pnl" not in obj:
+            continue
+        try:
+            pnl = float(obj.get("pnl", 0.0) or 0.0)
+        except Exception:
+            continue
+        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+            continue
+        if pnl >= 0:
+            stats["wins"] += 1
+        else:
+            stats["losses"] += 1
+        stats["realizedPnl"] = round(float(stats["realizedPnl"]) + pnl, 6)
+        parsed.append(obj)
+        ts_raw = obj.get("closedAt", obj.get("ts", 0))
+        try:
+            ts = int(float(ts_raw or 0))
+        except Exception:
+            ts = 0
+        if ts > 0:
+            tloc = time.localtime(ts)
+            if (tloc.tm_year, tloc.tm_mon, tloc.tm_mday) == today_key:
+                if pnl >= 0:
+                    stats["winsToday"] += 1
+                else:
+                    stats["lossesToday"] += 1
+                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl, 6)
+    # Newest-first for lastTrades (cap 10).
+    stats["lastTrades"] = list(reversed(parsed[-10:]))
+    _LIVE_STATS_CACHE[cache_key] = (now, dict(stats))
+    if len(_LIVE_STATS_CACHE) > 32:
+        oldest_key = min(
+            _LIVE_STATS_CACHE,
+            key=lambda k: _LIVE_STATS_CACHE[k][0] if isinstance(_LIVE_STATS_CACHE[k], tuple) and len(_LIVE_STATS_CACHE[k]) >= 2 else 0,
+        )
+        _LIVE_STATS_CACHE.pop(oldest_key, None)
     return stats
 
 
@@ -2096,7 +2251,36 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     pr["maxLossPnl"] = min(float(pr.get("maxLossPnl", pnl)), pnl)
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
     reward_enabled = bool(cfg.get("learningRewardEnabled", True))
-    behavior_enabled = bool(cfg.get("learningBehaviorRewardEnabled", True))
+    # Live guardian feedback loop: gently adapt per-symbol TP/SL/lock thresholds.
+    if str(mode).upper() == "LIVE":
+        guard_tp = float(pr.get("tpPct", float(cfg.get("takeProfitPct", 1.8) or 1.8)) or float(cfg.get("takeProfitPct", 1.8) or 1.8))
+        guard_sl = float(pr.get("slPct", float(cfg.get("stopLossPct", 0.9) or 0.9)) or float(cfg.get("stopLossPct", 0.9) or 0.9))
+        guard_lock = float(pr.get("profitLockTriggerUsdt", float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)) or float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35))
+        reason_up = str(trade.get("reason", "") or "").upper()
+        win_like = pnl >= 0.0 or reason_up in {"LOCAL_TP_HIT", "TARGET_MAX", "PEAK_CAPTURE", "LIVE_CLOSE"}
+        loss_like = pnl < 0.0 or reason_up in {"LOCAL_SL_HIT", "BREAKEVEN_GUARD", "PAYOFF_LOSS_GUARD", "STRONG_REVERSAL_EXIT", "LIVE_CUT_LOSING_SIDE", "RETRACE_BUDGET", "WEAK_SIGNAL"}
+        if win_like:
+            guard_tp *= 1.012
+            guard_sl *= 1.006
+            guard_lock *= 1.010
+        elif loss_like:
+            guard_tp *= 0.988
+            guard_sl *= 0.986
+            guard_lock *= 0.965
+        guard_tp = max(0.35, min(6.0, guard_tp))
+        guard_sl = max(0.20, min(3.5, guard_sl))
+        guard_lock = max(0.08, min(1.50, guard_lock))
+        pr["tpPct"] = round(guard_tp, 4)
+        pr["slPct"] = round(guard_sl, 4)
+        pr["profitLockTriggerUsdt"] = round(guard_lock, 4)
+        pr["tpslFeedback"] = {
+            "updatedAt": int(time.time()),
+            "mode": "LIVE",
+            "reason": reason_up,
+            "pnl": round(float(pnl), 6),
+        }
+    reward_decay = float(cfg.get("learningRewardDecay", 0.985) or 0.985)
+
     reward_cap = max(1.0, float(cfg.get("learningRewardCap", 50.0) or 50.0))
     reward_decay = float(cfg.get("learningRewardDecay", 0.985) or 0.985)
     reward_decay = min(1.0, max(0.9, reward_decay))
@@ -6114,21 +6298,32 @@ def _attach_symbol_profile(position: dict, profiles: dict | None) -> None:
     list only when openLivePositions is empty — so any open live position
     shows `—` for PF/Conf/TP/SL/Lock/Rec even though the profile is saved.
     The merge makes the dashboard read work whether or not a position is open.
+
+    Even when no saved profile exists for the symbol we still populate
+    `group` from `_symbol_group()` (default map → learned override → safe
+    default) so the dashboard does not render `—` for newly-traded symbols
+    that have not yet earned enough samples for a learned profile.
     """
     if not isinstance(position, dict):
         return
     sym = str(position.get("symbol", "") or "").upper().strip()
-    if not sym or not isinstance(profiles, dict):
+    if not sym:
         return
-    prof = profiles.get(sym)
-    if not isinstance(prof, dict):
-        return
-    for key in _SYMBOL_PROFILE_DASHBOARD_FIELDS:
-        if key in prof and position.get(key) is None:
-            position[key] = prof.get(key)
+    prof = profiles.get(sym) if isinstance(profiles, dict) else None
+    if isinstance(prof, dict):
+        for key in _SYMBOL_PROFILE_DASHBOARD_FIELDS:
+            if key in prof and position.get(key) is None:
+                position[key] = prof.get(key)
+    # Always resolve `group` so the dashboard shows the tier even without a
+    # saved profile (PUMPUSDT, ARBUSDT, etc. that have only the default map).
+    if position.get("group") is None:
+        try:
+            position["group"] = _symbol_group(sym)
+        except Exception:
+            pass
     # Mark source so the frontend can tell "position with profile" vs raw.
     if position.get("source") is None:
-        position["source"] = "live+profile"
+        position["source"] = "live+profile" if isinstance(prof, dict) else "live"
 
 
 def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
@@ -7234,56 +7429,19 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             st["armed"] = True
             st["lockUsdt"] = round(max(fee_min_capture, float(lock_policy.get("lockUsdt", 0.0) or 0.0)), 6)
             _autotrade_log(f"Profit lock armed: {sym} {side} lock={st['lockUsdt']:.3f} peak={st['peak']:.3f}")
-        reversal_exit, reversal_reason = _strong_reversal_exit(side, intel, cfg)
-        if reversal_exit:
-            await _close_position_one_side(sym, side, key, secret, base)
-            _autotrade_log(f"LIVE multi guard close: {sym} {side} STRONG_REVERSAL_EXIT {reversal_reason}")
-            locks.pop(k, None)
-            changed = True
-            continue
-        if hit_payoff_loss_guard:
-            await _close_position_one_side(sym, side, key, secret, base)
-            _autotrade_log(
-                f"LIVE multi guard close: {sym} {side} PAYOFF_LOSS_GUARD "
-                f"upnl={upnl:.3f} cap={float(payoff_guard.get('maxLossUsdt', 0.0) or 0.0):.3f} "
-                f"payoff={float(payoff_guard.get('payoffRatio', 0.0) or 0.0):.2f}"
+        # If armed, close on a controlled retrace before profit turns into a loss.
+        if st.get("armed") and st["peak"] >= max(fee_min_capture, 0.12):
+            retrace_budget = max(
+                fee_min_capture,
+                float(st.get("lockUsdt", 0.0) or 0.0) * 0.55,
+                float(st["peak"]) * 0.55,
+                float(st["peak"]) - 0.14,
             )
-            locks.pop(k, None)
-            changed = True
-            continue
-        # If signal is still very strong, extend TP room and keep guarding tighter.
-        if strong_follow and upnl > 0:
-            dyn_tp_max = max(tp_max, min(tp_max * 1.8, st["peak"] * 1.35))
-            st["tpMaxDynamicUsdt"] = round(float(dyn_tp_max), 6)
-            st["lockUsdt"] = round(max(float(st.get("lockUsdt", 0.0) or 0.0), st["peak"] * 0.45), 6)
-        else:
-            st["tpMaxDynamicUsdt"] = round(float(tp_max), 6)
-        eff_tp_max = float(st.get("tpMaxDynamicUsdt", tp_max) or tp_max)
-        # Capture small winners before a normal pullback turns into a full giveback.
-        if bool(cfg.get("guardianPeakCaptureEnabled", True)) and st["peak"] > 0:
-            peak_capture_trigger = max(
-                float(cfg.get("guardianPeakCaptureTriggerUsdt", 0.18) or 0.18),
-                fee_min_capture * float(cfg.get("guardianPeakCaptureFeeMultiple", 1.10) or 1.10),
-            )
-            peak_capture_min_keep = max(0.02, float(cfg.get("guardianPeakCaptureMinKeepUsdt", 0.04) or 0.04))
-            peak_capture_giveback = max(0.02, float(cfg.get("guardianPeakCaptureGivebackUsdt", 0.07) or 0.07))
-            peak_capture_ratio = max(0.10, min(0.90, float(cfg.get("guardianPeakCaptureGivebackRatio", 0.45) or 0.45)))
-            continue_ratio = max(0.15, min(0.95, float(cfg.get("guardianPeakCaptureContinueGivebackRatio", 0.35) or 0.35)))
-            giveback_usdt = max(0.0, float(st["peak"]) - upnl)
-            giveback_ratio = giveback_usdt / max(float(st["peak"]), 1e-9)
-            valid_pullback = strong_follow and not weak_now and giveback_ratio <= continue_ratio
-            should_capture_peak = (
-                float(st["peak"]) >= peak_capture_trigger
-                and upnl >= peak_capture_min_keep
-                and (giveback_usdt >= peak_capture_giveback or giveback_ratio >= peak_capture_ratio)
-                and not valid_pullback
-            )
-            if should_capture_peak:
+            if upnl <= retrace_budget:
                 await _close_position_one_side(sym, side, key, secret, base)
                 _autotrade_log(
-                    f"LIVE lock close: {sym} {side} PEAK_CAPTURE "
-                    f"upnl={upnl:.3f} peak={float(st['peak']):.3f} giveback={giveback_usdt:.3f} "
-                    f"weak={weak_now} follow={strong_follow}"
+                    f"LIVE lock close: {sym} {side} RETRACE_BUDGET "
+                    f"upnl={upnl:.3f} peak={float(st['peak']):.3f} budget={retrace_budget:.3f}"
                 )
                 locks.pop(k, None)
                 changed = True
@@ -7299,13 +7457,6 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if upnl >= fee_min_capture and weak_now and st["peak"] >= lock_trigger:
             await _close_position_one_side(sym, side, key, secret, base)
             _autotrade_log(f"LIVE lock close: {sym} {side} WEAK_SIGNAL {upnl:.3f} USDT")
-            locks.pop(k, None)
-            changed = True
-            continue
-        # If armed and gives back most locked profit, close to protect gains.
-        if st.get("armed") and upnl >= fee_min_capture and upnl <= max(fee_min_capture, float(st.get("lockUsdt", 0.0) or 0.0)):
-            await _close_position_one_side(sym, side, key, secret, base)
-            _autotrade_log(f"LIVE lock close: {sym} {side} RETRACE {upnl:.3f} USDT")
             locks.pop(k, None)
             changed = True
             continue
