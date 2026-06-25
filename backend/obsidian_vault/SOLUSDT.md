@@ -30,5 +30,5 @@
 - PickRate: 8.4%
 - LastSignal: WAIT
 - LastConfidence: 0.44
-- LastScanScore: 0.121853
-- UpdatedAt: 1782371095
+- LastScanScore: 0.121835
+- UpdatedAt: 1782375469

@@ -774,14 +774,25 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
     if trades_n < 6 or payoff_ratio <= 0.0 or payoff_ratio >= 0.75:
         return {}
 
-    now = int(time.time())
-    state = AUTO_TRADE.get("supervisorAutoTune")
-    if not isinstance(state, dict):
-        state = {}
-    signature = f"weak_payoff:{review.get('label')}:{trades_n}:{round(payoff_ratio, 2)}"
-    cooldown_sec = max(300, int(cfg.get("supervisorPayoffTuneCooldownMinutes", 45) or 45) * 60)
-    if state.get("signature") == signature and now - int(state.get("at", 0) or 0) < cooldown_sec:
+    state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("weak_payoff", cfg, 45)
+    signature = _tuning_signature("weak_payoff", trades=trades_n, payoff=round(payoff_ratio, 4))
+    rec = delegations.get("weak_payoff") if isinstance(delegations.get("weak_payoff"), dict) else {}
+    if active and str(rec.get("signature", "") or "") == signature:
         return {"applied": False, "alreadyTuned": True, "signature": signature, "cooldownSec": cooldown_sec}
+
+    # Auto-rollback if previous tuning worsened performance
+    if _tuning_should_rollback("weak_payoff"):
+        rollback = _tuning_rollback_last("weak_payoff")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Adaptive severity: 0.0 (mild) → 1.0 (severe)
+    severity = max(0.0, min(1.0, (0.75 - payoff_ratio) / 0.75 + (avg_loss / max(avg_win, 0.01) - 1.0) / 2.0))
 
     changes: dict[str, dict] = {}
 
@@ -797,55 +808,54 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         cfg["holdWinners"] = True
 
     hold_min = float(cfg.get("holdMinConfidence", 0.78) or 0.78)
-    set_float("holdMinConfidence", max(0.68, min(0.86, hold_min - 0.03)), 3)
+    set_float("holdMinConfidence", max(0.68, min(0.86, hold_min - 0.03 * (1.0 + severity))), 3)
 
     tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55))
     tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.2) or 2.2))
-    set_float("tpTargetMinUsdt", min(1.20, tp_min * 1.15), 3)
-    set_float("tpTargetMaxUsdt", min(3.20, max(tp_max * 1.12, float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.4)), 3)
+    set_float("tpTargetMinUsdt", min(1.20, tp_min * (1.0 + 0.15 * severity)), 3)
+    set_float("tpTargetMaxUsdt", min(3.20, max(tp_max * (1.0 + 0.12 * severity), float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.4)), 3)
 
     be_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
-    set_float("profitLockBreakevenTriggerUsdt", min(0.45, max(0.20, be_trigger * 1.15)), 3)
+    set_float("profitLockBreakevenTriggerUsdt", min(0.45, max(0.20, be_trigger * (1.0 + 0.15 * severity))), 3)
 
     weak_loss_pressure = avg_loss > 0 and avg_win > 0 and avg_loss > avg_win * 1.35
     if weak_loss_pressure:
         sl_pct = max(0.20, float(cfg.get("stopLossPct", 0.9) or 0.9))
         loss_pressure = avg_loss / max(avg_win, 0.01)
-        sl_factor = 0.88 if loss_pressure >= 2.4 else 0.94
+        sl_factor = max(0.70, 0.88 if loss_pressure >= 2.4 else 0.94 - 0.06 * severity)
         set_float("stopLossPct", max(0.48, sl_pct * sl_factor), 3)
         cap = float(cfg.get("payoffLossGuardLossToWinCap", 1.05) or 1.05)
-        set_float("payoffLossGuardLossToWinCap", max(0.85, min(cap, 0.95)), 3)
+        set_float("payoffLossGuardLossToWinCap", max(0.85, min(cap, 0.95 - 0.05 * severity)), 3)
         max_loss_usdt = float(cfg.get("payoffLossGuardMaxLossUsdt", 0.9) or 0.9)
         target_loss_cap = max(0.25, min(max_loss_usdt, avg_win * 1.25))
-        set_float("payoffLossGuardMaxLossUsdt", max(0.25, min(0.75, target_loss_cap)), 3)
+        set_float("payoffLossGuardMaxLossUsdt", max(0.25, min(0.75, target_loss_cap * (1.0 - 0.10 * severity))), 3)
         min_loss_usdt = float(cfg.get("payoffLossGuardMinLossUsdt", 0.22) or 0.22)
         set_float("payoffLossGuardMinLossUsdt", max(0.12, min(min_loss_usdt, avg_win * 0.90)), 3)
         size_mult = float(cfg.get("supervisorSizeMultiplier", 1.0) or 1.0)
-        set_float("supervisorSizeMultiplier", max(0.65, min(size_mult, 0.85)), 3)
+        set_float("supervisorSizeMultiplier", max(0.65, min(size_mult, 0.85 - 0.10 * severity)), 3)
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
 
     state.update({
-        "at": now,
+        "at": int(time.time()),
         "signature": signature,
         "reason": "weak_payoff_ratio",
         "payoffRatio": round(payoff_ratio, 4),
         "avgWin": round(avg_win, 6),
         "avgLoss": round(avg_loss, 6),
+        "severity": round(severity, 3),
         "changes": changes,
     })
     AUTO_TRADE["supervisorAutoTune"] = state
-    AUTO_TRADE["config"] = copy.deepcopy(cfg)
-    try:
-        _persist_autotrade_snapshot()
-        _autotrade_log(f"Supervisor auto-tune weak payoff: {changes}")
-    except Exception:
-        pass
-    return {"applied": True, "signature": signature, "changes": changes}
+    out = _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, changes, "weak_payoff_ratio")
+    out["signature"] = signature
+    out["severity"] = round(severity, 3)
+    return out
 
 
 def _supervisor_delegation_cooldown(key: str, cfg: dict, default_minutes: int) -> tuple[dict, dict, bool, int]:
+    """Per-tuning-type cooldown with independent tracking."""
     now = int(time.time())
     state = AUTO_TRADE.get("supervisorAutoTune")
     if not isinstance(state, dict):
@@ -858,11 +868,92 @@ def _supervisor_delegation_cooldown(key: str, cfg: dict, default_minutes: int) -
         "low_entry_activity": "supervisorLowEntryTuneCooldownMinutes",
         "bad_utc_hour": "supervisorBadUtcTuneCooldownMinutes",
         "negative_expectancy": "supervisorNegativeExpectancyTuneCooldownMinutes",
+        "daily_entry_regression": "supervisorDailyRegressionCooldownMinutes",
+        "small_profit_capture": "supervisorSmallProfitCooldownMinutes",
+        "weak_payoff": "supervisorPayoffTuneCooldownMinutes",
+        "size_streak": "supervisorSizeStreakCooldownMinutes",
+        "scan_timeout": "supervisorScanTimeoutCooldownMinutes",
     }.get(key, "supervisorDelegationCooldownMinutes")
     cooldown_sec = max(300, int(cfg.get(cfg_key, default_minutes) or default_minutes) * 60)
     active = now - int(rec.get("at", 0) or 0) < cooldown_sec
     state["delegations"] = delegations
     return state, delegations, active, cooldown_sec
+
+
+def _tuning_history_append(key: str, changes: dict, pre_metrics: dict | None = None) -> None:
+    """Record tuning action for impact tracking and rollback."""
+    entry = {
+        "at": int(time.time()),
+        "key": key,
+        "changes": dict(changes) if changes else {},
+        "preMetrics": dict(pre_metrics) if pre_metrics else {},
+        "reverted": False,
+    }
+    history = AUTO_TRADE.setdefault("tuningHistory", [])
+    if not isinstance(history, list):
+        history = []
+        AUTO_TRADE["tuningHistory"] = history
+    history.append(entry)
+    if len(history) > 50:
+        AUTO_TRADE["tuningHistory"] = history[-50:]
+
+
+def _tuning_rollback_last(key: str) -> dict:
+    """Rollback the most recent tuning of this type. Returns pre-tune values if found."""
+    history = AUTO_TRADE.get("tuningHistory")
+    if not isinstance(history, list):
+        return {"reverted": False, "reason": "no_history"}
+    for entry in reversed(history):
+        if entry.get("key") == key and not entry.get("reverted"):
+            entry["reverted"] = True
+            pre = entry.get("preMetrics", {}) or {}
+            return {"reverted": True, "preMetrics": pre, "changes": entry.get("changes", {})}
+    return {"reverted": False, "reason": "no_matching_entry"}
+
+
+def _tuning_pre_metrics() -> dict:
+    """Capture current performance metrics before tuning."""
+    stats = _aggregate_live_trade_stats_from_log(None) or {}
+    return {
+        "winRatePct": stats.get("winRatePct", 0.0),
+        "avgPnl": stats.get("avgPnl", 0.0),
+        "payoffRatio": stats.get("payoffRatio", 0.0),
+        "realizedPnl": stats.get("realizedPnl", 0.0),
+        "trades": stats.get("trades", 0),
+    }
+
+
+def _tuning_signature(key: str, **parts) -> str:
+    """Unique tuning signature using hash of key + parts."""
+    import hashlib
+    payload = json.dumps({"key": key, **parts}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _tuning_should_rollback(key: str, post_window_trades: int = 3) -> bool:
+    """Check if recent tuning worsened performance. Auto-rollback if yes."""
+    history = AUTO_TRADE.get("tuningHistory")
+    if not isinstance(history, list):
+        return False
+    for entry in reversed(history):
+        if entry.get("key") != key or entry.get("reverted"):
+            continue
+        age = time.time() - int(entry.get("at", 0) or 0)
+        if age < 60 or age > 3600 * 4:
+            continue
+        pre = entry.get("preMetrics", {}) or {}
+        if not pre:
+            continue
+        current = _aggregate_live_trade_stats_from_log(None) or {}
+        pre_wr = float(pre.get("winRatePct", 0.0) or 0.0)
+        cur_wr = float(current.get("winRatePct", 0.0) or 0.0)
+        pre_pnl = float(pre.get("avgPnl", 0.0) or 0.0)
+        cur_pnl = float(current.get("avgPnl", 0.0) or 0.0)
+        if pre_wr > 0 and cur_wr < pre_wr - 12.0 and cur_pnl < pre_pnl - 0.05:
+            return True
+        if pre_pnl > 0 and cur_pnl < pre_pnl - 0.08:
+            return True
+    return False
 
 
 def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str) -> dict:
@@ -875,6 +966,7 @@ def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg
     state["delegations"] = delegations
     AUTO_TRADE["supervisorAutoTune"] = state
     AUTO_TRADE["config"] = copy.deepcopy(cfg)
+    _tuning_history_append(key, changes, _tuning_pre_metrics())
     try:
         _persist_autotrade_snapshot()
         _autotrade_log(f"Supervisor delegated {key}: {changes}")
@@ -964,6 +1056,16 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
         return {}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("low_entry_activity", cfg, 30)
 
+    if _tuning_should_rollback("low_entry_activity"):
+        rollback = _tuning_rollback_last("low_entry_activity")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "low_entry_activity", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
     changes: dict[str, dict] = {}
 
     def set_float(key: str, value: float, digits: int = 3):
@@ -1030,6 +1132,10 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
         or all(str(row.get("rejectReason", "") or "") in {"signal_wait", "low_conf", "perf_lock", ""} for row in board_rows)
     )
 
+    # Adaptive severity based on tradesLastHour=0 duration
+    no_entry_metric = 0.0 if stuck_no_entry else (0.5 if quiet_board else 1.0)
+    severity = max(0.0, min(1.0, (1.0 - no_entry_metric) / 1.0))
+
     target_min = max(1, int(cfg.get("supervisorTargetOpenPositionsMin", 3) or 3))
     target_max = max(target_min, int(cfg.get("supervisorTargetOpenPositionsMax", 6) or 6))
     target_min = min(target_min, 6)
@@ -1047,8 +1153,8 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
     if stuck_no_entry:
         min_floor = max(0.60, min(0.82, float(cfg.get("supervisorStuckLowEntryMinConfidenceFloor", 0.76) or 0.76)))
         early_floor = max(0.56, min(0.78, float(cfg.get("supervisorStuckLowEntryEarlyConfidenceFloor", 0.68) or 0.68)))
-        set_float("minConfidence", max(min_floor, min_conf - 0.015), 3)
-        set_float("earlyEntryMinConfidence", max(early_floor, early_conf - 0.015), 3)
+        set_float("minConfidence", max(min_floor, min_conf - 0.015 * (1.0 + severity * 2.0)), 3)
+        set_float("earlyEntryMinConfidence", max(early_floor, early_conf - 0.015 * (1.0 + severity * 2.0)), 3)
         for key in ("scanFallbackNearConfRelax", "scanGuardedFallbackConfRelax"):
             old = cfg.get(key)
             old_num = float(old) if old is not None else None
@@ -1062,19 +1168,21 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
             changes["scanGuardedFallbackEnabled"] = {"old": bool(cfg.get("scanGuardedFallbackEnabled", False)), "new": True}
             cfg["scanGuardedFallbackEnabled"] = True
     else:
-        set_float("minConfidence", max(0.48 if quiet_board else 0.50, min_conf - (0.03 if quiet_board else 0.02)), 3)
-        set_float("earlyEntryMinConfidence", max(0.50 if quiet_board else 0.52, early_conf - (0.025 if quiet_board else 0.015)), 3)
+        base_step_min = 0.03 if quiet_board else 0.02
+        base_step_early = 0.025 if quiet_board else 0.015
+        set_float("minConfidence", max(0.48 if quiet_board else 0.50, min_conf - base_step_min * (1.0 + severity * 2.0)), 3)
+        set_float("earlyEntryMinConfidence", max(0.50 if quiet_board else 0.52, early_conf - base_step_early * (1.0 + severity * 2.0)), 3)
     if quiet_board and not stuck_no_entry:
         score_gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
-        set_float("earlyEntryScoreGapMin", max(0.90, score_gap - 0.12), 3)
+        set_float("earlyEntryScoreGapMin", max(0.90, score_gap - 0.12 * (1.0 + severity * 2.0)), 3)
         hybrid_score = float(cfg.get("hybridMinScore", 0.72) or 0.72)
-        set_float("hybridMinScore", max(0.62, hybrid_score - 0.025), 3)
+        set_float("hybridMinScore", max(0.62, hybrid_score - 0.025 * (1.0 + severity * 2.0)), 3)
         hybrid_edge = float(cfg.get("hybridMinEdge", 0.06) or 0.06)
-        set_float("hybridMinEdge", max(0.025, hybrid_edge - 0.01), 3)
+        set_float("hybridMinEdge", max(0.025, hybrid_edge - 0.01 * (1.0 + severity * 2.0)), 3)
     analyze_top = max(3, int(cfg.get("scanAnalyzeTop", 8) or 8))
-    set_int("scanAnalyzeTop", min(16, analyze_top + 2))
+    set_int("scanAnalyzeTop", min(16, analyze_top + int(round(2 * (1.0 + severity * 2.0)))))
     top_liquid = max(5, int(cfg.get("scanTopLiquid", 30) or 30))
-    set_int("scanTopLiquid", min(80, top_liquid + 10))
+    set_int("scanTopLiquid", min(80, top_liquid + int(round(10 * (1.0 + severity * 2.0)))))
     guarded_top = max(analyze_top + 2, int(cfg.get("scanGuardedFallbackAnalyzeTop", analyze_top * 2) or analyze_top * 2))
     set_int("scanGuardedFallbackAnalyzeTop", min(24, max(guarded_top, int(cfg.get("scanAnalyzeTop", analyze_top)))))
     fallback_keys = ("scanFallbackNearEnabled",) if stuck_no_entry else ("scanFallbackNearEnabled", "scanPerfSoftFallbackEnabled")
@@ -1085,6 +1193,7 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta"}
+    signature = _tuning_signature("low_entry_activity", stuck=stuck_no_entry, quiet=quiet_board, reason=str(reason or "low_entry_activity"))
     out = _commit_supervisor_config_tune(
         state,
         delegations,
@@ -1097,6 +1206,8 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
     out["quietMarket"] = quiet_board
     out["targetOpenPositions"] = {"min": target_min, "max": target_max}
     out["stuckRecovery"] = stuck_no_entry
+    out["severity"] = severity
+    out["signature"] = signature
     if stuck_no_entry:
         out["nearMissSymbols"] = [str(row.get("symbol", "") or "") for row in near_miss_rows[:5]]
     return out
@@ -1108,6 +1219,16 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("scan_timeout", cfg, 20)
     if active:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
+
+    if _tuning_should_rollback("scan_timeout"):
+        rollback = _tuning_rollback_last("scan_timeout")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
     changes: dict[str, dict] = {}
 
@@ -1126,23 +1247,36 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
             changes[key] = {"old": old, "new": new}
 
     per_symbol_timeout = max(2.0, float(cfg.get("scanPerSymbolTimeoutSec", 7.5) or 7.5))
-    set_float("scanPerSymbolTimeoutSec", min(10.0, per_symbol_timeout * 1.15), 2)
+    # Adaptive severity based on timeout deviation from baseline
+    severity = max(0.0, min(1.0, (per_symbol_timeout - 2.0) / 8.0))
+    set_float("scanPerSymbolTimeoutSec", min(10.0, per_symbol_timeout * (1.0 + 0.15 * (1.0 + severity * 2.0))), 2)
     analyze_top = max(3, int(cfg.get("scanAnalyzeTop", 8) or 8))
-    set_int("scanAnalyzeTop", max(3, analyze_top - 1))
+    set_int("scanAnalyzeTop", max(3, analyze_top - int(round(1 * (1.0 + severity * 2.0)))))
     guarded_top = max(analyze_top, int(cfg.get("scanGuardedFallbackAnalyzeTop", max(analyze_top * 2, analyze_top + 4)) or analyze_top))
-    set_int("scanGuardedFallbackAnalyzeTop", max(int(cfg.get("scanAnalyzeTop", analyze_top) or analyze_top), guarded_top - 2))
+    set_int("scanGuardedFallbackAnalyzeTop", max(int(cfg.get("scanAnalyzeTop", analyze_top) or analyze_top), guarded_top - int(round(2 * (1.0 + severity * 2.0)))))
     fallback_retries = max(1, int(cfg.get("scanFallbackRetrySymbols", 3) or 3))
-    set_int("scanFallbackRetrySymbols", max(1, fallback_retries - 1))
+    set_int("scanFallbackRetrySymbols", max(1, fallback_retries - int(round(1 * (1.0 + severity * 2.0)))))
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta"}
-    return _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, changes, str(skip_msg or "scan timeout"))
+    signature = _tuning_signature("scan_timeout", skip_msg=str(skip_msg or "scan timeout"), per_symbol_timeout=per_symbol_timeout)
+    out = _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, changes, str(skip_msg or "scan timeout"))
+    out["severity"] = severity
+    out["signature"] = signature
+    return out
 
 
 def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, now_ts: int | None = None) -> dict:
     cfg = cfg if isinstance(cfg, dict) else {}
     now_ts = int(now_ts or time.time())
     today_key = time.strftime("%Y-%m-%d", time.localtime(now_ts))
+
+    # Cache to avoid re-processing all trades every call
+    cache = AUTO_TRADE.setdefault("_dailyRegimeCache", {})
+    cache_key = (today_key, len(trades or []))
+    if cache_key in cache:
+        return cache[cache_key]
+
     min_trades = max(4, int(cfg.get("supervisorDailyBaselineMinTrades", 8) or 8))
     cleaned: list[dict] = []
     for trade in trades or []:
@@ -1214,7 +1348,7 @@ def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, n
         and int(today.get("smallWins", 0) or 0) >= max(3, math.ceil(today_trades * 0.25))
         and avg_win_drop >= 0.10
     )
-    return {
+    result = {
         "today": today,
         "baseline": baseline,
         "status": "degrading" if degraded else "stable",
@@ -1225,18 +1359,34 @@ def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, n
         "avgWinDrop": round(avg_win_drop, 6),
         "minTrades": min_trades,
     }
+    cache[cache_key] = result
+    return result
 
 
 def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(daily_review, dict) or not isinstance(cfg, dict) or not bool(daily_review.get("degraded")):
         return {}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("daily_entry_regression", cfg, 30)
+
+    if _tuning_should_rollback("daily_entry_regression"):
+        rollback = _tuning_rollback_last("daily_entry_regression")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
     today = daily_review.get("today") if isinstance(daily_review.get("today"), dict) else {}
     baseline = daily_review.get("baseline") if isinstance(daily_review.get("baseline"), dict) else {}
-    signature = (
-        f"{today.get('day')}:{today.get('trades')}:{today.get('winRatePct')}:"
-        f"{today.get('pnl')}:{baseline.get('day')}:{baseline.get('pnl')}"
-    )
+
+    # Adaptive severity based on winRatePct drop and avgPnl drop
+    wr_drop = float(baseline.get("winRatePct", 0.0) or 0.0) - float(today.get("winRatePct", 0.0) or 0.0)
+    avg_drop = float(baseline.get("avgPnl", 0.0) or 0.0) - float(today.get("avgPnl", 0.0) or 0.0)
+    severity = max(0.0, min(1.0, max(wr_drop / 30.0, avg_drop / 0.20)))
+
+    signature = _tuning_signature("daily_entry_regression", day=today.get("day"), trades=today.get("trades"), winRatePct=today.get("winRatePct"), pnl=today.get("pnl"), baseline_day=baseline.get("day"), baseline_pnl=baseline.get("pnl"))
     rec = delegations.get("daily_entry_regression") if isinstance(delegations.get("daily_entry_regression"), dict) else {}
 
     changes: dict[str, dict] = {}
@@ -1258,23 +1408,24 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     min_conf = float(cfg.get("minConfidence", 0.66) or 0.66)
     # Profitable baseline days were not purely high-confidence trades; avoid
     # choking AUTO scan by pushing the global gate toward 0.90.
-    set_float("minConfidence", min(0.84, max(min_conf, min_conf + 0.015)), 3)
+    set_float("minConfidence", min(0.84, max(min_conf, min_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
-    set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015)), 3)
+    set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
-    set_float("earlyEntryScoreGapMin", min(2.10, max(gap, gap + 0.12)), 3)
+    set_float("earlyEntryScoreGapMin", min(2.10, max(gap, gap + 0.12 * (1.0 + severity * 2.0))), 3)
     set_float("earlyEntryMaxBbPctB", min(float(cfg.get("earlyEntryMaxBbPctB", 0.82) or 0.82), 0.78), 3)
     set_float("earlyEntryMinBbPctBShort", max(float(cfg.get("earlyEntryMinBbPctBShort", 0.18) or 0.18), 0.22), 3)
     set_float("earlyEntryMaxVwapDistancePct", min(float(cfg.get("earlyEntryMaxVwapDistancePct", 0.24) or 0.24), 0.18), 3)
-    set_float("riskCooldownResumeScoreGapMin", min(2.60, max(float(cfg.get("riskCooldownResumeScoreGapMin", 2.0) or 2.0), 2.20)), 3)
-    set_float("maxSpreadBps", max(10.0, min(float(cfg.get("maxSpreadBps", 22.0) or 22.0), float(cfg.get("maxSpreadBps", 22.0) or 22.0) * 0.90)), 2)
+    set_float("riskCooldownResumeScoreGapMin", min(2.60, max(float(cfg.get("riskCooldownResumeScoreGapMin", 2.0) or 2.0), 2.20 + 0.40 * severity)), 3)
+    max_spread = float(cfg.get("maxSpreadBps", 22.0) or 22.0)
+    set_float("maxSpreadBps", max(10.0, min(max_spread, max_spread * (0.90 - 0.05 * severity))), 2)
     if not bool(cfg.get("scanFallbackNearEnabled", True)):
         changes["scanFallbackNearEnabled"] = {"old": False, "new": True}
         cfg["scanFallbackNearEnabled"] = True
     near_relax = float(cfg.get("scanFallbackNearConfRelax", 0.04) or 0.04)
-    set_float("scanFallbackNearConfRelax", max(0.02, min(near_relax, 0.035)), 3)
+    set_float("scanFallbackNearConfRelax", max(0.02, min(near_relax, 0.035 - 0.005 * severity)), 3)
     guarded_relax = float(cfg.get("scanGuardedFallbackConfRelax", 0.04) or 0.04)
-    set_float("scanGuardedFallbackConfRelax", max(0.02, min(guarded_relax, 0.04)), 3)
+    set_float("scanGuardedFallbackConfRelax", max(0.02, min(guarded_relax, 0.04 - 0.005 * severity)), 3)
     if bool(cfg.get("scanPerfSoftFallbackEnabled", True)):
         changes["scanPerfSoftFallbackEnabled"] = {"old": True, "new": False}
         cfg["scanPerfSoftFallbackEnabled"] = False
@@ -1282,7 +1433,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
         changes["todayPerformanceGuardEnabled"] = {"old": False, "new": True}
         cfg["todayPerformanceGuardEnabled"] = True
     set_int("todayPerformanceGuardMinTrades", min(6, int(cfg.get("todayPerformanceGuardMinTrades", 8) or 8)))
-    set_float("todayPerformanceGuardMaxWinRatePct", min(48.0, max(float(cfg.get("todayPerformanceGuardMaxWinRatePct", 40.0) or 40.0), 45.0)), 2)
+    set_float("todayPerformanceGuardMaxWinRatePct", min(48.0, max(float(cfg.get("todayPerformanceGuardMaxWinRatePct", 40.0) or 40.0), 45.0 + 3.0 * severity)), 2)
 
     if not changes:
         if active and str(rec.get("signature", "") or "") == signature:
@@ -1295,6 +1446,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
         delegations["daily_entry_regression"]["today"] = today
         delegations["daily_entry_regression"]["baseline"] = baseline
     out["signature"] = signature
+    out["severity"] = severity
     return out
 
 
@@ -1310,6 +1462,20 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
         return {}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("small_profit_capture", cfg, 45)
 
+    if _tuning_should_rollback("small_profit_capture"):
+        rollback = _tuning_rollback_last("small_profit_capture")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Adaptive severity based on smallWins/trades_n ratio
+    ratio = small_wins / max(trades_n, 1)
+    severity = max(0.0, min(1.0, (ratio - 0.30) / 0.40))
+
     changes: dict[str, dict] = {}
 
     def set_float(key: str, value: float, digits: int = 3):
@@ -1323,27 +1489,31 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
         changes["holdWinners"] = {"old": bool(cfg.get("holdWinners", False)), "new": True}
         cfg["holdWinners"] = True
     hold_min = float(cfg.get("holdMinConfidence", 0.72) or 0.72)
-    set_float("holdMinConfidence", max(0.66, min(0.84, hold_min - 0.02)), 3)
+    set_float("holdMinConfidence", max(0.66, min(0.84, hold_min - 0.02 * (1.0 + severity * 2.0))), 3)
     trigger = float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)
     keep = float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15)
     giveback = float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22)
-    set_float("profitLockTriggerUsdt", max(0.22, min(trigger, trigger * 0.85)), 3)
-    set_float("profitLockKeepUsdt", min(0.45, max(keep, keep * 1.20, 0.18)), 3)
-    set_float("profitLockMaxGivebackUsdt", max(0.10, min(giveback, giveback * 0.82, 0.18)), 3)
+    set_float("profitLockTriggerUsdt", max(0.22, min(trigger, trigger * (0.85 - 0.05 * severity))), 3)
+    set_float("profitLockKeepUsdt", min(0.45, max(keep, keep * (1.20 + 0.10 * severity), 0.18)), 3)
+    set_float("profitLockMaxGivebackUsdt", max(0.10, min(giveback, giveback * (0.82 - 0.08 * severity), 0.18)), 3)
     floor = float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08)
-    set_float("profitLockBreakevenFloorUsdt", min(0.18, max(floor, 0.10)), 3)
+    set_float("profitLockBreakevenFloorUsdt", min(0.18, max(floor, 0.10 + 0.02 * severity)), 3)
     tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55))
     set_float("tpTargetMinUsdt", min(1.20, max(0.45, tp_min)), 3)
     tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.2) or 2.2))
     set_float("tpTargetMaxUsdt", min(3.20, max(tp_max, float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.0)), 3)
     breakeven_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
-    set_float("profitLockBreakevenTriggerUsdt", min(float(cfg.get("profitLockTriggerUsdt", trigger) or trigger), max(0.14, breakeven_trigger * 0.95)), 3)
+    set_float("profitLockBreakevenTriggerUsdt", min(float(cfg.get("profitLockTriggerUsdt", trigger) or trigger), max(0.14, breakeven_trigger * (0.95 - 0.05 * severity))), 3)
 
     if not changes:
         if active:
             return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
         return {"applied": False, "reason": "no_safe_delta"}
-    return _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, changes, str(review.get("label") or "small wins"))
+    signature = _tuning_signature("small_profit_capture", trades=trades_n, small_wins=small_wins, ratio=round(ratio, 3))
+    out = _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, changes, str(review.get("label") or "small wins"))
+    out["severity"] = severity
+    out["signature"] = signature
+    return out
 
 
 def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None = None) -> dict:
@@ -1361,11 +1531,23 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
         return {}
 
     label = str(review.get("label", "") or "recent_trades")
-    signature = f"{label}:{trades_n}:{round(win_rate, 1)}:{round(avg_pnl, 3)}:{round(total_pnl, 3)}"
+    # Adaptive severity based on winRatePct and avgPnl
+    severity = max(0.0, min(1.0, max((45.0 - win_rate) / 45.0, (-0.04 - avg_pnl) / 0.20)))
+    signature = _tuning_signature("negative_expectancy", label=label, trades=trades_n, win_rate=win_rate, avg_pnl=avg_pnl, total_pnl=total_pnl)
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("negative_expectancy", cfg, 45)
     rec = delegations.get("negative_expectancy") if isinstance(delegations.get("negative_expectancy"), dict) else {}
     if active and str(rec.get("signature", "") or "") == signature:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature}
+
+    if _tuning_should_rollback("negative_expectancy"):
+        rollback = _tuning_rollback_last("negative_expectancy")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
     changes: dict[str, dict] = {}
 
@@ -1385,12 +1567,13 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
 
     min_conf = float(cfg.get("minConfidence", 0.62) or 0.62)
     conf_step = 0.03 if avg_pnl < -0.10 or win_rate < 40.0 else 0.02
-    set_float("minConfidence", min(0.84, max(min_conf, min_conf + min(conf_step, 0.015))), 3)
+    set_float("minConfidence", min(0.84, max(min_conf, min_conf + min(conf_step, 0.015) * (1.0 + severity * 2.0))), 3)
 
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
-    set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015)), 3)
+    set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
-    set_float("earlyEntryScoreGapMin", min(2.10, max(gap, gap + (0.12 if quick_losses >= 2 else 0.08))), 3)
+    gap_step = 0.12 if quick_losses >= 2 else 0.08
+    set_float("earlyEntryScoreGapMin", min(2.10, max(gap, gap + gap_step * (1.0 + severity * 2.0))), 3)
     if not bool(cfg.get("earlyEntryPullbackResetEnabled", True)):
         changes["earlyEntryPullbackResetEnabled"] = {"old": False, "new": True}
         cfg["earlyEntryPullbackResetEnabled"] = True
@@ -1399,12 +1582,12 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     early_vwap = float(cfg.get("earlyEntryMaxVwapDistancePct", 0.24) or 0.24)
     set_float("earlyEntryMaxVwapDistancePct", max(0.12, min(early_vwap, 0.24)), 3)
     hybrid_score = float(cfg.get("hybridMinScore", 0.72) or 0.72)
-    set_float("hybridMinScore", min(0.86, max(hybrid_score, hybrid_score + 0.02)), 3)
+    set_float("hybridMinScore", min(0.86, max(hybrid_score, hybrid_score + 0.02 * (1.0 + severity * 2.0))), 3)
     hybrid_edge = float(cfg.get("hybridMinEdge", 0.06) or 0.06)
-    set_float("hybridMinEdge", min(0.12, max(hybrid_edge, hybrid_edge + 0.01)), 3)
+    set_float("hybridMinEdge", min(0.12, max(hybrid_edge, hybrid_edge + 0.01 * (1.0 + severity * 2.0))), 3)
 
     max_spread = float(cfg.get("maxSpreadBps", 22.0) or 22.0)
-    set_float("maxSpreadBps", max(12.0, min(max_spread, max_spread * 0.92)), 2)
+    set_float("maxSpreadBps", max(12.0, min(max_spread, max_spread * (0.92 - 0.05 * severity))), 2)
     if str(cfg.get("scanSidePreference", "score") or "score") != "score":
         changes["scanSidePreference"] = {"old": cfg.get("scanSidePreference"), "new": "score"}
         cfg["scanSidePreference"] = "score"
@@ -1412,9 +1595,9 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
         changes["scanFallbackNearEnabled"] = {"old": False, "new": True}
         cfg["scanFallbackNearEnabled"] = True
     near_relax = float(cfg.get("scanFallbackNearConfRelax", 0.04) or 0.04)
-    set_float("scanFallbackNearConfRelax", max(0.02, min(near_relax, 0.035)), 3)
+    set_float("scanFallbackNearConfRelax", max(0.02, min(near_relax, 0.035 - 0.005 * severity)), 3)
     guarded_relax = float(cfg.get("scanGuardedFallbackConfRelax", 0.04) or 0.04)
-    set_float("scanGuardedFallbackConfRelax", max(0.02, min(guarded_relax, 0.04)), 3)
+    set_float("scanGuardedFallbackConfRelax", max(0.02, min(guarded_relax, 0.04 - 0.005 * severity)), 3)
     if bool(cfg.get("scanPerfSoftFallbackEnabled", True)):
         changes["scanPerfSoftFallbackEnabled"] = {"old": True, "new": False}
         cfg["scanPerfSoftFallbackEnabled"] = False
@@ -1430,12 +1613,12 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
         cfg["todayPerformanceGuardEnabled"] = True
     set_int("todayPerformanceGuardMinTrades", min(8, int(cfg.get("todayPerformanceGuardMinTrades", 8) or 8)))
     guard_wr = float(cfg.get("todayPerformanceGuardMaxWinRatePct", 40.0) or 40.0)
-    set_float("todayPerformanceGuardMaxWinRatePct", min(45.0, max(guard_wr, 40.0)), 2)
+    set_float("todayPerformanceGuardMaxWinRatePct", min(45.0, max(guard_wr, 40.0 + 3.0 * severity)), 2)
     set_int("sessionBiasMinSamples", min(8, int(cfg.get("sessionBiasMinSamples", 10) or 10)))
     bad_wr = float(cfg.get("sessionBiasBadWinRatePct", 42.0) or 42.0)
-    set_float("sessionBiasBadWinRatePct", min(48.0, max(bad_wr, 45.0)), 2)
+    set_float("sessionBiasBadWinRatePct", min(48.0, max(bad_wr, 45.0 + 2.0 * severity)), 2)
     max_shift = float(cfg.get("sessionBiasMaxConfShift", 0.05) or 0.05)
-    set_float("sessionBiasMaxConfShift", min(0.06, max(max_shift, 0.05)), 3)
+    set_float("sessionBiasMaxConfShift", min(0.06, max(max_shift, 0.05 + 0.01 * severity)), 3)
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
@@ -1447,6 +1630,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
         delegations["negative_expectancy"]["avgPnl"] = round(avg_pnl, 6)
         delegations["negative_expectancy"]["pnl"] = round(total_pnl, 6)
     out["signature"] = signature
+    out["severity"] = severity
     return out
 
 
@@ -1509,14 +1693,19 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     reason = "streak_reset"
     if kind == "win" and streak >= win_min:
         step = max(0.0, float(cfg.get("supervisorSizeWinStepPct", 10.0) or 10.0)) / 100.0
-        target = min(max_mult, 1.0 + step * (streak - win_min + 1))
+        severity = max(0.0, min(1.0, (streak - win_min) / 10.0))
+        scaled_step = step * (1.0 + severity * 2.0)
+        target = min(max_mult, 1.0 + scaled_step * (streak - win_min + 1))
         reason = "win_streak"
     elif kind == "loss" and streak >= loss_min:
         step = max(0.0, float(cfg.get("supervisorSizeLossStepPct", 15.0) or 15.0)) / 100.0
-        target = max(min_mult, 1.0 - step * (streak - loss_min + 1))
+        severity = max(0.0, min(1.0, (streak - loss_min) / 10.0))
+        scaled_step = step * (1.0 + severity * 2.0)
+        target = max(min_mult, 1.0 - scaled_step * (streak - loss_min + 1))
         reason = "loss_streak"
     elif abs(old_mult - 1.0) >= 0.001:
         target = 1.0
+        severity = 0.0
     else:
         return {"applied": False, "reason": "no_streak", "streak": state}
 
@@ -1524,11 +1713,21 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     if abs(old_mult - target) < 0.001:
         return {"applied": False, "reason": "no_safe_delta", "streak": state}
 
-    signature = f"{reason}:{state.get('signature')}:{target:.3f}"
+    signature = _tuning_signature("size_streak", reason=reason, streak=streak, target=target, kind=kind)
     state_obj, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("size_streak", cfg, 10)
     rec = delegations.get("size_streak") if isinstance(delegations.get("size_streak"), dict) else {}
     if active and str(rec.get("signature", "") or "") == signature:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature, "streak": state}
+
+    if _tuning_should_rollback("size_streak"):
+        rollback = _tuning_rollback_last("size_streak")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in cfg:
+                    cfg[k] = v
+            _commit_supervisor_config_tune(state_obj, delegations, "size_streak", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
     cfg["supervisorSizeMultiplier"] = target
     changes = {
@@ -1549,6 +1748,7 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
         delegations["size_streak"]["pnl"] = state.get("pnl")
     out["signature"] = signature
     out["streak"] = state
+    out["severity"] = severity
     return out
 
 
@@ -3921,36 +4121,88 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
         except Exception:
             pass
         return out
+
+    state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("loss_streak_self_review", out, 60)
+    if active:
+        return out
+
+    if _tuning_should_rollback("loss_streak_self_review"):
+        rollback = _tuning_rollback_last("loss_streak_self_review")
+        if rollback.get("reverted"):
+            pre = rollback.get("preMetrics", {})
+            for k, v in pre.items():
+                if isinstance(v, (int, float)) and k in out:
+                    out[k] = v
+            _commit_supervisor_config_tune(state, delegations, "loss_streak_self_review", out, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            return out
+
+    # Adaptive severity based on loss_streak length
+    severity = max(0.0, min(1.0, (loss_streak - 2) / 5.0))
+
+    changes: dict[str, dict] = {}
+
+    def set_float(key: str, value: float, digits: int = 4):
+        old = float(out.get(key, value) or value)
+        new = round(float(value), digits)
+        if abs(old - new) >= 1e-9:
+            out[key] = new
+            changes[key] = {"old": round(old, digits), "new": new}
+
+    def set_int(key: str, value: int):
+        old = int(out.get(key, value) or value)
+        new = int(value)
+        if old != new:
+            out[key] = new
+            changes[key] = {"old": old, "new": new}
+
+    def set_bool(key: str, value: bool):
+        old = bool(out.get(key, value))
+        if old != value:
+            out[key] = value
+            changes[key] = {"old": old, "new": value}
+
+    def set_str(key: str, value: str):
+        old = str(out.get(key, value) or value)
+        if old != str(value):
+            out[key] = str(value)
+            changes[key] = {"old": old, "new": str(value)}
+
     old_conf = float(out.get("minConfidence", 0.65) or 0.65)
-    new_conf = min(0.86, max(old_conf, old_conf + 0.02))
+    new_conf = min(0.86, max(old_conf, old_conf + 0.02 * (1.0 + severity * 2.0)))
     if new_conf > old_conf:
-        out["minConfidence"] = round(new_conf, 4)
+        set_float("minConfidence", new_conf, 4)
         actions.append(f"minConfidence {old_conf:.2f}->{new_conf:.2f}")
     if out.get("scanSidePreference") != "score":
-        out["scanSidePreference"] = "score"
+        set_str("scanSidePreference", "score")
         actions.append("scanSidePreference=score")
+
+    # Temporary lock with expiration instead of permanent disable
     if bool(out.get("scanFallbackNearEnabled", True)):
-        out["scanFallbackNearEnabled"] = False
-        actions.append("scanFallbackNearEnabled=false")
+        lock_minutes = max(15, int(out.get("riskCooldownMinutes", 25) or 25))
+        AUTO_TRADE.setdefault("_scanFallbackNearLock", {})["until"] = now + lock_minutes * 60
+        AUTO_TRADE["_scanFallbackNearLock"]["reason"] = "loss_streak"
+        actions.append(f"scanFallbackNearLocked {lock_minutes}m")
+
     if not bool(out.get("pairLockEnabled", True)):
-        out["pairLockEnabled"] = True
+        set_bool("pairLockEnabled", True)
         actions.append("pairLockEnabled=true")
-    out["pairLockLossStreak"] = min(int(out.get("pairLockLossStreak", 2) or 2), 2)
-    out["pairLockMinutes"] = max(int(out.get("pairLockMinutes", 45) or 45), 90)
-    out["riskCooldownEnabled"] = True
-    out["riskCooldownLossStreak"] = min(int(out.get("riskCooldownLossStreak", 3) or 3), 3)
-    out["riskCooldownMinutes"] = max(int(out.get("riskCooldownMinutes", 25) or 25), 45)
-    out["perfGateEarlyMinSamples"] = min(int(out.get("perfGateEarlyMinSamples", 4) or 4), 4)
-    out["perfGateEarlyMinPnlUsdt"] = max(float(out.get("perfGateEarlyMinPnlUsdt", -0.35) or -0.35), -0.35)
-    out["perfLockMinutes"] = max(int(out.get("perfLockMinutes", 90) or 90), 120)
+    set_int("pairLockLossStreak", min(int(out.get("pairLockLossStreak", 2) or 2), 2))
+    set_int("pairLockMinutes", max(int(out.get("pairLockMinutes", 45) or 45), 90))
+    set_bool("riskCooldownEnabled", True)
+    set_int("riskCooldownLossStreak", min(int(out.get("riskCooldownLossStreak", 3) or 3), 3))
+    set_int("riskCooldownMinutes", max(int(out.get("riskCooldownMinutes", 25) or 25), 45))
+    set_int("perfGateEarlyMinSamples", min(int(out.get("perfGateEarlyMinSamples", 4) or 4), 4))
+    set_float("perfGateEarlyMinPnlUsdt", max(float(out.get("perfGateEarlyMinPnlUsdt", -0.35) or -0.35), -0.35), 3)
+    set_int("perfLockMinutes", max(int(out.get("perfLockMinutes", 90) or 90), 120))
     old_max_open = int(out.get("maxOpenPositions", 6) or 6)
     diversification_floor = 6 if (bool(out.get("marketScan")) or str(out.get("symbol", "")).upper() in {"AUTO", "SCAN"}) else 2
-    new_max_open = max(diversification_floor, min(old_max_open, old_max_open - 1 if loss_streak >= 4 else old_max_open))
+    reduction = int(round(1 * (1.0 + severity * 2.0))) if loss_streak >= 4 else 0
+    new_max_open = max(diversification_floor, min(old_max_open, old_max_open - reduction))
     if new_max_open < old_max_open:
-        out["maxOpenPositions"] = new_max_open
+        set_int("maxOpenPositions", new_max_open)
         actions.append(f"maxOpenPositions {old_max_open}->{new_max_open}")
     elif old_max_open < diversification_floor:
-        out["maxOpenPositions"] = diversification_floor
+        set_int("maxOpenPositions", diversification_floor)
         actions.append(f"maxOpenPositions {old_max_open}->{diversification_floor}")
     hours = _entry_session_hours_from_log(int(out.get("sessionBiasLookbackTrades", 700) or 700))
     hour = time.localtime(now).tm_hour
@@ -3961,11 +4213,18 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
         pnl = float(st.get("pnl", 0.0) or 0.0)
         if trades >= int(out.get("selfReviewMinHourSamples", 8) or 8) and wr <= 42.0 and pnl < 0:
             window = f"{hour:02d}:00-{(hour + 1) % 24:02d}:00"
-            windows = list(out.get("noTradeWindows") or [])
+            old_windows = list(out.get("noTradeWindows") or [])
+            windows = list(old_windows)
             if window not in windows:
                 windows.append(window)
                 out["noTradeWindows"] = windows
+                changes["noTradeWindows"] = {"old": old_windows, "new": windows}
                 actions.append(f"noTradeWindow {window}")
+
+    signature = _tuning_signature("loss_streak_self_review", loss_streak=loss_streak, cause_category=cause_category, actions=actions)
+    if changes:
+        _commit_supervisor_config_tune(state, delegations, "loss_streak_self_review", out, changes, "loss_streak")
+
     AUTO_TRADE["lastSelfReview"] = {
         "ts": now,
         "lossStreak": int(loss_streak),
@@ -3973,6 +4232,8 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
         "minConfidence": out.get("minConfidence"),
         "maxOpenPositions": out.get("maxOpenPositions"),
         "noTradeWindows": list(out.get("noTradeWindows") or []),
+        "severity": severity,
+        "signature": signature,
     }
     try:
         write_self_review_memory(VAULT_DIR, AUTO_TRADE["lastSelfReview"])

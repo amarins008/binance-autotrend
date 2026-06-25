@@ -25,10 +25,10 @@
 - Reason: boost_after_symbol_edge
 
 ## Scan Behavior
-- Observations: 981
-- PickedCount: 260
-- PickRate: 26.5%
-- LastSignal: WAIT
-- LastConfidence: 0.44
-- LastScanScore: 0.189919
-- UpdatedAt: 1782371535
+- Observations: 982
+- PickedCount: 261
+- PickRate: 26.58%
+- LastSignal: LONG
+- LastConfidence: 0.754
+- LastScanScore: 0.758919
+- UpdatedAt: 1782375466

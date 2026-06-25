@@ -29,6 +29,6 @@
 - PickedCount: 52
 - PickRate: 5.86%
 - LastSignal: LONG
-- LastConfidence: 0.771
-- LastScanScore: 0.625488
-- UpdatedAt: 1782371817
+- LastConfidence: 0.77
+- LastScanScore: 0.624485
+- UpdatedAt: 1782378119
