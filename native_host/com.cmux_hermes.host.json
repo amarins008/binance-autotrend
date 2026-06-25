@@ -1,9 +1,0 @@
-{
-    "name":  "com.cmux_hermes.host",
-    "description":  "Cmux + Hermes Native Host",
-    "path":  "E:\\My Project\\Chrome extension\\Binance autotrend\\native_host\\cmux_hermes_host.bat",
-    "type":  "stdio",
-    "allowed_origins":  [
-                            "chrome-extension://EXTENSION_ID_PLACEHOLDER/"
-                        ]
-}

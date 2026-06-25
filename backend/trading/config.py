@@ -33,7 +33,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("htfStrictEnabled", True)
     out.setdefault("htfMinStrength", 0.28)
     out.setdefault("requireVisionConsensus", False)
-    out.setdefault("maxOpenPositions", 2)
+    out.setdefault("maxOpenPositions", 6)  # Changed from 2 to 6 for better diversification
     out.setdefault("maxSpreadBps", 16.0)
     out.setdefault("maxSlippageBps", 18.0)
     out.setdefault("noTradeWindows", [])
@@ -103,10 +103,51 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("supervisorSizeWinStreakMin", 3)
     out.setdefault("supervisorSizeLossStreakMin", 2)
     out.setdefault("supervisorSizeWinStepPct", 10.0)
-    out.setdefault("supervisorSizeLossStepPct", 15.0)
+    out.setdefault("supervisorSizeLossStepPct", 20.0)  # Increased from 15.0 to 20.0 for faster risk reduction
     out.setdefault("supervisorSizeMaxMultiplier", 1.35)
-    out.setdefault("supervisorSizeMinMultiplier", 0.50)
-    out.setdefault("supervisorSizeDiversifiedMinMultiplier", 0.65)
+    out.setdefault("supervisorSizeMinMultiplier", 0.35)  # Reduced from 0.50 to 0.35 for deeper risk reduction
+    out.setdefault("supervisorSizeDiversifiedMinMultiplier", 0.55)  # Reduced from 0.65 to 0.55
+    out.setdefault("adaptiveLossStreakEnabled", True)  # New: Enable adaptive sizing based on loss streak
+    out.setdefault("adaptiveLossStreakThreshold", 3)  # Start reducing size after 3 consecutive losses
+    out.setdefault("adaptiveLossStreakMaxReduction", 0.50)  # Maximum 50% size reduction during severe loss streaks
+    out.setdefault("sessionBasedAdjustments", True)  # New: Enable session-based adjustments instead of time blocks
+    out.setdefault("sessionAsianMultiplier", 0.85)  # Asian session size multiplier
+    out.setdefault("sessionLondonMultiplier", 1.15)  # London session size multiplier
+    out.setdefault("sessionUSOverlapMultiplier", 1.2)  # US overlap size multiplier
+    out.setdefault("sessionUSAfternoonMultiplier", 1.05)  # US afternoon size multiplier
+    out.setdefault("sessionAsianEveningMultiplier", 0.9)  # Asian evening size multiplier
+    out.setdefault("minMomentumStrength", 0.08)  # Minimum momentum strength required for entries
+    out.setdefault("momentumDirectionConfirmation", True)  # Require momentum direction to match signal
+    out.setdefault("divergenceFilterEnabled", True)  # Enable divergence detection filter
+    out.setdefault("volumeSpikeThreshold", 3.0)  # Volume spike threshold (multiple of average)
+    out.setdefault("wickRejectionThreshold", 0.4)  # Wick size threshold for rejection detection
+    out.setdefault("keyLevelBuffer", 0.08)  # Buffer around key levels (BB extremes)
+    out.setdefault("orderFlowConfirmation", True)  # Require order flow confirmation
+    out.setdefault("minOrderFlowImbalance", 0.03)  # Minimum order flow imbalance for confirmation
+    out.setdefault("tradingviewEnabled", False)  # TradingView MCP integration
+    out.setdefault("tradingviewApiKey", "")  # TradingView API key
+    out.setdefault("tradingviewApiSecret", "")  # TradingView API secret
+    out.setdefault("tradingviewWebhookUrl", "")  # TradingView webhook URL
+    out.setdefault("tradingviewCacheTtl", 60)  # Cache TTL in seconds
+    out.setdefault("tradingviewRateLimit", 30)  # Rate limit per minute
+    out.setdefault("tradingviewTimeout", 5.0)  # API timeout in seconds
+    out.setdefault("tradingviewConfidenceBoost", 0.05)  # Confidence boost on confirmation
+    out.setdefault("tradingviewMaxFailures", 5)  # Max failures before auto-disable
+    # TradingView position management (global defaults)
+    out.setdefault("tradingviewTpExtensionEnabled", False)  # Enable TP extension based on TradingView
+    out.setdefault("tradingviewTpExtensionMinStrength", 0.7)  # Min strength for TP extension
+    out.setdefault("tradingviewTpExtensionBasePct", 0.2)  # Base TP extension percentage
+    out.setdefault("tradingviewTpExtensionMaxPct", 0.5)  # Max TP extension percentage
+    out.setdefault("tradingviewSlTrailingEnabled", False)  # Enable SL trailing based on TradingView
+    out.setdefault("tradingviewSlTrailingMinStrength", 0.6)  # Min strength for SL trailing
+    out.setdefault("tradingviewSlTrailingBasePct", 0.15)  # Base SL trailing percentage
+    out.setdefault("tradingviewSlTrailingMaxPct", 0.3)  # Max SL trailing percentage
+    out.setdefault("tradingviewEarlyExitEnabled", False)  # Enable early exit based on TradingView
+    out.setdefault("tradingviewEarlyExitMinStrength", 0.7)  # Min strength for early exit
+    # Per-symbol overrides (optional - overrides global defaults)
+    out.setdefault("tradingviewTpExtensionOverride", {})  # {"BTCUSDT": True, "ETHUSDT": False}
+    out.setdefault("tradingviewSlTrailingOverride", {})  # {"BTCUSDT": True, "ETHUSDT": False}
+    out.setdefault("tradingviewEarlyExitOverride", {})  # {"BTCUSDT": True, "ETHUSDT": False}
     out.setdefault("volTargetEnabled", True)
     out.setdefault("volTargetPct", 0.2)
     out.setdefault("volSizeMaxMult", 1.15)
@@ -263,5 +304,5 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         out["strongFlipUltraScoreGap"] = min(3.5, max(out["strongFlipMinScoreGap"] + 0.2, float(out.get("strongFlipUltraScoreGap", 2.2) or 2.2)))
     except Exception:
         out["strongFlipUltraScoreGap"] = 2.2
-    out["engineVersion"] = "pro-2.0"
+    out["engineVersion"] = "pro-2.1"  # Updated version for adaptive improvements
     return out

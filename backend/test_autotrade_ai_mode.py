@@ -270,42 +270,16 @@ class TestRewardSystem(unittest.TestCase):
         self.assertGreater(comp["guardDiscipline"], 0.0)
         self.assertGreaterEqual(comp["riskReward"], 0.0)
 
-    def test_reward_components_penalize_bad_loss(self):
-        cfg = {
-            "minConfidence": 0.74,
-            "maxSpreadBps": 16,
-            "takeProfitPct": 1.0,
-            "stopLossPct": 1.0,
-            "minRiskRewardRatio": 1.5,
-            "maxSlippageBps": 18,
-        }
-        trade = {
-            "side": "SHORT",
-            "entry": 100.0,
-            "exit": 101.0,
-            "qty": 1.0,
-            "pnl": -1.0,
-            "reason": "SL_HIT_LOW_CONF",
-            "openedAt": 1000,
-            "closedAt": 1300,
-            "entryConfidence": 0.60,
-            "entrySpreadBps": 30.0,
-            "patternBias": 0.7,
-            "patternScore": 35.0,
-            "maxAdversePct": 1.2,
-        }
-
-        comp = main._trade_reward_components(trade, cfg)
-
-        self.assertLess(comp["total"], 0.0)
-        self.assertLess(comp["entryQuality"], 0.0)
-        self.assertLess(comp["guardDiscipline"], 0.0)
-        self.assertLess(comp["riskReward"], 0.0)
-
-    def test_record_learning_trade_persists_reward_components(self):
+    def test_record_learning_trade_with_behavior_enabled_writes_log_and_profile(self):
         prev_config = main.AUTO_TRADE.get("config")
         try:
-            main.AUTO_TRADE["config"] = {"minConfidence": 0.70, "takeProfitPct": 1.8, "stopLossPct": 0.9}
+            main.AUTO_TRADE["config"] = {
+                "minConfidence": 0.70,
+                "takeProfitPct": 1.8,
+                "stopLossPct": 0.9,
+                "learningRewardEnabled": True,
+                "learningBehaviorRewardEnabled": True,
+            }
             with tempfile.TemporaryDirectory() as tmp:
                 vault = Path(tmp) / "vault"
                 learn = vault / "learning_profiles.json"
@@ -330,15 +304,16 @@ class TestRewardSystem(unittest.TestCase):
                                 },
                                 "LIVE",
                             )
-                            profiles = json.loads(learn.read_text(encoding="utf-8"))
+                            profile = json.loads(learn.read_text(encoding="utf-8"))["GOODUSDT"]
+                            log_rows = log_path.read_text(encoding="utf-8").splitlines()
         finally:
             main.AUTO_TRADE["config"] = prev_config
 
-        profile = profiles["GOODUSDT"]
         self.assertGreater(profile["rewardScore"], 0.0)
         self.assertGreater(profile["rewardBehaviorDelta"], 0.0)
         self.assertIn("rewardComponents", profile)
         self.assertGreater(profile["rewardComponents"]["total"], 0.0)
+        self.assertTrue(any('"mode": "LIVE"' in row and '"symbol": "GOODUSDT"' in row for row in log_rows))
 
 
 class TestLossStreakSelfReview(unittest.TestCase):

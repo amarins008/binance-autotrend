@@ -312,6 +312,68 @@
 
     }
 
+    .tv-status {
+
+      display: inline-flex;
+
+      align-items: center;
+
+      gap: 4px;
+
+    }
+
+    .tv-status::before {
+
+      content: "";
+
+      width: 6px;
+
+      height: 6px;
+
+      border-radius: 50%;
+
+      background: var(--muted);
+
+    }
+
+    .tv-status.healthy::before {
+
+      background: var(--good);
+
+      box-shadow: 0 0 8px var(--good);
+
+    }
+
+    .tv-status.unhealthy::before {
+
+      background: var(--bad);
+
+      box-shadow: 0 0 8px var(--bad);
+
+    }
+
+    .tv-status.disabled::before {
+
+      background: var(--muted);
+
+    }
+
+    .tv-status.loading::before {
+
+      background: var(--warn);
+
+      animation: pulse 1s infinite;
+
+    }
+
+    @keyframes pulse {
+
+      0%, 100% { opacity: 1; }
+
+      50% { opacity: 0.5; }
+
+    }
+
     .vo-kpi-mini {
 
       display: grid;
@@ -3474,6 +3536,8 @@
 
           <div class="vo-status-row"><span>Bot</span><b id="botStatus">—</b></div>
 
+          <div class="vo-status-row"><span>TradingView</span><b id="tvStatus" class="tv-status">—</b></div>
+
         </div>
 
       </div>
@@ -3654,6 +3718,8 @@
 
           <label><input id="cfgPairLockEnabled" type="checkbox" checked /> Pair lock</label>
 
+          <label><input id="cfgTradingViewEnabled" type="checkbox" /> TradingView MCP</label>
+
           <label><input id="cfgAutoLearn" type="checkbox" checked /> Auto learn</label>
 
         </div>
@@ -3752,7 +3818,7 @@ const PAIR_LOCK_MINUTES_KEY = "cmux_dashboard_pair_lock_minutes";
 
 const ui = {
 
-  baseUrl: $("baseUrl"), svcStatus: $("svcStatus"), botStatus: $("botStatus"),
+  baseUrl: $("baseUrl"), svcStatus: $("svcStatus"), botStatus: $("botStatus"), tvStatus: $("tvStatus"),
 
   publicIp: $("publicIp"), publishIpHeader: $("publishIpHeader"), winRate: $("winRate"), realizedPnl: $("realizedPnl"),
 
@@ -3859,6 +3925,53 @@ if ($("cfgPairLockEnabled")) {
       if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
 
       safeAppendLog(`PairLock: ${$("cfgPairLockEnabled").checked}`, "ok");
+
+      await refreshStatus();
+
+    } catch (e) { showToast("err", String(e.message || e).slice(0, 120)); }
+
+  });
+
+}
+
+if ($("cfgTradingViewEnabled")) {
+
+  const saved = localStorage.getItem("cmux_dashboard_tv_enabled");
+
+  if (saved === "true" || saved === "false") $("cfgTradingViewEnabled").checked = saved === "true";
+
+  // Function to update TradingView status
+  function updateTVStatusUI() {
+    const tvStatusEl = $("tvStatus");
+    if (tvStatusEl) {
+      tvStatusEl.className = "tv-status";
+      if ($("cfgTradingViewEnabled").checked) {
+        tvStatusEl.classList.add("healthy");
+        tvStatusEl.textContent = "Active";
+      } else {
+        tvStatusEl.classList.add("disabled");
+        tvStatusEl.textContent = "Disabled";
+      }
+    }
+  }
+
+  // Set initial status based on checkbox state
+  updateTVStatusUI();
+
+  $("cfgTradingViewEnabled").addEventListener("change", async () => {
+
+    localStorage.setItem("cmux_dashboard_tv_enabled", $("cfgTradingViewEnabled").checked ? "true" : "false");
+
+    // Update status immediately
+    updateTVStatusUI();
+
+    try {
+
+      const rs = await req("/bot/config", "POST", { tradingviewEnabled: !!$("cfgTradingViewEnabled").checked });
+
+      if (rs?.bot?.ok === false && rs.bot.reason !== "NO_ACTIVE_CONFIG") throw new Error(rs.bot.reason || "failed");
+
+      safeAppendLog(`TradingView MCP: ${$("cfgTradingViewEnabled").checked ? "Enabled" : "Disabled"}`, "ok");
 
       await refreshStatus();
 
@@ -5136,6 +5249,8 @@ function positionRenderKey(items) {
 
     x.profitLockArmed ? "1" : "0",
 
+    Number(x.markPrice || 0).toFixed(6),  // Add markPrice to detect price changes
+
   ].join("|")).join(";");
 
 }
@@ -5367,9 +5482,17 @@ function renderKpiCards(bot) {
 
   };
 
+  // Update KPI if data changed or first load
   const hasData = (incoming.liveWinsToday + incoming.liveLossToday) > 0 || incoming.lastTradeAt > 0;
-
-  if (hasData || kpiSticky.lastTradeAt === 0) kpiSticky = incoming;
+  const dataChanged = (
+    incoming.liveWinsToday !== kpiSticky.liveWinsToday ||
+    incoming.liveLossToday !== kpiSticky.liveLossToday ||
+    incoming.livePnlToday !== kpiSticky.livePnlToday ||
+    incoming.liveWinToday !== kpiSticky.liveWinToday ||
+    incoming.lastTradeAt > kpiSticky.lastTradeAt
+  );
+  
+  if (hasData || kpiSticky.lastTradeAt === 0 || dataChanged) kpiSticky = incoming;
 
   const pnl = num0(kpiSticky.livePnlAll);
 
@@ -5390,6 +5513,35 @@ function renderKpiCards(bot) {
 }
 
 
+
+function updateTradingViewStatus(bot) {
+  if (!ui.tvStatus) return;
+  
+  // Prioritize checkbox state for immediate UI feedback
+  const checkbox = $("cfgTradingViewEnabled");
+  const checkboxEnabled = checkbox ? checkbox.checked : false;
+  
+  // Check localStorage as backup
+  const localEnabled = localStorage.getItem("cmux_dashboard_tv_enabled") === "true";
+  
+  // Fall back to backend config if neither checkbox nor localStorage is set
+  const cfg = bot?.config || {};
+  const backendEnabled = cfg.tradingviewEnabled === true || cfg.tradingviewEnabled === "true";
+  
+  const tvEnabled = checkboxEnabled || localEnabled || backendEnabled;
+  
+  ui.tvStatus.className = "tv-status";
+  
+  if (!tvEnabled) {
+    ui.tvStatus.classList.add("disabled");
+    ui.tvStatus.textContent = "Disabled";
+  } else {
+    // Check if tradingview-ta is available (would need backend endpoint)
+    // For now, show as healthy if enabled
+    ui.tvStatus.classList.add("healthy");
+    ui.tvStatus.textContent = "Active";
+  }
+}
 
 function paintStatus(data) {
 
@@ -5430,6 +5582,9 @@ function paintStatus(data) {
   const botText = running ? "Running" : stale ? "Cached" : "Idle";
 
   if (ui.botStatus) ui.botStatus.textContent = botText;
+
+  // Update TradingView MCP status
+  updateTradingViewStatus(bot);
 
 
 
@@ -5559,6 +5714,8 @@ function paintStatus(data) {
 
     if ($("cfgPairLockEnabled") && bot.config.pairLockEnabled != null) $("cfgPairLockEnabled").checked = !!bot.config.pairLockEnabled;
 
+    if ($("cfgTradingViewEnabled") && bot.config.tradingviewEnabled != null) $("cfgTradingViewEnabled").checked = !!bot.config.tradingviewEnabled;
+
   }
 
 
@@ -5677,6 +5834,14 @@ function paintStatus(data) {
 
         leverage: Number(live.leverage || bot?.config?.leverage || 0),
 
+        markPrice: Number(live.markPrice ?? 0),  // Add markPrice for uPnL updates
+
+        profitLockArmed: !!live.profitLockArmed,  // Add profit lock status
+
+        profitLockUsdt: Number(live.profitLockUsdt ?? 0),  // Add profit lock amount
+
+        peakUnrealizedPnl: Number(live.peakUnrealizedPnl ?? 0),  // Add peak PnL
+
       }];
 
     }
@@ -5691,7 +5856,7 @@ function paintStatus(data) {
 
     && (stale || !!bot.running)
 
-    && (Date.now() - openPositionsCache.updatedAt) < 15000
+    && (Date.now() - openPositionsCache.updatedAt) < 5000  // Reduced from 15s to 5s for more frequent updates
 
   );
 
@@ -6207,6 +6372,8 @@ function botPayload() {
     pairLockLossStreak: Number($("cfgPairLockStreak").value || 2),
 
     pairLockMinutes: Number($("cfgPairLockMinutes").value || 45),
+
+    tradingviewEnabled: !!$("cfgTradingViewEnabled").checked,
 
     aiTpSlFromLearning: true, autoLearn: !!$("cfgAutoLearn").checked,
 

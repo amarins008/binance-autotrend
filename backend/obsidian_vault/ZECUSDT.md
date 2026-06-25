@@ -2,33 +2,33 @@
 
 ## Performance
 - Wins: 10
-- Losses: 10
-- Trades: 20
-- WinRate: 50.0%
-- RealizedPnL: 0.509178
-- AvgPnL/Trade: 0.025459
-- RewardScore: 4.289066
-- RewardDelta: -0.601688
-- RewardBehaviorDelta: 0.208841
+- Losses: 13
+- Trades: 23
+- WinRate: 43.48%
+- RealizedPnL: -0.7611
+- AvgPnL/Trade: -0.033091
+- RewardScore: 2.141815
+- RewardDelta: -0.602383
+- RewardBehaviorDelta: -0.185453
 - RewardWinStreak: 0
-- RewardLossStreak: 6
-- LearningRankScore: -0.087674
+- RewardLossStreak: 9
+- LearningRankScore: -0.149315
 
 ## Risk Tune
 - Active: True
 - Window: 8
-- WinRate: 25.0%
-- PnL: -0.568625
-- SizeMult: 0.6275
-- LeverageMult: 0.6848
+- WinRate: 0.0%
+- PnL: -1.997591
+- SizeMult: 0.61
+- LeverageMult: 0.67
 - RecommendedLeverageMax: 17
 - Reason: reduce_after_symbol_drawdown
 
 ## Scan Behavior
-- Observations: 272
-- PickedCount: 45
-- PickRate: 16.54%
-- LastSignal: LONG
-- LastConfidence: 0.828
-- LastScanScore: 0.744258
-- UpdatedAt: 1782027428
+- Observations: 888
+- PickedCount: 52
+- PickRate: 5.86%
+- LastSignal: SHORT
+- LastConfidence: 0.86
+- LastScanScore: 0.704467
+- UpdatedAt: 1782360736

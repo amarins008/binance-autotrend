@@ -25,10 +25,10 @@
 - Reason: reduce_after_symbol_drawdown
 
 ## Scan Behavior
-- Observations: 522
+- Observations: 932
 - PickedCount: 12
-- PickRate: 2.3%
-- LastSignal: LONG
-- LastConfidence: 0.64
-- LastScanScore: 0.513227
-- UpdatedAt: 1781931413
+- PickRate: 1.29%
+- LastSignal: SHORT
+- LastConfidence: 0.724
+- LastScanScore: 0.587211
+- UpdatedAt: 1782360730

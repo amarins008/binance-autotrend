@@ -19,9 +19,15 @@ from trading.position import (
     should_cut_loser_early,
     should_hold_winner,
     trail_winner_levels,
+    should_extend_tp_with_tradingview,
+    should_trail_sl_with_tradingview,
+    should_exit_early_with_tradingview,
+    get_tradingview_tp_extension_pct,
+    get_tradingview_sl_trailing_pct,
 )
 from trading.presets import PRO_STANDALONE_PRESET, PLAYBOOK
 from trading.regime import detect_market_regime
+from trading.tradingview_mcp import get_tv_mcp, reset_tv_mcp
 from trading.risk import (
     blend_tpsl_with_atr,
     effective_min_net_profit_usdt,
@@ -45,9 +51,16 @@ __all__ = [
     "should_cut_loser_early",
     "trail_winner_levels",
     "max_winner_tp_expands",
+    "should_extend_tp_with_tradingview",
+    "should_trail_sl_with_tradingview",
+    "should_exit_early_with_tradingview",
+    "get_tradingview_tp_extension_pct",
+    "get_tradingview_sl_trailing_pct",
     "blend_tpsl_with_atr",
     "effective_tpsl_pct_for_trade",
     "effective_min_net_profit_usdt",
     "estimate_trade_edge_usdt",
     "passes_min_risk_reward",
+    "get_tv_mcp",
+    "reset_tv_mcp",
 ]

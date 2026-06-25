@@ -4,10 +4,6 @@
   "description": "Binance autotrend control plane built on Cmux + Hermes",
   "author": "KGB008",
   "scripts": {
-    "build": "node build.mjs",
-    "watch": "node build.mjs --watch",
-    "build:plasmo": "plasmo build",
-    "dev": "plasmo dev",
     "cmux:serve": "python backend/cmux_service.py serve",
     "cmux:start": "python backend/cmux_cli.py cmux start",
     "cmux:stop": "python backend/cmux_cli.py cmux stop",
@@ -20,45 +16,6 @@
     "hermes:service:stop": "python backend/cmux_cli.py service stop",
     "hermes:service:status": "python backend/cmux_cli.py service status"
   },
-  "dependencies": {
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
-  },
-  "devDependencies": {
-    "@types/chrome": "0.0.314",
-    "@types/react": "18.3.12",
-    "@types/react-dom": "18.3.1",
-    "esbuild": "^0.28.0",
-    "plasmo": "0.90.5",
-    "typescript": "5.6.3"
-  },
-  "manifest": {
-    "manifest_version": 3,
-    "name": "Binance Cmux Hermes",
-    "description": "Cmux + Hermes overlay, order book analytics, and one-click trade actions for Binance",
-    "version": "0.2.0",
-    "permissions": [
-      "storage",
-      "notifications"
-    ],
-    "host_permissions": [
-      "https://www.binance.com/*",
-      "https://fapi.binance.com/*",
-      "http://127.0.0.1:8000/*",
-      "http://127.0.0.1:8020/*",
-      "http://127.0.0.1:8021/*",
-      "http://127.0.0.1:8022/*"
-    ],
-    "content_scripts": [
-      {
-        "matches": [
-          "https://www.binance.com/*"
-        ],
-        "js": [
-          "contents/binance-overlay.js"
-        ],
-        "run_at": "document_idle"
-      }
-    ]
-  }
+  "dependencies": {},
+  "devDependencies": {}
 }
