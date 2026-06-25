@@ -54,6 +54,7 @@ import json
 import re
 import math
 import asyncio
+import copy
 import subprocess
 import socket
 from decimal import Decimal, ROUND_DOWN
@@ -130,8 +131,8 @@ def _ensure_vault():
     try:
         VAULT_DIR.mkdir(parents=True, exist_ok=True)
         ensure_trading_vault(VAULT_DIR)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
 
 def _load_learning_profiles() -> dict:
@@ -146,12 +147,18 @@ def _load_learning_profiles() -> dict:
     return {}
 
 
-def _save_learning_profiles(profiles: dict):
+def _save_learning_profiles(profiles: dict, force: bool = False):
+    global _LEARN_PROFILES_BUFFER, _LEARN_PROFILES_LAST_FLUSH
+    _LEARN_PROFILES_BUFFER = copy.deepcopy(profiles)
+    now = time.time()
+    if not force and (now - _LEARN_PROFILES_LAST_FLUSH) < 30.0:
+        return
     _ensure_vault()
     try:
-        LEARN_PATH.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        LEARN_PATH.write_text(json.dumps(_LEARN_PROFILES_BUFFER, ensure_ascii=False, indent=2), encoding="utf-8")
+        _LEARN_PROFILES_LAST_FLUSH = now
+    except Exception as exc:
+        print(f"[Learning Profiles] ERROR writing {LEARN_PATH}: {exc}")
 
 
 def _scan_health_state(symbol: str) -> dict[str, int]:
@@ -258,8 +265,10 @@ def _append_trade_log(entry: dict):
     try:
         with TRADES_LOG_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        print(f"[Trade Log] Written to {TRADES_LOG_PATH}: mode={entry.get('mode')}, pnl={entry.get('pnl')}, symbol={entry.get('symbol')}")
         if str(entry.get("mode", "")).upper() == "LIVE" and "pnl" in entry:
             _LIVE_STATS_VERSION += 1
+            print(f"[Trade Log] LIVE_STATS_VERSION incremented to {_LIVE_STATS_VERSION}")
             # NOTE: do NOT clear _LIVE_STATS_CACHE here. Cache key is keyed by
             # (symbol, mtime, size) so a stale entry is naturally invalidated
             # on the next read; clearing on every append forced a full re-parse
@@ -267,8 +276,8 @@ def _append_trade_log(entry: dict):
             # and cmux /status flap between healthy and stale under heavy
             # trade flow (see also _aggregate_live_trade_stats_from_log).
             _SESSION_BIAS_CACHE["builtAt"] = 0.0
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
 
 def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
@@ -827,7 +836,7 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         "changes": changes,
     })
     AUTO_TRADE["supervisorAutoTune"] = state
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     try:
         _persist_autotrade_snapshot()
         _autotrade_log(f"Supervisor auto-tune weak payoff: {changes}")
@@ -865,7 +874,7 @@ def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg
     }
     state["delegations"] = delegations
     AUTO_TRADE["supervisorAutoTune"] = state
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     try:
         _persist_autotrade_snapshot()
         _autotrade_log(f"Supervisor delegated {key}: {changes}")
@@ -2227,14 +2236,16 @@ def _update_symbol_note(symbol: str, profile: dict, last_trade: dict | None = No
     try:
         p.write_text("\n".join(lines), encoding="utf-8")
         write_symbol_memory(VAULT_DIR, symbol, profile, last_trade)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
 
 def _record_learning_trade(symbol: str, trade: dict, mode: str):
+    global DAILY_REALIZED_PNL, _DAILY_PNL_DATE_KEY
     sym = str(symbol or "").upper()
     if not sym:
         return
+    print(f"[Record Trade] _record_learning_trade called: symbol={sym}, mode={mode}, pnl={trade.get('pnl')}, reason={trade.get('reason')}")
     profiles = _load_learning_profiles()
     pr = profiles.get(sym, {"wins": 0, "losses": 0, "realizedPnl": 0.0, "trades": 0})
     pnl = float(trade.get("pnl", 0.0) or 0.0)
@@ -2251,8 +2262,17 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     pr["maxLossPnl"] = min(float(pr.get("maxLossPnl", pnl)), pnl)
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
     reward_enabled = bool(cfg.get("learningRewardEnabled", True))
+    behavior_enabled = bool(cfg.get("learningBehaviorRewardEnabled", True))
     # Live guardian feedback loop: gently adapt per-symbol TP/SL/lock thresholds.
     if str(mode).upper() == "LIVE":
+        ts = int(trade.get("closedAt", trade.get("ts", time.time())) or time.time())
+        tloc = time.localtime(ts)
+        day_key = (tloc.tm_year, tloc.tm_mon, tloc.tm_mday)
+        if day_key != _DAILY_PNL_DATE_KEY:
+            DAILY_REALIZED_PNL = 0.0
+            _DAILY_PNL_DATE_KEY = day_key
+        DAILY_REALIZED_PNL += pnl
+        print(f"[Record Trade] Processing LIVE trade for {sym}: pnl={pnl}, reason={trade.get('reason')}, dailyPnl={DAILY_REALIZED_PNL}")
         guard_tp = float(pr.get("tpPct", float(cfg.get("takeProfitPct", 1.8) or 1.8)) or float(cfg.get("takeProfitPct", 1.8) or 1.8))
         guard_sl = float(pr.get("slPct", float(cfg.get("stopLossPct", 0.9) or 0.9)) or float(cfg.get("stopLossPct", 0.9) or 0.9))
         guard_lock = float(pr.get("profitLockTriggerUsdt", float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)) or float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35))
@@ -2279,7 +2299,7 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             "reason": reason_up,
             "pnl": round(float(pnl), 6),
         }
-    reward_decay = float(cfg.get("learningRewardDecay", 0.985) or 0.985)
+
 
     reward_cap = max(1.0, float(cfg.get("learningRewardCap", 50.0) or 50.0))
     reward_decay = float(cfg.get("learningRewardDecay", 0.985) or 0.985)
@@ -3219,8 +3239,8 @@ async def _cached_klines(symbol: str, interval: str, limit: int) -> list:
     if key in _KLINES_INFLIGHT:
         try:
             return await asyncio.wait_for(_KLINES_INFLIGHT[key], timeout=max(1.0, DATA_GET_TIMEOUT_SEC + 1.0))
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
     async def _fetch() -> list:
         res = await _data_get(f"/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}")
@@ -3364,7 +3384,7 @@ async def _lifespan(app: FastAPI):
             AUTO_TRADE["sessionId"] = session_id
             AUTO_TRADE["startedAt"] = int(time.time())
             _sync_autotrade_leverage_cap_from_cfg(cfg)
-            AUTO_TRADE["config"] = cfg
+            AUTO_TRADE["config"] = copy.deepcopy(cfg)
             AUTO_TRADE["consecutiveErrors"] = 0
             AUTO_TRADE["lastSkip"] = None
             AUTO_TRADE["liveGuardian"] = snap_data.get("liveGuardian")
@@ -3378,7 +3398,7 @@ async def _lifespan(app: FastAPI):
                 f"{cfg.get('executionMode','PAPER')} x{cfg.get('leverage',1)}"
             )
             _autotrade_log(resume_msg)
-            _ensure_autotrade_task_alive("auto-resume")
+            await _ensure_autotrade_task_alive("auto-resume")
         except Exception as e:
             _autotrade_log(f"Auto-resume failed: {_format_loop_error(e)}")
 
@@ -3423,7 +3443,9 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        _persist_autotrade_snapshot()
+        _persist_autotrade_snapshot(force=True)
+        if _LEARN_PROFILES_BUFFER is not None:
+            await asyncio.to_thread(_save_learning_profiles, _LEARN_PROFILES_BUFFER, force=True)
         await _BINANCE_HTTP.aclose()
         await _BINANCE_DATA_HTTP.aclose()
         _BINANCE_HTTP = None
@@ -3441,8 +3463,15 @@ app.add_middleware(
 )
 
 MONITORS: dict[str, dict] = {}
+MAX_ACTIVE_MONITORS = 50
+MONITORS_LOCK = asyncio.Lock()
 DAILY_REALIZED_PNL = 0.0
+_DAILY_PNL_DATE_KEY = 0
+_SNAPSHOT_LAST_FLUSH = 0.0
+_LEARN_PROFILES_LAST_FLUSH = 0.0
+_LIVE_POSITIONS_CACHE = (0.0, [])
 _AUTOTRADE_TASK: asyncio.Task | None = None  # track running task to prevent duplicates
+_AUTOTRADE_TASK_LOCK = asyncio.Lock()
 AUTO_TRADE = {
     "running": False,
     "manageOpenOnly": False,
@@ -3509,21 +3538,22 @@ def _track_autotrade_task(task: asyncio.Task, reason: str) -> asyncio.Task:
     return task
 
 
-def _ensure_autotrade_task_alive(reason: str = "watchdog") -> bool:
+async def _ensure_autotrade_task_alive(reason: str = "watchdog") -> bool:
     global _AUTOTRADE_TASK
-    if not (bool(AUTO_TRADE.get("running")) or bool(AUTO_TRADE.get("manageOpenOnly"))):
-        return False
-    if _AUTOTRADE_TASK is not None and not _AUTOTRADE_TASK.done():
-        return False
-    _AUTOTRADE_TASK = _track_autotrade_task(asyncio.create_task(_autotrade_loop()), reason)
-    _autotrade_log(f"AutoTrade task restarted: {reason}")
-    return True
+    async with _AUTOTRADE_TASK_LOCK:
+        if not (bool(AUTO_TRADE.get("running")) or bool(AUTO_TRADE.get("manageOpenOnly"))):
+            return False
+        if _AUTOTRADE_TASK is not None and not _AUTOTRADE_TASK.done():
+            return False
+        _AUTOTRADE_TASK = _track_autotrade_task(asyncio.create_task(_autotrade_loop()), reason)
+        _autotrade_log(f"AutoTrade task restarted: {reason}")
+        return True
 
 
 async def _autotrade_watchdog_loop():
     while True:
         try:
-            _ensure_autotrade_task_alive("watchdog")
+            await _ensure_autotrade_task_alive("watchdog")
         except Exception as e:
             _autotrade_log(f"AutoTrade watchdog failed: {_format_loop_error(e)}")
         await asyncio.sleep(10)
@@ -3688,7 +3718,7 @@ def _switch_fixed_symbol_to_scan(cfg: dict, symbol: str, reason: str, detail: st
     wl = _parse_symbol_whitelist(cfg.get("whitelistSymbols"))
     if len(wl) <= 1 and (not wl or sym in wl):
         cfg["whitelistSymbols"] = []
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     AUTO_TRADE["symbolWaitState"] = {}
     _autotrade_log(f"Symbol skip -> AUTO scan: {sym} ({reason}{': ' + detail if detail else ''})")
     _persist_autotrade_snapshot()
@@ -3983,7 +4013,7 @@ CONNECTOR_MODE = os.getenv("CONNECTOR_MODE", "auto").lower()  # auto | official 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "hermes").lower()  # hermes | openai | off
 HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes-3")
-BINANCE_RECV_WINDOW_MS = int(os.getenv("BINANCE_RECV_WINDOW_MS", "60000"))
+BINANCE_RECV_WINDOW_MS = int(os.getenv("BINANCE_RECV_WINDOW_MS", "10000"))
 AUTOTRADE_TAKER_FEE_BPS_PER_SIDE = float(os.getenv("AUTOTRADE_TAKER_FEE_BPS_PER_SIDE", "4.0"))
 AUTOTRADE_MIN_NET_PROFIT_USDT = float(os.getenv("AUTOTRADE_MIN_NET_PROFIT_USDT", "0.05"))
 AUTOTRADE_EXTRA_COST_BPS = float(os.getenv("AUTOTRADE_EXTRA_COST_BPS", "2.0"))
@@ -4866,6 +4896,38 @@ async def fetch_mark_price(symbol: str):
     return float(res.json()["markPrice"])
 
 
+async def _fetch_market_prices_batch(symbols: list[str]) -> dict[str, float]:
+    """Fetch current mark prices for multiple symbols at once."""
+    if not symbols:
+        return {}
+    
+    prices = {}
+    try:
+        # Use Binance batch ticker endpoint for efficiency
+        res = await _data_get("/fapi/v1/ticker/price")
+        if res.status_code >= 400:
+            return prices
+        
+        ticker_data = res.json()
+        if isinstance(ticker_data, list):
+            symbol_set = {s.upper() for s in symbols}
+            for ticker in ticker_data:
+                if isinstance(ticker, dict):
+                    sym = str(ticker.get("symbol", "")).upper()
+                    if sym in symbol_set:
+                        prices[sym] = float(ticker.get("price", 0.0) or 0.0)
+    except Exception:
+        # Fallback to individual fetches if batch fails
+        for symbol in symbols:
+            try:
+                price = await fetch_mark_price(symbol)
+                prices[symbol.upper()] = price
+            except Exception:
+                continue
+    
+    return prices
+
+
 async def _market_momentum(symbol: str, interval: str = "1m", limit: int = 60, _rows: list | None = None):
     symbol = _normalize_symbol(symbol)
     rows = _rows if _rows is not None else await _cached_klines(symbol, interval, limit)
@@ -5634,9 +5696,16 @@ async def _open_positions_count(key: str | None, secret: str | None, base: str) 
 async def _pick_live_orphan_positions(
     key: str | None, secret: str | None, base: str
 ) -> list[dict]:
-    """Return all open live positions from Binance Futures, sorted by notional desc."""
+    """Return all open live positions from Binance Futures, sorted by notional desc.
+    
+    Cached for 5 seconds to avoid duplicate API calls within the same loop iteration."""
+    global _LIVE_POSITIONS_CACHE
     if not key or not secret:
         return []
+    now = time.time()
+    cached_at, cached = _LIVE_POSITIONS_CACHE
+    if (now - cached_at) < 5.0:
+        return list(cached)
     client = _get_um_client(key, secret, base)
     if client:
         pos = await _um_client_position_risk(client)
@@ -5679,6 +5748,7 @@ async def _pick_live_orphan_positions(
         except Exception:
             continue
     out.sort(key=lambda x: float(x.get("notionalUsdtApprox", 0.0) or 0.0), reverse=True)
+    _LIVE_POSITIONS_CACHE = (now, out)
     return out
 
 
@@ -5863,7 +5933,7 @@ def _maybe_auto_heal_scan_config_drift(cfg: dict) -> dict:
     wl = _parse_symbol_whitelist(cfg.get("whitelistSymbols"))
     if len(wl) <= 1:
         cfg["whitelistSymbols"] = []
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     _persist_autotrade_snapshot()
     return {
         "applied": True,
@@ -6015,8 +6085,8 @@ def _mark_trade_learning_agents(symbol: str, trade: dict, mode: str):
         _agent_mark("reflection_agent", "done", "reviewed closed trade", f"{label} {reason}".strip(), {"pnl": pnl})
         _agent_mark("backtest_agent", "done", "queued walk-forward sample", label)
         _agent_mark("memory_agent", "done", "trade outcome stored", label)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
 
 def _live_lock_key(symbol: str, side: str) -> str:
@@ -6264,8 +6334,8 @@ def _save_symbol_profiles(profiles: dict) -> None:
             json.dumps(profiles, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
 
 # Fields the dashboard "Symbol Profile (3-tier)" table reads from each
@@ -6782,8 +6852,20 @@ def _should_hold_winner(side: str, intel: dict | None, cfg: dict) -> bool:
     return (side == "LONG" and mom > 0) or (side == "SHORT" and mom < 0)
 
 
-def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float) -> tuple[float, float]:
+def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None) -> tuple[float, float]:
     t = max(0.05, float(trail_pct))
+    
+    # Get TradingView guidance for SL trailing if enabled
+    if cfg and symbol and cfg.get("tradingviewEnabled", False):
+        try:
+            tv_client = get_tv_mcp(cfg)
+            tv_guidance = tv_client.get_position_guidance(symbol, side)
+            if tv_guidance and should_trail_sl_with_tradingview(side, tv_guidance, cfg, symbol):
+                tv_trail_pct = get_tradingview_sl_trailing_pct(side, tv_guidance, cfg)
+                t = max(t, tv_trail_pct)  # Use the larger trail percentage
+        except Exception as exc:
+            print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
+
     if side == "LONG":
         new_sl = max(float(old_sl), mark * (1 - t / 100.0))
         new_tp = max(float(old_tp), mark * (1 + t / 100.0))
@@ -6931,7 +7013,7 @@ def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict) -> tup
     return True, f"{current_side} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}%"
 
 
-def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: float, old_sl: float, cfg: dict) -> tuple[float, float, bool]:
+def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: float, old_sl: float, cfg: dict, symbol: str = None) -> tuple[float, float, bool]:
     current_side = str(side or "").upper()
     mark = float(mark or 0.0)
     entry = float(entry or 0.0)
@@ -6939,10 +7021,31 @@ def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: float, ol
     old_sl = float(old_sl or 0.0)
     if current_side not in ("LONG", "SHORT") or mark <= 0 or entry <= 0 or old_tp <= 0 or old_sl <= 0:
         return old_tp, old_sl, False
+    
+    # Get TradingView guidance if enabled
+    tv_guidance = None
+    if symbol and cfg.get("tradingviewEnabled", False):
+        try:
+            tv_client = get_tv_mcp(cfg)
+            tv_guidance = tv_client.get_position_guidance(symbol, current_side)
+        except Exception as exc:
+            print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
+
+    # Check if TradingView suggests TP extension
+    tv_extend = False
+    if tv_guidance and should_extend_tp_with_tradingview(current_side, tv_guidance, cfg, symbol):
+        tv_extend = True
+        tv_extension_pct = get_tradingview_tp_extension_pct(current_side, tv_guidance, cfg)
+    
     tp_step_pct = max(0.05, float(cfg.get("tpExtendStepPct", cfg.get("holdTrailPct", 0.35)) or 0.35))
     sl_trail_pct = max(0.05, float(cfg.get("holdTrailPct", 0.35) or 0.35))
     base_tp_pct = max(0.05, float(cfg.get("takeProfitPct", 1.8) or 1.8))
     max_tp_pct = max(base_tp_pct, float(cfg.get("tpExtendMaxPctFromEntry", max(base_tp_pct * 2.5, base_tp_pct + 1.2)) or base_tp_pct))
+    
+    # Apply TradingView TP extension if enabled
+    if tv_extend:
+        tp_step_pct += tv_extension_pct
+    
     if current_side == "LONG":
         cap_tp = entry * (1 + max_tp_pct / 100.0)
         candidate_tp = min(max(old_tp, mark * (1 + tp_step_pct / 100.0)), cap_tp)
@@ -7209,6 +7312,20 @@ async def _live_guardian_maybe_close(cfg: dict):
     hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
     position_intel = _last_decision_intel(symbol, max_age_sec=int(cfg.get("guardianDecisionMaxAgeSec", 30) or 30))
     reversal_exit, reversal_reason = _strong_reversal_exit(side, position_intel, cfg)
+    
+    # Check TradingView early exit
+    tv_early_exit = False
+    tv_early_exit_reason = ""
+    if cfg.get("tradingviewEnabled", False):
+        try:
+            tv_client = get_tv_mcp(cfg)
+            tv_guidance = tv_client.get_position_guidance(symbol, side)
+            if tv_guidance and should_exit_early_with_tradingview(side, tv_guidance, cfg, symbol):
+                tv_early_exit = True
+                tv_early_exit_reason = f"TradingView reversal: {tv_guidance.get('recommendation')}"
+        except Exception as exc:
+            print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
+
     extend_tp, extend_reason = _strong_follow_tp_extension(side, position_intel, cfg)
     tv_blocks_tp_extension = False
     if False:  # MarketContext MCP removed — tv_guard no longer exists in this scope
@@ -7216,7 +7333,7 @@ async def _live_guardian_maybe_close(cfg: dict):
     if tv_blocks_tp_extension:
         extend_tp = False
     if hit_tp and (extend_tp or (not tv_blocks_tp_extension and _should_hold_winner(side, position_intel, cfg))):
-        new_tp, new_sl, extended = _extend_tp_sl_levels(side, mark, entry, tp, sl, cfg)
+        new_tp, new_sl, extended = _extend_tp_sl_levels(side, mark, entry, tp, sl, cfg, symbol)
         if not extended:
             new_sl, new_tp = _trail_winner_levels(
                 side,
@@ -7224,6 +7341,8 @@ async def _live_guardian_maybe_close(cfg: dict):
                 sl,
                 tp,
                 float(cfg.get("holdTrailPct", 0.35)),
+                cfg,
+                symbol,
             )
         g["sl"] = new_sl
         g["tp"] = new_tp
@@ -7231,6 +7350,12 @@ async def _live_guardian_maybe_close(cfg: dict):
         reason_txt = extend_reason or "winner still aligned"
         _autotrade_log(f"LIVE hold winner: extend TP/SL -> TP={new_tp:.6f} SL={new_sl:.6f} · {reason_txt}")
         return False
+    
+    # TradingView early exit
+    if tv_early_exit:
+        _autotrade_log(f"LIVE TradingView early exit: {symbol} {side} · {tv_early_exit_reason}")
+        return True
+    
     if not (hit_tp or hit_sl or hit_breakeven_guard or reversal_exit or hit_payoff_loss_guard):
         return False
     reason = (
@@ -7400,7 +7525,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
             hit_breakeven_guard = bool(st.get("breakevenGuardArmed")) and 0 < upnl <= breakeven_floor
             if hit_tp and strong_follow:
-                new_tp, new_sl, extended = _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg)
+                new_tp, new_sl, extended = _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, symbol)
                 if extended:
                     st["tp"] = round(float(new_tp), 10)
                     st["sl"] = round(float(new_sl), 10)
@@ -7447,7 +7572,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 changed = True
                 continue
         # Hard capture when clearly at/above target max.
-        if upnl >= eff_tp_max:
+        if upnl >= tp_max:
             await _close_position_one_side(sym, side, key, secret, base)
             _autotrade_log(f"LIVE lock close: {sym} {side} TARGET_MAX {upnl:.3f} USDT")
             locks.pop(k, None)
@@ -7520,7 +7645,12 @@ def _paper_close(reason: str, exit_price: float):
     return trade
 
 
-def _persist_autotrade_snapshot():
+def _persist_autotrade_snapshot(force: bool = False):
+    global _SNAPSHOT_LAST_FLUSH
+    if not force:
+        now = time.time()
+        if (now - _SNAPSHOT_LAST_FLUSH) < 30.0:
+            return
     try:
         payload = {
             "savedAt": int(time.time()),
@@ -7544,8 +7674,14 @@ def _persist_autotrade_snapshot():
         }
         SNAPSHOT_PATH.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
         AUTO_TRADE["_snapshot_saved_at"] = payload["savedAt"]
-    except Exception:
-        pass
+        _SNAPSHOT_LAST_FLUSH = time.time()
+    except Exception as exc:
+        print(f"[Snapshot] ERROR writing {SNAPSHOT_PATH}: {exc}")
+
+
+async def _flush_snapshot_async(force: bool = False):
+    """Async wrapper for snapshot flush (for use inside async endpoints)."""
+    await asyncio.to_thread(_persist_autotrade_snapshot, force=force)
 
 
 def _load_autotrade_snapshot():
@@ -7736,8 +7872,8 @@ async def _set_leverage_margin(symbol: str, key: str, secret: str, base: str, le
             if ma_on:
                 margin_type = "CROSSED"
                 _autotrade_log("Margin override: Multi-Assets mode active -> force CROSSED (ISOLATED not allowed)")
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
     st = await _margin_state()
     cur = st.get("marginType")
@@ -7749,9 +7885,9 @@ async def _set_leverage_margin(symbol: str, key: str, secret: str, base: str, le
         )
 
     if client:
-        client.change_leverage(symbol=symbol, leverage=leverage)
+        await asyncio.to_thread(client.change_leverage, symbol=symbol, leverage=leverage)
         try:
-            client.change_margin_type(symbol=symbol, marginType=margin_type)
+            await asyncio.to_thread(client.change_margin_type, symbol=symbol, marginType=margin_type)
         except Exception as e:
             txt = str(e)
             if "-4168" in txt:
@@ -7813,14 +7949,14 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
         client = _get_um_client(key, secret, base)
         try:
             if client:
-                return client.new_order(**primary)
+                return await asyncio.to_thread(client.new_order, **primary)
             return await _signed_request("POST", base, "/fapi/v1/order", key, secret, primary)
         except Exception as e:
             txt = str(e)
             if ("-4120" not in txt) and ("Order type not supported" not in txt):
                 raise
             if client:
-                return client.new_order(**fallback)
+                return await asyncio.to_thread(client.new_order, **fallback)
             return await _signed_request("POST", base, "/fapi/v1/order", key, secret, fallback)
 
     tp = await _submit_exit_order("tp", tp_price_str)
@@ -7836,7 +7972,8 @@ async def _place_trailing_stop(symbol: str, side: str, key: str, secret: str, ba
 
     client = _get_um_client(key, secret, base)
     if client:
-        return client.new_order(
+        return await asyncio.to_thread(
+            client.new_order,
             symbol=symbol,
             side=close_side,
             type="TRAILING_STOP_MARKET",
@@ -7859,7 +7996,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
     close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
     if client:
-        pos = client.get_position_risk(symbol=symbol)
+        pos = await asyncio.to_thread(client.get_position_risk, symbol=symbol)
     else:
         pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {"symbol": symbol})
     if isinstance(pos, dict):
@@ -7884,7 +8021,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
         else:
             payload["reduceOnly"] = "true"
         if client:
-            close_results.append(client.new_order(**payload))
+            close_results.append(await asyncio.to_thread(client.new_order, **payload))
         else:
             close_results.append(await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload))
         if entry > 0 and qty > 0:
@@ -7922,7 +8059,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
     close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
     if client:
-        pos = client.get_position_risk(symbol=symbol)
+        pos = await asyncio.to_thread(client.get_position_risk, symbol=symbol)
     else:
         pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {"symbol": symbol})
     rows = pos if isinstance(pos, list) else ([pos] if isinstance(pos, dict) else [])
@@ -7943,7 +8080,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
         else:
             payload["reduceOnly"] = "true"
         if client:
-            closed.append(client.new_order(**payload))
+            closed.append(await asyncio.to_thread(client.new_order, **payload))
         else:
             closed.append(await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload))
         entry = float(p.get("entryPrice", 0) or 0)
@@ -8038,7 +8175,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
                 entry_params = {"symbol": symbol, "side": order_side, "type": "MARKET", "quantity": qtry}
                 if hedge_mode:
                     entry_params["positionSide"] = position_side
-                entry = client.new_order(**entry_params)
+                entry = await asyncio.to_thread(client.new_order, **entry_params)
             else:
                 entry_payload = {
                     "symbol": symbol,
@@ -8136,7 +8273,7 @@ async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     cur["adaptiveLeverageMax"] = int(max(lev_min, min(max_cap, adaptive_max)))
     cur["adaptiveLeverageEnabled"] = bool(cur.get("adaptiveLeverageEnabled", True))
     cur["leverage"] = int(max(lev_min, min(lev_max, int(cur.get("leverage", lev_min) or lev_min), 25)))
-    AUTO_TRADE["config"] = cur
+    AUTO_TRADE["config"] = copy.deepcopy(cur)
     _autotrade_log(
         f"AutoTrade config updated: lev={cur['leverage']} range={cur['leverageMin']}-{cur['leverageMax']} TP={cur.get('takeProfitPct')} SL={cur.get('stopLossPct')}"
     )
@@ -8170,7 +8307,7 @@ async def autotrade_adopt_live(symbol: str | None = None):
     # Do not pin scan whitelist to adopted symbols permanently; keep market-wide scan.
     cfg["whitelistSymbols"] = []
     cfg["primarySymbol"] = symbols[0]
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     _autotrade_log(f"Adopt LIVE: {len(symbols)} symbols [{', '.join(symbols[:8])}]")
     _persist_autotrade_snapshot()
     return {"ok": True, "running": AUTO_TRADE.get("running", False), "config": cfg, "adoptedPositions": adopted_positions}
@@ -8203,7 +8340,7 @@ async def autotrade_update_sl_tp(payload: dict = Body(default_factory=dict)):
         cfg["takeProfitPct"] = float(tp_pct)
     if sl_pct is not None:
         cfg["stopLossPct"] = float(sl_pct)
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
 
     # Update local guardian immediately when symbol matches.
     g = AUTO_TRADE.get("liveGuardian")
@@ -8234,8 +8371,8 @@ async def autotrade_update_sl_tp(payload: dict = Body(default_factory=dict)):
 
 async def _autotrade_loop():
     while AUTO_TRADE["running"] or AUTO_TRADE.get("manageOpenOnly"):
-        cfg = apply_autotrade_defaults(AUTO_TRADE["config"] or {})
-        AUTO_TRADE["config"] = cfg
+        cfg = apply_autotrade_defaults(copy.deepcopy(AUTO_TRADE["config"] or {}))
+        AUTO_TRADE["config"] = copy.deepcopy(cfg)
         try:
             now = int(time.time())
             AUTO_TRADE["hermesAgents"] = start_cycle(AUTO_TRADE.get("hermesAgents"))
@@ -8417,7 +8554,7 @@ async def _autotrade_loop():
                     _agent_mark("backtest_agent", "done", "historical loss review completed")
                     if tuned_cfg != cfg:
                         cfg = tuned_cfg
-                        AUTO_TRADE["config"] = cfg
+                        AUTO_TRADE["config"] = copy.deepcopy(cfg)
                         _persist_autotrade_snapshot()
                         _agent_mark("memory_agent", "done", "persist self-review config")
                         review = AUTO_TRADE.get("lastSelfReview") if isinstance(AUTO_TRADE.get("lastSelfReview"), dict) else {}
@@ -8503,7 +8640,7 @@ async def _autotrade_loop():
                                 pass
                 if cfg.get("symbol") != picked_symbol:
                     cfg["symbol"] = picked_symbol
-                    AUTO_TRADE["config"] = cfg
+                    AUTO_TRADE["config"] = copy.deepcopy(cfg)
                     _autotrade_log(f"SCAN pick: {picked_symbol}")
                 intel = picked_intel
             else:
@@ -8560,7 +8697,7 @@ async def _autotrade_loop():
                             min_edge = float(cfg.get("hybridMinEdge", 0.06))
                             if scan_score >= min_score and (scan_score - base_score) >= min_edge:
                                 cfg["symbol"] = picked_symbol
-                                AUTO_TRADE["config"] = cfg
+                                AUTO_TRADE["config"] = copy.deepcopy(cfg)
                                 intel = picked_intel
                                 _autotrade_log(
                                     f"HYBRID switch: {primary_symbol} -> {picked_symbol} (scan {scan_score:.3f} > base {base_score:.3f})"
@@ -8632,6 +8769,8 @@ async def _autotrade_loop():
                                 float(p["sl"]),
                                 float(p["tp"]),
                                 float(cfg.get("holdTrailPct", 0.35)),
+                                cfg,
+                                "PAPER",
                             )
                             p["sl"] = new_sl
                             p["tp"] = new_tp
@@ -8651,6 +8790,8 @@ async def _autotrade_loop():
                                 float(p["sl"]),
                                 float(p["tp"]),
                                 float(cfg.get("holdTrailPct", 0.35)),
+                                cfg,
+                                "PAPER",
                             )
                             p["sl"] = new_sl
                             p["tp"] = new_tp
@@ -8958,7 +9099,7 @@ async def _autotrade_loop():
                 old_amt = trade_usdt
                 trade_usdt = min_order_usdt
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
-                AUTO_TRADE["config"] = cfg
+                AUTO_TRADE["config"] = copy.deepcopy(cfg)
                 _autotrade_log(
                     f"Order floor: adjusted USDT {old_amt:.2f} → {trade_usdt:.2f} (min notional guard)"
                 )
@@ -9103,7 +9244,7 @@ async def _autotrade_loop():
                                 )
                                 if abs(float(pos_check)) < 1e-9:  # flat — safe to switch
                                     cfg["marginType"] = "ISOLATED"
-                                    AUTO_TRADE["config"] = cfg
+                                    AUTO_TRADE["config"] = copy.deepcopy(cfg)
                                     _autotrade_log(f"Balance check: auto-switched CROSSED → ISOLATED (crossBal={cross_bal:.2f})")
                                 else:
                                     _autotrade_log(f"Balance check: low crossBal={cross_bal:.2f} but position open — cannot switch margin type")
@@ -9148,7 +9289,14 @@ async def _autotrade_loop():
             _autotrade_skip("timeout", "Skip: network timeout (Binance API slow) — will retry")
         except Exception as e:
             err_msg = _format_loop_error(e)
+            # Re-raise programming errors immediately so they aren't hidden in logs
+            if isinstance(e, (TypeError, NameError, AttributeError)):
+                raise
             AUTO_TRADE["consecutiveErrors"] = min(AUTO_TRADE.get("consecutiveErrors", 0) + 1, 20)
+            # Stop spinning if too many consecutive errors (likely unrecoverable state)
+            if AUTO_TRADE.get("consecutiveErrors", 0) >= 15:
+                _autotrade_log(f"AutoTrade loop stopped after {AUTO_TRADE['consecutiveErrors']} consecutive errors: {err_msg}")
+                raise
 
             # ── Auto-recovery for known Binance errors ────────────────────────
             cfg = AUTO_TRADE.get("config") or {}
@@ -9211,7 +9359,7 @@ async def _autotrade_loop():
                     )
                     if abs(float(pos_amt2)) < 1e-9:
                         cfg["marginType"] = "ISOLATED"
-                        AUTO_TRADE["config"] = cfg
+                        AUTO_TRADE["config"] = copy.deepcopy(cfg)
                         _autotrade_skip("exception", "Error -4050: Cross balance insufficient — auto-switched to ISOLATED margin")
                     else:
                         _autotrade_skip("exception", "Error -4050: Cross balance insufficient — position open, cannot switch margin type. Close position first.")
@@ -9227,7 +9375,7 @@ async def _autotrade_loop():
             elif "-2019" in err_msg and cfg.get("usdtAmount", 0) > 5:
                 old_amt = cfg["usdtAmount"]
                 cfg["usdtAmount"] = round(old_amt * 0.5, 2)
-                AUTO_TRADE["config"] = cfg
+                AUTO_TRADE["config"] = copy.deepcopy(cfg)
                 _autotrade_skip("exception", f"Error -2019: Margin insufficient — reduced USDT {old_amt} → {cfg['usdtAmount']}")
 
             # QTY_TOO_SMALL: notional too small for symbol minimum.
@@ -9253,7 +9401,7 @@ async def _autotrade_loop():
                         new_amt = min(new_amt, max_notional)
                     if new_amt > old_amt + 0.009:
                         cfg["usdtAmount"] = new_amt
-                        AUTO_TRADE["config"] = cfg
+                        AUTO_TRADE["config"] = copy.deepcopy(cfg)
                         _autotrade_skip("usdt_too_small", f"Skip: USDT ต่ำเกินขั้นต่ำ — auto multiply {old_amt:.2f} → {new_amt:.2f} (x{mult:.2f})")
                         AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
                     else:
@@ -9362,7 +9510,7 @@ async def autotrade_start(req: AutoTradeStartRequest):
     AUTO_TRADE["perfLocks"] = preserved_fapi_locks
     AUTO_TRADE["sessionId"] = session_id
     AUTO_TRADE["startedAt"] = int(time.time())
-    AUTO_TRADE["config"] = cfg
+    AUTO_TRADE["config"] = copy.deepcopy(cfg)
     AUTO_TRADE["lastDecision"] = None
     AUTO_TRADE["lastSkip"] = None
     AUTO_TRADE["consecutiveErrors"] = 0
@@ -9445,7 +9593,7 @@ def autotrade_stop(req: AutoTradeControlRequest | None = None):
         _AUTOTRADE_TASK = _track_autotrade_task(asyncio.create_task(_autotrade_loop()), "manage-open-only")
     if not keep_manage_open:
         pass  # MarketContext MCP removed — no task to cancel here
-    _persist_autotrade_snapshot()
+    _persist_autotrade_snapshot(force=True)
     return {"ok": True, "running": False, "manageOpenOnly": keep_manage_open}
 
 
@@ -9478,13 +9626,13 @@ def autotrade_reset(req: AutoTradeControlRequest | None = None):
     AUTO_TRADE["hermesSupervisorReview"] = {}
     _paper_reset()
     _autotrade_log("AutoTrade session reset")
-    _persist_autotrade_snapshot()
+    _persist_autotrade_snapshot(force=True)
     return {"ok": True, "running": False, "reset": True}
 
 
 @app.get("/autotrade/status")
 async def autotrade_status(symbol: str | None = None):
-    _ensure_autotrade_task_alive("status-watchdog")
+    await _ensure_autotrade_task_alive("status-watchdog")
     p_raw = AUTO_TRADE.get("paper") if isinstance(AUTO_TRADE.get("paper"), dict) else {}
     p = {
         "position": p_raw.get("position"),
@@ -9573,8 +9721,8 @@ async def autotrade_status(symbol: str | None = None):
                     continuity_hints.append(
                         f"กระดานยังมีโพซิชัน {orphan_live['side']} {qs} ~{orphan_live['notionalUsdtApprox']} USDT"
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
     if not AUTO_TRADE["running"]:
         pp = p.get("position")
@@ -10376,7 +10524,7 @@ def _hermes_supervisor_review(bot_state: dict | None = None) -> dict:
                 set_int("scanAnalyzeTop", min(16, analyze_top + 2))
                 set_int("scanTopLiquid", min(80, top_liquid + 10))
                 set_int("scanGuardedFallbackAnalyzeTop", min(24, max(guarded_top, int(cfg.get("scanAnalyzeTop", analyze_top) or analyze_top) + 4)))
-                AUTO_TRADE["config"] = cfg
+                AUTO_TRADE["config"] = copy.deepcopy(cfg)
                 try:
                     _persist_autotrade_snapshot()
                 except Exception:
@@ -11227,7 +11375,7 @@ def hermes_supervisor_external_signal(payload: dict = Body(default_factory=dict)
 
 
 @app.get("/autotrade/status-lite")
-def autotrade_status_lite():
+async def autotrade_status_lite():
     cfg = AUTO_TRADE.get("config") or {}
     if isinstance(cfg, dict) and cfg:
         _sync_autotrade_leverage_cap_from_cfg(cfg)
@@ -11235,6 +11383,18 @@ def autotrade_status_lite():
     live_locks = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
     _profiles = _load_symbol_profiles() or {}
     open_live_positions: list[dict] = []
+    
+    # Fetch current market prices for real-time uPnL calculation
+    current_prices = {}
+    try:
+        if live_locks:
+            symbols = [str(lock.get("symbol", "")).upper().strip() for lock in live_locks.values() if isinstance(lock, dict) and lock.get("symbol")]
+            if symbols:
+                prices = await _fetch_market_prices_batch(symbols)
+                current_prices = prices if isinstance(prices, dict) else {}
+    except Exception:
+        current_prices = {}
+    
     for lock in live_locks.values():
         if not isinstance(lock, dict):
             continue
@@ -11243,14 +11403,27 @@ def autotrade_status_lite():
         qty = float(lock.get("qty", 0.0) or 0.0)
         if not symbol or side not in ("LONG", "SHORT") or qty <= 0:
             continue
+        
+        # Calculate real-time uPnL from current market price
+        entry = float(lock.get("entryMark", 0.0) or 0.0)
+        current_price = float(current_prices.get(symbol, lock.get("markPrice", 0.0) or 0.0) or 0.0)
+        
+        if current_price > 0 and entry > 0:
+            if side == "LONG":
+                real_time_upnl = (current_price - entry) * qty
+            else:
+                real_time_upnl = (entry - current_price) * qty
+        else:
+            real_time_upnl = float(lock.get("unRealizedProfit", 0.0) or 0.0)
+        
         op = {
             "symbol": symbol,
             "side": side,
             "qty": qty,
-            "entryMark": lock.get("entryMark"),
-            "markPrice": lock.get("markPrice"),
+            "entryMark": entry,
+            "markPrice": current_price,  # Use current price for real-time updates
             "notionalUsdtApprox": round(float(lock.get("notionalUsdtApprox", 0.0) or 0.0), 6),
-            "unRealizedProfit": round(float(lock.get("unRealizedProfit", 0.0) or 0.0), 6),
+            "unRealizedProfit": round(float(real_time_upnl), 6),  # Use calculated real-time uPnL
             "leverage": _position_display_leverage(symbol, cfg, lock.get("leverage")),
             "profitLockArmed": bool(lock.get("armed", False)),
             "profitLockUsdt": round(float(lock.get("lockUsdt", 0.0) or 0.0), 6),
@@ -11516,53 +11689,147 @@ def learning_walk_forward(
 
 
 async def _monitor_loop(monitor_id: str):
-    while monitor_id in MONITORS and MONITORS[monitor_id]["status"] == "RUNNING":
+    while True:
+        async with MONITORS_LOCK:
+            if monitor_id not in MONITORS or MONITORS[monitor_id]["status"] != "RUNNING":
+                return
+            interval_sec = MONITORS[monitor_id]["intervalSec"]
         plan = StrategyPlan(**MONITORS[monitor_id]["plan"])
         try:
             result = await strategy_evaluate(plan)
-            MONITORS[monitor_id]["lastResult"] = result
-            if result.get("status") == "TRIGGERED" and result.get("action") in ["LONG", "SHORT"]:
-                trade_result = await place_futures_order(plan.symbol, result["action"], plan.quantity, tp_pct=plan.takeProfitPct, sl_pct=plan.stopLossPct)
-                MONITORS[monitor_id]["lastTrade"] = trade_result
-                MONITORS[monitor_id]["status"] = "TRIGGERED"
-                return
+            async with MONITORS_LOCK:
+                if monitor_id in MONITORS:
+                    MONITORS[monitor_id]["lastResult"] = result
+                if result.get("status") == "TRIGGERED" and result.get("action") in ["LONG", "SHORT"]:
+                    trade_result = await place_futures_order(plan.symbol, result["action"], plan.quantity, tp_pct=plan.takeProfitPct, sl_pct=plan.stopLossPct)
+                    if monitor_id in MONITORS:
+                        MONITORS[monitor_id]["lastTrade"] = trade_result
+                        MONITORS[monitor_id]["status"] = "TRIGGERED"
+                    return
         except Exception as err:
-            MONITORS[monitor_id]["lastError"] = str(err)
-        await asyncio.sleep(MONITORS[monitor_id]["intervalSec"])
+            async with MONITORS_LOCK:
+                if monitor_id in MONITORS:
+                    MONITORS[monitor_id]["lastError"] = str(err)
+        await asyncio.sleep(interval_sec)
 
 
 async def monitor_start(req: MonitorStartRequest):
-    monitor_id = str(uuid4())
-    MONITORS[monitor_id] = {
-        "id": monitor_id,
-        "status": "RUNNING",
-        "plan": req.plan.model_dump(),
-        "intervalSec": req.intervalSec,
-        "lastResult": None,
-        "lastTrade": None,
-        "lastError": None,
-        "createdAt": int(time.time()),
-    }
+    async with MONITORS_LOCK:
+        active_count = sum(1 for v in MONITORS.values() if v.get("status") == "RUNNING")
+        if active_count >= MAX_ACTIVE_MONITORS:
+            raise HTTPException(status_code=429, detail=f"Max active monitors ({MAX_ACTIVE_MONITORS}) reached")
+        monitor_id = str(uuid4())
+        MONITORS[monitor_id] = {
+            "id": monitor_id,
+            "status": "RUNNING",
+            "plan": req.plan.model_dump(),
+            "intervalSec": req.intervalSec,
+            "lastResult": None,
+            "lastTrade": None,
+            "lastError": None,
+            "createdAt": int(time.time()),
+        }
     asyncio.create_task(_monitor_loop(monitor_id))
     return MONITORS[monitor_id]
 
 
-def monitor_list():
-    # Evict monitors stopped more than 5 minutes ago to prevent unbounded growth
-    cutoff = time.time() - 300
-    stale = [k for k, v in MONITORS.items()
-             if v.get("status") == "STOPPED" and v.get("stoppedAt", 0) < cutoff]
-    for k in stale:
-        del MONITORS[k]
-    return {"items": list(MONITORS.values())}
+async def monitor_list():
+    async with MONITORS_LOCK:
+        # Evict monitors stopped more than 5 minutes ago to prevent unbounded growth
+        cutoff = time.time() - 300
+        stale = [k for k, v in MONITORS.items()
+                 if v.get("status") == "STOPPED" and v.get("stoppedAt", 0) < cutoff]
+        for k in stale:
+            del MONITORS[k]
+        return {"items": list(MONITORS.values())}
 
 
-def monitor_stop(monitor_id: str):
-    if monitor_id not in MONITORS:
-        raise HTTPException(status_code=404, detail="Monitor not found")
-    MONITORS[monitor_id]["status"] = "STOPPED"
-    MONITORS[monitor_id]["stoppedAt"] = int(time.time())
-    return MONITORS[monitor_id]
+async def monitor_stop(monitor_id: str):
+    async with MONITORS_LOCK:
+        if monitor_id not in MONITORS:
+            raise HTTPException(status_code=404, detail="Monitor not found")
+        MONITORS[monitor_id]["status"] = "STOPPED"
+        MONITORS[monitor_id]["stoppedAt"] = int(time.time())
+        return MONITORS[monitor_id]
+
+
+def _backfill_vault_trades_to_log(vault_dir: Path = VAULT_DIR, log_path: Path = TRADES_LOG_PATH) -> dict:
+    """Scan vault markdown reports and append missing LIVE trades to trades_log.jsonl.
+    Returns count of appended entries and list of symbols affected.
+    """
+    import re
+    existing_keys: set[tuple] = set()
+    if log_path.exists():
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if str(obj.get("mode", "")).upper() != "LIVE" or "pnl" not in obj:
+                continue
+            ts_raw = int(obj.get("closedAt") or obj.get("ts") or 0)
+            existing_keys.add((str(obj.get("symbol", "")).upper(), ts_raw, round(float(obj.get("pnl") or 0), 6)))
+    appended: list[dict] = []
+    for p in vault_dir.rglob("*.md"):
+        fname = p.name
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", fname)
+        if not m:
+            continue
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        if "Mode: LIVE" not in txt or "PnL:" not in txt:
+            continue
+        for block in re.split(r"\n## ", txt):
+            if "Mode: LIVE" not in block or "PnL:" not in block:
+                continue
+            sym_match = re.search(r"Symbol:\s*\[\[[^|]+\|([^\]]+)\]\]", block)
+            t_match = re.search(r"Time:\s*(\d\d):(\d\d):(\d\d)", block)
+            pnl_match = re.search(r"PnL:\s*([-+]?\d+(?:\.\d+)?)", block)
+            if not (sym_match and t_match and pnl_match):
+                continue
+            y, mn, d = map(int, m.group(1).split("-"))
+            hh, mm, ss = map(int, t_match.groups())
+            ts = int(time.mktime((y, mn, d, hh, mm, ss, 0, 0, -1)))
+            pnl_val = round(float(pnl_match.group(1)), 6)
+            key = (str(sym_match.group(1)).upper(), ts, pnl_val)
+            if key in existing_keys:
+                continue
+            side_match = re.search(r"Side:\s*([^\n]+)", block)
+            side = str(side_match.group(1)).strip() if side_match else None
+            reason_match = re.search(r"Reason:\s*([^\n]+)", block)
+            reason = str(reason_match.group(1)).strip() if reason_match else "LIVE_CLOSE"
+            entry = {
+                "ts": ts,
+                "mode": "LIVE",
+                "symbol": str(sym_match.group(1)).upper(),
+                "side": side,
+                "pnl": pnl_val,
+                "reason": reason,
+                "closedAt": ts,
+            }
+            appended.append(entry)
+            existing_keys.add(key)
+    if not appended:
+        return {"appended": 0, "symbols": [], "message": "No missing trades to backfill"}
+    appended.sort(key=lambda x: (x["ts"], x["symbol"]))
+    with log_path.open("a", encoding="utf-8") as f:
+        for entry in appended:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    global _LIVE_STATS_VERSION
+    _LIVE_STATS_VERSION += len(appended)
+    symbols = sorted({e["symbol"] for e in appended})
+    return {"appended": len(appended), "symbols": symbols, "message": "Backfill complete"}
+
+
+@app.post("/bot/backfill-vault-trades")
+def autotrade_backfill_vault_trades(payload: dict = Body(default_factory=dict)):
+    """CLI/endpoint to backfill missing LIVE trades from vault markdown to trades_log.jsonl.
+    Use when trades were recorded in vault files but failed to reach the log due to errors.
+    """
+    result = _backfill_vault_trades_to_log()
+    return {"ok": True, "backfill": result}
+
 
 from routers.analysis_routes import router as analysis_router
 from routers.system_routes import router as system_router

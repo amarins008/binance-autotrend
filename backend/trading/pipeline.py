@@ -101,6 +101,50 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # Momentum confirmation for timing accuracy
+    momentum = inp.intel.get("momentum") if isinstance(inp.intel.get("momentum"), dict) else {}
+    mom_pct = float(momentum.get("momentumPct", 0.0) or 0.0)
+    mom_strength = float(momentum.get("strength", 0.0) or 0.0)
+    
+    # Require minimum momentum strength for entries
+    min_mom_strength = float(cfg.get("minMomentumStrength", 0.08) or 0.08)
+    if not _step(
+        pipeline,
+        "momentum_strength",
+        mom_strength >= min_mom_strength,
+        f"Momentum strength {mom_strength:.3f} vs min {min_mom_strength:.3f}",
+    ):
+        return EntryPlan(
+            False,
+            "weak_momentum",
+            f"Skip: weak momentum {mom_strength:.3f} < {min_mom_strength:.3f}",
+            signal,
+            conf,
+            pipeline=pipeline,
+        )
+
+    # Momentum direction confirmation
+    if signal == "LONG" and mom_pct < 0:
+        if not _step(pipeline, "momentum_direction", False, f"LONG signal but momentum {mom_pct:.3f} is negative"):
+            return EntryPlan(
+                False,
+                "momentum_mismatch",
+                f"Skip: LONG signal vs negative momentum {mom_pct:.3f}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+    elif signal == "SHORT" and mom_pct > 0:
+        if not _step(pipeline, "momentum_direction", False, f"SHORT signal but momentum {mom_pct:.3f} is positive"):
+            return EntryPlan(
+                False,
+                "momentum_mismatch",
+                f"Skip: SHORT signal vs positive momentum {mom_pct:.3f}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+
     if bool(cfg.get("requireVisionConsensus", False)):
         if not _step(pipeline, "vision", inp.vision_ok, "required"):
             return EntryPlan(False, "vision", "Skip: vision consensus required", signal, conf, pipeline=pipeline)
@@ -179,7 +223,86 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # Adaptive position sizing based on loss streak
     trade_usdt = min(float(inp.trade_usdt), float(inp.max_notional))
+    if bool(cfg.get("adaptiveLossStreakEnabled", True)) and inp.live_loss_streak >= int(cfg.get("adaptiveLossStreakThreshold", 3)):
+        threshold = int(cfg.get("adaptiveLossStreakThreshold", 3))
+        max_reduction = float(cfg.get("adaptiveLossStreakMaxReduction", 0.50))
+        streak_excess = max(0, inp.live_loss_streak - threshold)
+        reduction_pct = min(max_reduction, streak_excess * 0.10)  # 10% reduction per excess loss, capped at max_reduction
+        trade_usdt *= (1.0 - reduction_pct)
+        _step(pipeline, "adaptive_sizing", True, f"Loss streak {inp.live_loss_streak}: size reduced by {reduction_pct*100:.1f}%")
+
+    # Apply regime-based size multiplier
+    regime_multiplier = regime.get("sizeMultiplier", 1.0)
+    if regime_multiplier != 1.0:
+        trade_usdt *= regime_multiplier
+        _step(pipeline, "regime_sizing", True, f"Regime {regime.get('name')}: size multiplier {regime_multiplier:.2f}")
+
+    # Apply session-based adjustments if enabled
+    if bool(cfg.get("sessionBasedAdjustments", True)):
+        import time
+        now_local = time.localtime(time.time())
+        hour = now_local.tm_hour
+        session_mult = 1.0
+        session_name = "normal"
+        
+        if 0 <= hour < 8:
+            session_mult = float(cfg.get("sessionAsianMultiplier", 0.85))
+            session_name = "Asian"
+        elif 8 <= hour < 12:
+            session_mult = float(cfg.get("sessionLondonMultiplier", 1.15))
+            session_name = "London"
+        elif 12 <= hour < 16:
+            session_mult = float(cfg.get("sessionUSOverlapMultiplier", 1.2))
+            session_name = "US overlap"
+        elif 16 <= hour < 20:
+            session_mult = float(cfg.get("sessionUSAfternoonMultiplier", 1.05))
+            session_name = "US afternoon"
+        elif 20 <= hour < 24:
+            session_mult = float(cfg.get("sessionAsianEveningMultiplier", 0.9))
+            session_name = "Asian evening"
+        
+        if session_mult != 1.0:
+            trade_usdt *= session_mult
+            _step(pipeline, "session_sizing", True, f"Session {session_name}: multiplier {session_mult:.2f}")
+
+    # Order flow confirmation for micro-structure analysis
+    imbalance = float(inp.intel.get("imbalance", 0.0) or 0.0) if isinstance(inp.intel, dict) else None
+    if bool(cfg.get("orderFlowConfirmation", True)):
+        min_imbalance = float(cfg.get("minOrderFlowImbalance", 0.03) or 0.03)
+        if imbalance is not None:
+            if signal == "LONG" and imbalance < min_imbalance:
+                if not _step(pipeline, "order_flow", False, f"LONG signal but order flow imbalance {imbalance:.3f} < {min_imbalance:.3f}"):
+                    return EntryPlan(
+                        False,
+                        "order_flow_mismatch",
+                        f"Skip: LONG signal vs weak order flow {imbalance:.3f}",
+                        signal,
+                        conf,
+                        pipeline=pipeline,
+                    )
+            elif signal == "SHORT" and imbalance > -min_imbalance:
+                if not _step(pipeline, "order_flow", False, f"SHORT signal but order flow imbalance {imbalance:.3f} > {-min_imbalance:.3f}"):
+                    return EntryPlan(
+                        False,
+                        "order_flow_mismatch",
+                        f"Skip: SHORT signal vs weak order flow {imbalance:.3f}",
+                        signal,
+                        conf,
+                        pipeline=pipeline,
+                    )
+        else:
+            _step(pipeline, "order_flow", False, "No order flow data available")
+            return EntryPlan(
+                False,
+                "no_order_flow",
+                "Skip: no order flow data for confirmation",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+
     p_intel = inp.intel.get("precision") if isinstance(inp.intel.get("precision"), dict) else {}
     eff_tp, eff_sl, tpsl_meta = effective_tpsl_pct_for_trade(
         cfg,

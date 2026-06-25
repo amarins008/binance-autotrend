@@ -32,5 +32,5 @@ class EntryPlan:
     eff_sl_pct: float = 0.0
     eff_leverage: int = 5
     tpsl_meta: dict = field(default_factory=dict)
-    pipeline: list[dict] = field(default_factory=dict)
+    pipeline: list[dict] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
