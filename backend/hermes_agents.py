@@ -44,6 +44,9 @@ HERMES_ENGINE_IDENTITY = {
 }
 
 
+_AGENT_STATE_TEMPLATE: dict[str, Any] | None = None
+
+
 def _same_agent_data(left: Any, right: Any) -> bool:
     if not isinstance(left, dict) and not isinstance(right, dict):
         return True
@@ -81,24 +84,33 @@ def new_agent_state() -> dict[str, Any]:
     }
 
 
+def _agent_state_template() -> dict[str, Any]:
+    """Memoized agent-state template to avoid rebuilding on every call."""
+    global _AGENT_STATE_TEMPLATE
+    if _AGENT_STATE_TEMPLATE is None:
+        _AGENT_STATE_TEMPLATE = new_agent_state()
+    return _AGENT_STATE_TEMPLATE
+
+
 def ensure_agent_state(state: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(state, dict) or not isinstance(state.get("agents"), dict):
         return new_agent_state()
-    template = new_agent_state()
+    template = _agent_state_template()
     agents = state.setdefault("agents", {})
     for agent_id, agent in template["agents"].items():
         if not isinstance(agents.get(agent_id), dict):
-            agents[agent_id] = agent
+            agents[agent_id] = dict(agent)
         else:
-            agents[agent_id].setdefault("id", agent_id)
-            agents[agent_id].setdefault("name", agent["name"])
-            agents[agent_id].setdefault("role", agent["role"])
-            agents[agent_id].setdefault("playbookPath", agent.get("playbookPath", ""))
-            agents[agent_id].setdefault("state", "todo")
-            agents[agent_id].setdefault("lastAction", "waiting")
-            agents[agent_id].setdefault("lastReason", "")
-            agents[agent_id].setdefault("updatedAt", int(time.time()))
-            agents[agent_id].setdefault("runs", 0)
+            existing = agents[agent_id]
+            existing.setdefault("id", agent_id)
+            existing.setdefault("name", agent["name"])
+            existing.setdefault("role", agent["role"])
+            existing.setdefault("playbookPath", agent.get("playbookPath", ""))
+            existing.setdefault("state", "todo")
+            existing.setdefault("lastAction", "waiting")
+            existing.setdefault("lastReason", "")
+            existing.setdefault("updatedAt", int(time.time()))
+            existing.setdefault("runs", 0)
     state["version"] = state.get("version") or template["version"]
     engine = state.get("engine")
     if not isinstance(engine, dict):
@@ -106,7 +118,8 @@ def ensure_agent_state(state: dict[str, Any] | None) -> dict[str, Any]:
     else:
         for key, value in HERMES_ENGINE_IDENTITY.items():
             engine.setdefault(key, value)
-    rebuild_kanban(state)
+    # Kanban is rebuilt by mark_agent / rebuild_kanban only when state actually changes.
+    # Avoid redundant rebuild here since ensure_agent_state is called many times per cycle.
     return state
 
 

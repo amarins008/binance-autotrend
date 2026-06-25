@@ -3470,6 +3470,7 @@ _DAILY_PNL_DATE_KEY = 0
 _SNAPSHOT_LAST_FLUSH = 0.0
 _LEARN_PROFILES_LAST_FLUSH = 0.0
 _LIVE_POSITIONS_CACHE = (0.0, [])
+_SUPERVISOR_LAST_REVIEW = 0
 _AUTOTRADE_TASK: asyncio.Task | None = None  # track running task to prevent duplicates
 _AUTOTRADE_TASK_LOCK = asyncio.Lock()
 AUTO_TRADE = {
@@ -6008,16 +6009,13 @@ def _position_guardian_status_heartbeat(open_positions: list[dict]) -> None:
         return
     symbols = sorted({str(p.get("symbol", "") or "").upper() for p in rows if str(p.get("symbol", "") or "").strip()})
     reason = ", ".join(symbols[:6])
-    state = ensure_agent_state(AUTO_TRADE.get("hermesAgents"))
-    agent = state["agents"].get("position_guardian")
-    if not isinstance(agent, dict):
-        return
-    agent["state"] = "done"
-    agent["lastAction"] = "open positions heartbeat"
-    agent["lastReason"] = reason
-    agent["updatedAt"] = int(time.time())
-    agent["data"] = {"openPositions": len(rows), "source": "openLivePositions", "heartbeat": True}
-    AUTO_TRADE["hermesAgents"] = rebuild_kanban(state)
+    _agent_mark(
+        "position_guardian",
+        "done",
+        "open positions heartbeat",
+        reason,
+        {"openPositions": len(rows), "source": "openLivePositions", "heartbeat": True},
+    )
 
 
 def _intel_data_quality_guard(intel: dict | None) -> dict:
@@ -8376,6 +8374,15 @@ async def _autotrade_loop():
         try:
             now = int(time.time())
             AUTO_TRADE["hermesAgents"] = start_cycle(AUTO_TRADE.get("hermesAgents"))
+            _agent_mark("hermes_supervisor", "doing", "cycle started", f"mode={(cfg.get('executionMode') or 'PAPER').upper()}")
+            # Periodic supervisor review: run every 90 seconds to avoid excessive overhead
+            global _SUPERVISOR_LAST_REVIEW
+            if now - _SUPERVISOR_LAST_REVIEW >= 90:
+                try:
+                    _hermes_supervisor_review()
+                    _SUPERVISOR_LAST_REVIEW = now
+                except Exception as e:
+                    _autotrade_log(f"Supervisor review error: {_format_loop_error(e)[:80]}")
             running_entries = bool(AUTO_TRADE.get("running"))
             risk_cooldown_enabled = bool(cfg.get("riskCooldownEnabled", False))
             if not risk_cooldown_enabled:
@@ -8715,7 +8722,13 @@ async def _autotrade_loop():
                 continue
             news_guard = _news_sentiment_guard_state(cfg, intel)
             if bool(news_guard.get("enabled")):
-                _agent_mark("news_sentiment_guard", "done", "news guard neutral", str(news_guard.get("status", "not_wired")), news_guard)
+                guard_status = str(news_guard.get("status", "not_wired")).lower()
+                if guard_status in ("adverse", "negative", "high_risk"):
+                    _agent_mark("news_sentiment_guard", "blocked", "news guard adverse", guard_status, news_guard)
+                    _autotrade_skip("news_sentiment", f"Skip: news sentiment guard adverse ({guard_status})")
+                    await asyncio.sleep(cfg.get("intervalSec", 20))
+                    continue
+                _agent_mark("news_sentiment_guard", "done", "news guard neutral", guard_status, news_guard)
             else:
                 _agent_mark("news_sentiment_guard", "done", "news guard disabled", "", news_guard)
             if risk_cooldown_enabled and bool(cfg.get("riskCooldownPauseOnVolatile", True)):
@@ -8760,6 +8773,7 @@ async def _autotrade_loop():
 
             if mode == "PAPER" and AUTO_TRADE["paper"]["position"]:
                 p = AUTO_TRADE["paper"]["position"]
+                _agent_mark("position_guardian", "doing", "monitor paper position", f"{p['symbol']} {p['side']}")
                 if p["side"] == "LONG":
                     if mark >= p["tp"]:
                         if _should_hold_winner("LONG", intel, cfg):
@@ -8775,12 +8789,15 @@ async def _autotrade_loop():
                             p["sl"] = new_sl
                             p["tp"] = new_tp
                             _autotrade_log(f"PAPER hold winner: trail TP/SL -> TP={new_tp:.6f} SL={new_sl:.6f}")
+                            _agent_mark("position_guardian", "done", "paper trail winner", f"TP={new_tp:.6f} SL={new_sl:.6f}")
                         else:
                             t = _paper_close("TP_HIT", mark)
                             _autotrade_log(f"PAPER close TP pnl={t['pnl']:.4f}")
+                            _agent_mark("position_guardian", "done", "paper close TP", f"pnl={t['pnl']:.4f}")
                     elif mark <= p["sl"]:
                         t = _paper_close("SL_HIT", mark)
                         _autotrade_log(f"PAPER close SL pnl={t['pnl']:.4f}")
+                        _agent_mark("position_guardian", "done", "paper close SL", f"pnl={t['pnl']:.4f}")
                 else:
                     if mark <= p["tp"]:
                         if _should_hold_winner("SHORT", intel, cfg):
@@ -8796,12 +8813,15 @@ async def _autotrade_loop():
                             p["sl"] = new_sl
                             p["tp"] = new_tp
                             _autotrade_log(f"PAPER hold winner: trail TP/SL -> TP={new_tp:.6f} SL={new_sl:.6f}")
+                            _agent_mark("position_guardian", "done", "paper trail winner", f"TP={new_tp:.6f} SL={new_sl:.6f}")
                         else:
                             t = _paper_close("TP_HIT", mark)
                             _autotrade_log(f"PAPER close TP pnl={t['pnl']:.4f}")
+                            _agent_mark("position_guardian", "done", "paper close TP", f"pnl={t['pnl']:.4f}")
                     elif mark >= p["sl"]:
                         t = _paper_close("SL_HIT", mark)
                         _autotrade_log(f"PAPER close SL pnl={t['pnl']:.4f}")
+                        _agent_mark("position_guardian", "done", "paper close SL", f"pnl={t['pnl']:.4f}")
 
             eb, ea, esb = ex.get("bid"), ex.get("ask"), ex.get("spreadBps")
             if (

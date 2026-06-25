@@ -28,7 +28,7 @@
 - Observations: 932
 - PickedCount: 12
 - PickRate: 1.29%
-- LastSignal: SHORT
-- LastConfidence: 0.724
-- LastScanScore: 0.587211
-- UpdatedAt: 1782360730
+- LastSignal: LONG
+- LastConfidence: 0.794
+- LastScanScore: 0.667217
+- UpdatedAt: 1782371696
