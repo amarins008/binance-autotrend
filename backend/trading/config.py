@@ -1,5 +1,7 @@
 ﻿"""Runtime config defaults and preset merge."""
 
+import os
+
 from trading.presets import PRO_STANDALONE_PRESET
 
 
@@ -125,6 +127,13 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("orderFlowConfirmation", True)  # Require order flow confirmation
     out.setdefault("minOrderFlowImbalance", 0.03)  # Minimum order flow imbalance for confirmation
     out.setdefault("tradingviewEnabled", False)  # TradingView MCP integration
+    # Allow enabling TradingView MCP via env var (set by Start Binance AutoTrade.bat).
+    # Only applies when the user has not explicitly set tradingviewEnabled in config.
+    if (
+        "tradingviewEnabled" not in (cfg or {})
+        and str(os.getenv("TRADINGVIEW_ENABLED", "")).lower() in ("1", "true", "yes", "on")
+    ):
+        out["tradingviewEnabled"] = True
     out.setdefault("tradingviewApiKey", "")  # TradingView API key
     out.setdefault("tradingviewApiSecret", "")  # TradingView API secret
     out.setdefault("tradingviewWebhookUrl", "")  # TradingView webhook URL

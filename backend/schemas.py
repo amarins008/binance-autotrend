@@ -172,7 +172,7 @@ class AutoTradeStartRequest(BaseModel):
     hybridScan: bool = False
     hybridMinScore: float = Field(default=0.72, ge=0.2, le=2.0)
     hybridMinEdge: float = Field(default=0.06, ge=0.0, le=1.0)
-    maxOpenPositions: int = Field(default=6, ge=1, le=20)
+    maxOpenPositions: int = Field(default=4, ge=1, le=20)
     volTargetEnabled: bool = True
     volTargetPct: float = Field(default=0.22, ge=0.05, le=3.0)
     volLookback: int = Field(default=30, ge=10, le=240)

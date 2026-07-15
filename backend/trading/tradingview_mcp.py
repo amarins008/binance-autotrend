@@ -82,6 +82,40 @@ class TradingViewClient:
         
         return True
     
+    def _tv_result_to_dict(self, result: TVSignalResult) -> dict:
+        """Serialize a TVSignalResult to a plain dict for per-symbol storage."""
+        if result is None:
+            return {}
+        try:
+            _sig = result.signal
+            return {
+                "signal": getattr(_sig, "value", str(_sig)) if _sig is not None else None,
+                "confidence": result.confidence,
+                "timestamp": result.timestamp,
+                "source": result.source,
+                "metadata": result.metadata,
+            }
+        except Exception:
+            return {}
+
+    def _tv_dict_to_result(self, d: dict) -> Optional[TVSignalResult]:
+        """Rebuild a TVSignalResult from a persisted per-symbol dict."""
+        try:
+            _sig = d.get("signal")
+            try:
+                _sig_enum = TVSignal(_sig) if _sig is not None else TVSignal.NEUTRAL
+            except Exception:
+                _sig_enum = TVSignal.NEUTRAL
+            return TVSignalResult(
+                signal=_sig_enum,
+                confidence=float(d.get("confidence", 0.0) or 0.0),
+                timestamp=float(d.get("timestamp", time.time())),
+                source=str(d.get("source", "disk")),
+                metadata=d.get("metadata") or {},
+            )
+        except Exception:
+            return None
+
     def _get_from_cache(self, symbol: str) -> Optional[TVSignalResult]:
         """Get signal from cache if available and not expired."""
         if symbol in self._cache:
@@ -90,12 +124,38 @@ class TradingViewClient:
                 return cached
             else:
                 del self._cache[symbol]
+        # Fallback: load persisted per-symbol TV signal from disk so a restart
+        # or a fresh process does not immediately re-hit the TradingView API.
+        try:
+            from trading.per_symbol_context import PerSymbolContext
+            from trading.shared_cache_layer import SharedCacheLayer
+            from services.config_paths import VAULT_DIR
+            ctx = PerSymbolContext(str(symbol).upper().strip(), SharedCacheLayer(VAULT_DIR), None)
+            d = ctx.get_tv_signal()
+            if isinstance(d, dict) and d.get("ts"):
+                if time.time() - float(d["ts"]) < self.cache_ttl:
+                    res = self._tv_dict_to_result(d)
+                    if res is not None:
+                        self._cache[symbol] = res
+                        return res
+        except Exception:
+            pass
         return None
-    
+
     def _store_in_cache(self, symbol: str, result: TVSignalResult):
         """Store signal in cache."""
         self._cache[symbol] = result
-        
+        # Persist to per-symbol storage so the signal survives a restart and is
+        # shared per-symbol rather than only living in this process cache.
+        try:
+            from trading.per_symbol_context import PerSymbolContext
+            from trading.shared_cache_layer import SharedCacheLayer
+            from services.config_paths import VAULT_DIR
+            ctx = PerSymbolContext(str(symbol).upper().strip(), SharedCacheLayer(VAULT_DIR), None)
+            ctx.save_tv_signal(self._tv_result_to_dict(result))
+        except Exception:
+            pass
+
         # Clean old cache entries
         now = time.time()
         old_symbols = [k for k, v in self._cache.items() if now - v.timestamp > self.cache_ttl * 2]
@@ -310,3 +370,9 @@ def reset_tv_client():
 # Backward compatibility aliases
 get_tv_mcp = get_tv_client
 reset_tv_mcp = reset_tv_client
+
+
+async def async_get_position_guidance(tv_client: TradingViewClient, symbol: str, side: str):
+    """Async wrapper for get_position_guidance to avoid blocking the event loop."""
+    import asyncio
+    return await asyncio.to_thread(tv_client.get_position_guidance, symbol, side)

@@ -322,8 +322,8 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             ))):
                 with mock.patch.object(main, "_recent_live_loss_streak_state", return_value={"streak": 0, "signature": ""}):
                     with mock.patch.object(main, "_risk_cooldown_regime", return_value={"name": "VOLATILE", "cooldownSec": 60}):
-                        with mock.patch.object(main, "_load_learning_profiles", return_value=saved_profiles):
-                            with mock.patch.object(main, "_save_learning_profiles", side_effect=lambda profiles: saved_profiles.update(profiles)):
+                        with mock.patch.object(main, "_load_single_profile", side_effect=lambda sym: saved_profiles.get(sym, {})):
+                            with mock.patch.object(main, "_save_single_profile", side_effect=lambda sym, pr: saved_profiles.update({sym: pr})):
                                 with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
                                     with self.assertRaises(StopLoop):
                                         await main._autotrade_loop()
@@ -552,7 +552,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 4, "wins": 1, "losses": 3, "winRatePct": 25.0, "pnl": -0.5}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": 0.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": 0.0}):
                 ok, reason, out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -564,7 +564,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 6, "wins": 3, "losses": 3, "winRatePct": 50.0, "pnl": 0.05}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": -2.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": -2.0}):
                 ok, reason, _out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -574,7 +574,6 @@ class TestSymbolPerfGate(unittest.TestCase):
 class TestStatusLitePositionCard(unittest.TestCase):
     def setUp(self):
         self.prev_config = main.AUTO_TRADE.get("config")
-        self.prev_guardian = main.AUTO_TRADE.get("liveGuardian")
         self.prev_locks = main.AUTO_TRADE.get("liveProfitLocks")
         self.prev_paper = main.AUTO_TRADE.get("paper")
         self.prev_last_decision = main.AUTO_TRADE.get("lastDecision")
@@ -585,7 +584,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
     def tearDown(self):
         main.AUTO_TRADE["config"] = self.prev_config
-        main.AUTO_TRADE["liveGuardian"] = self.prev_guardian
         main.AUTO_TRADE["liveProfitLocks"] = self.prev_locks
         main.AUTO_TRADE["paper"] = self.prev_paper
         main.AUTO_TRADE["lastDecision"] = self.prev_last_decision
@@ -593,16 +591,19 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["trades"] = self.prev_trades
         main.AUTO_TRADE["hermesAgents"] = self.prev_agents
 
-    def test_status_lite_exposes_position_from_guardian(self):
-        main.AUTO_TRADE["liveProfitLocks"] = {}
-        main.AUTO_TRADE["liveGuardian"] = {
-            "active": True,
-            "symbol": "XRPUSDT",
-            "side": "SHORT",
-            "qty": 21.8,
-            "entryMark": 1.2909,
-            "tp": 1.2676,
-            "sl": 1.3025,
+    def test_status_lite_exposes_position_from_profit_lock(self):
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "XRPUSDT:SHORT": {
+                "symbol": "XRPUSDT",
+                "side": "SHORT",
+                "qty": 21.8,
+                "entryMark": 1.2909,
+                "tp": 1.2676,
+                "sl": 1.3025,
+                "armed": False,
+                "peak": 0.0,
+                "lockUsdt": 0.0,
+            }
         }
 
         out = main.autotrade_status_lite()
@@ -614,8 +615,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(out["openLivePositions"][0]["symbol"], "XRPUSDT")
         self.assertEqual(out["openLivePositions"][0]["localTp"], 1.2676)
 
-    def test_status_lite_exposes_position_from_profit_lock(self):
-        main.AUTO_TRADE["liveGuardian"] = None
+    def test_status_lite_exposes_position_from_profit_lock_two(self):
         main.AUTO_TRADE["liveProfitLocks"] = {
             "DOGEUSDT:LONG": {
                 "symbol": "DOGEUSDT",
@@ -639,7 +639,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
     def test_status_lite_keeps_dashboard_kpi_fields(self):
         main.AUTO_TRADE["paper"] = {"wins": 2, "losses": 1, "realizedPnl": 1.25, "position": None, "history": []}
-        main.AUTO_TRADE["liveGuardian"] = None
         main.AUTO_TRADE["liveProfitLocks"] = {}
 
         def fake_stats(symbol=None):

@@ -388,16 +388,31 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "guardianDecisionMaxAgeSec": 30,
             "payoffLossGuardEnabled": False,
         }
-        prev_guardian = main.AUTO_TRADE.get("liveGuardian")
         prev_decision = main.AUTO_TRADE.get("lastDecision")
-        main.AUTO_TRADE["liveGuardian"] = {
-            "active": True,
-            "symbol": "DOGEUSDT",
-            "side": "LONG",
-            "entryMark": 1.0,
-            "tp": 1.05,
-            "sl": 0.95,
-            "qty": 100.0,
+        rows = [
+            {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "qty": 100.0,
+                "entryMark": 1.0,
+                "markPrice": 0.99,
+                "notionalUsdtApprox": 99.0,
+                "unRealizedProfit": -1.0,
+                "leverage": 10,
+            }
+        ]
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "DOGEUSDT:LONG": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "qty": 100.0,
+                "entryMark": 1.0,
+                "tp": 1.05,
+                "sl": 0.95,
+                "armed": False,
+                "peak": 0.0,
+                "lockUsdt": 0.0,
+            }
         }
         main.AUTO_TRADE["lastDecision"] = {
             "symbol": "BTCUSDT",
@@ -421,17 +436,17 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
 
         try:
             with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-                with mock.patch.object(main, "_current_position_amount", new=mock.AsyncMock(return_value=100.0)):
-                    with mock.patch.object(main, "fetch_mark_price", new=mock.AsyncMock(return_value=0.99)):
-                        with mock.patch.object(main, "place_futures_order", new=mock.AsyncMock()) as place_order:
-                            changed = await main._live_guardian_maybe_close(cfg)
+                with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value=None)):
+                        with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+                            changed = await main._live_multi_profit_lock_manage(cfg)
 
             self.assertFalse(changed)
-            place_order.assert_not_awaited()
-            self.assertTrue(main.AUTO_TRADE["liveGuardian"]["active"])
+            close_one.assert_not_awaited()
+            self.assertIn("DOGEUSDT:LONG", main.AUTO_TRADE["liveProfitLocks"])
         finally:
-            main.AUTO_TRADE["liveGuardian"] = prev_guardian
             main.AUTO_TRADE["lastDecision"] = prev_decision
+            main.AUTO_TRADE["liveProfitLocks"] = {}
 
     async def test_close_one_side_logs_position_entry_snapshot_not_other_symbol_last_decision(self):
         prev_locks = main.AUTO_TRADE.get("liveProfitLocks")
@@ -630,19 +645,16 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
     async def test_live_guardian_idle_check_does_not_count_as_completed_work(self):
         prev = {
             "hermesAgents": main.AUTO_TRADE.get("hermesAgents"),
-            "liveGuardian": main.AUTO_TRADE.get("liveGuardian"),
             "liveProfitLocks": main.AUTO_TRADE.get("liveProfitLocks"),
             "lastTradeAt": main.AUTO_TRADE.get("lastTradeAt"),
             "trades": list(main.AUTO_TRADE.get("trades", [])),
         }
         main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
-        main.AUTO_TRADE["liveGuardian"] = None
         main.AUTO_TRADE["liveProfitLocks"] = {}
 
         try:
             with mock.patch.object(main, "_live_multi_profit_lock_manage", new=mock.AsyncMock(return_value=False)):
-                with mock.patch.object(main, "_live_guardian_maybe_close", new=mock.AsyncMock(return_value=False)):
-                    closed = await main._manage_live_open_positions_once({"executionMode": "LIVE"}, int(main.time.time()))
+                closed = await main._manage_live_open_positions_once({"executionMode": "LIVE"}, int(main.time.time()))
 
             guardian = main.AUTO_TRADE["hermesAgents"]["agents"]["position_guardian"]
             self.assertFalse(closed)
@@ -698,8 +710,8 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             ))):
                 with mock.patch.object(main, "_recent_live_loss_streak_state", return_value={"streak": 0, "signature": ""}):
                     with mock.patch.object(main, "_risk_cooldown_regime", return_value={"name": "VOLATILE", "cooldownSec": 60}):
-                        with mock.patch.object(main, "_load_learning_profiles", return_value=saved_profiles):
-                            with mock.patch.object(main, "_save_learning_profiles", side_effect=lambda profiles: saved_profiles.update(profiles)):
+                        with mock.patch.object(main, "_load_single_profile", side_effect=lambda sym: saved_profiles.get(sym, {})):
+                            with mock.patch.object(main, "_save_single_profile", side_effect=lambda sym, pr: saved_profiles.update({sym: pr})):
                                 with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
                                     with self.assertRaises(StopLoop):
                                         await main._autotrade_loop()
@@ -1388,7 +1400,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 4, "wins": 1, "losses": 3, "winRatePct": 25.0, "pnl": -0.5}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": 0.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": 0.0}):
                 ok, reason, out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -1400,7 +1412,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 6, "wins": 3, "losses": 3, "winRatePct": 50.0, "pnl": 0.05}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": -2.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": -2.0}):
                 ok, reason, _out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -1454,7 +1466,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 0, "wins": 0, "losses": 0, "winRatePct": 0.0, "pnl": 0.0}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"NEWUSDT": {"rewardScore": 0.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": 0.0}):
                 ok, reason, out = main._symbol_perf_gate(cfg, "NEWUSDT")
 
         self.assertTrue(ok)
@@ -1511,7 +1523,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         perf = {"trades": 0, "wins": 0, "losses": 0, "winRatePct": 0.0, "pnl": 0.0}
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": 0.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": 0.0}):
                 ok, reason, out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -1543,7 +1555,7 @@ class TestSymbolPerfGate(unittest.TestCase):
             },
         }
 
-        with mock.patch.object(main, "_load_learning_profiles", return_value=profiles):
+        with mock.patch.object(main, "_load_single_profile", side_effect=lambda sym: profiles.get(sym, {})):
             win_score = main._symbol_quality_score("WINUSDT")
             loss_score = main._symbol_quality_score("LOSSUSDT")
 
@@ -1557,7 +1569,7 @@ class TestSymbolPerfGate(unittest.TestCase):
             "LOSSUSDT": {"wins": 1, "losses": 5, "rewardScore": -4.0, "rewardLossStreak": 4},
         }
 
-        with mock.patch.object(main, "_load_learning_profiles", return_value=profiles):
+        with mock.patch.object(main, "_load_single_profile", side_effect=lambda sym: profiles.get(sym, {})):
             winner_min = main._learned_min_conf("WINUSDT", 0.62)
             loser_min = main._learned_min_conf("LOSSUSDT", 0.62)
 
@@ -1607,7 +1619,7 @@ class TestSymbolPerfGate(unittest.TestCase):
         }
 
         with mock.patch.object(main, "_rolling_symbol_perf", return_value=perf):
-            with mock.patch.object(main, "_load_learning_profiles", return_value={"BADUSDT": {"rewardScore": 0.0}}):
+            with mock.patch.object(main, "_load_single_profile", return_value={"rewardScore": 0.0}):
                 ok, reason, out = main._symbol_perf_gate(cfg, "BADUSDT")
 
         self.assertFalse(ok)
@@ -1619,7 +1631,6 @@ class TestSymbolPerfGate(unittest.TestCase):
 class TestStatusLitePositionCard(unittest.TestCase):
     def setUp(self):
         self.prev_config = main.AUTO_TRADE.get("config")
-        self.prev_guardian = main.AUTO_TRADE.get("liveGuardian")
         self.prev_locks = main.AUTO_TRADE.get("liveProfitLocks")
         self.prev_paper = main.AUTO_TRADE.get("paper")
         self.prev_last_decision = main.AUTO_TRADE.get("lastDecision")
@@ -1631,8 +1642,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.prev_perf_locks = main.AUTO_TRADE.get("perfLocks")
         self.prev_supervisor_auto_tune = main.AUTO_TRADE.get("supervisorAutoTune")
         self.prev_supervisor_review = main.AUTO_TRADE.get("hermesSupervisorReview")
-        # The hermesSupervisorReview cache can hold stale severity from a previous
-        # test; clear it so each test computes a fresh review.
         main.AUTO_TRADE.pop("hermesSupervisorReview", None)
         self.prev_risk = dict(main.RISK)
         main.AUTO_TRADE["config"] = {
@@ -1648,7 +1657,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
     def tearDown(self):
         main.AUTO_TRADE["config"] = self.prev_config
-        main.AUTO_TRADE["liveGuardian"] = self.prev_guardian
         main.AUTO_TRADE["liveProfitLocks"] = self.prev_locks
         main.AUTO_TRADE["paper"] = self.prev_paper
         main.AUTO_TRADE["lastDecision"] = self.prev_last_decision
@@ -1683,19 +1691,22 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(main._within_no_trade_window(end, ["12:00-13:00"]))
         self.assertFalse(main._within_no_trade_window(overnight_end, ["23:00-01:00"]))
 
-    def test_status_lite_exposes_position_from_guardian(self):
-        main.AUTO_TRADE["liveProfitLocks"] = {}
-        main.AUTO_TRADE["liveGuardian"] = {
-            "active": True,
-            "symbol": "XRPUSDT",
-            "side": "SHORT",
-            "qty": 21.8,
-            "entryMark": 1.2909,
-            "tp": 1.2676,
-            "sl": 1.3025,
+    def test_status_lite_exposes_position_from_profit_locks(self):
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "XRPUSDT:SHORT": {
+                "symbol": "XRPUSDT",
+                "side": "SHORT",
+                "qty": 21.8,
+                "entryMark": 1.2909,
+                "tp": 1.2676,
+                "sl": 1.3025,
+                "armed": False,
+                "peak": 0.0,
+                "lockUsdt": 0.0,
+            }
         }
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["activePosition"]["live"]["side"], "SHORT")
         self.assertEqual(out["activePosition"]["live"]["symbol"], "XRPUSDT")
@@ -1716,14 +1727,13 @@ class TestStatusLitePositionCard(unittest.TestCase):
         }
         main.AUTO_TRADE["lastDecision"] = {"symbol": "XAUUSDT", "signal": "SHORT", "confidence": 0.8}
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["config"]["symbol"], "AUTO")
         self.assertTrue(out["config"]["marketScan"])
         self.assertEqual(out["config"]["activeScanSymbol"], "XAUUSDT")
 
     def test_status_lite_exposes_position_from_profit_lock(self):
-        main.AUTO_TRADE["liveGuardian"] = None
         main.AUTO_TRADE["liveProfitLocks"] = {
             "DOGEUSDT:LONG": {
                 "symbol": "DOGEUSDT",
@@ -1739,7 +1749,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         }
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["activePosition"]["live"]["side"], "LONG")
         self.assertEqual(out["activePosition"]["live"]["symbol"], "DOGEUSDT")
@@ -1755,7 +1765,6 @@ class TestStatusLitePositionCard(unittest.TestCase):
         state["agents"]["position_guardian"]["updatedAt"] = int(main.time.time()) - 600
         state["agents"]["position_guardian"]["runs"] = 7
         main.AUTO_TRADE["hermesAgents"] = state
-        main.AUTO_TRADE["liveGuardian"] = None
         main.AUTO_TRADE["liveProfitLocks"] = {
             "DOGEUSDT:LONG": {
                 "symbol": "DOGEUSDT",
@@ -1770,7 +1779,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         }
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         guardian = out["hermesAgents"]["agents"]["position_guardian"]
         self.assertEqual(guardian["state"], "done")
@@ -1778,7 +1787,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(guardian["runs"], 7)
         self.assertTrue(guardian["data"]["heartbeat"])
         self.assertLessEqual(int(main.time.time()) - int(guardian["updatedAt"]), 2)
-        self.assertFalse(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in out["hermesSupervisorReview"]["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", out["hermesSupervisorReview"])
 
     def test_supervisor_ignores_stopped_scan_board_perf_locks(self):
         main.AUTO_TRADE["running"] = False
@@ -1788,15 +1797,13 @@ class TestStatusLitePositionCard(unittest.TestCase):
             {"symbol": "CUSDT", "rejectReason": "perf_lock(30m)", "qualified": False},
         ]
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_status_lite_keeps_dashboard_kpi_fields(self):
         main.AUTO_TRADE["paper"] = {"wins": 2, "losses": 1, "realizedPnl": 1.25, "position": None, "history": []}
-        main.AUTO_TRADE["liveGuardian"] = None
         main.AUTO_TRADE["liveProfitLocks"] = {}
 
         def fake_stats(symbol=None):
@@ -1805,7 +1812,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             return {"wins": 3, "losses": 1, "realizedPnl": 2.75, "winsToday": 1, "lossesToday": 0, "realizedPnlToday": 0.5, "lastTrades": []}
 
         with mock.patch.object(main, "_aggregate_live_trade_stats_from_log", side_effect=fake_stats):
-            out = main.autotrade_status_lite()
+            out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["paper"]["winRatePct"], 66.67)
         self.assertEqual(out["paper"]["realizedPnl"], 1.25)
@@ -1823,15 +1830,21 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(out["liveDailyPnl"], -0.2)
 
     def test_learning_status_aggregates_all_symbols_in_one_log_pass(self):
+        import tempfile
         stats_by_symbol = {
             "BTCUSDT": {"wins": 2, "losses": 1, "realizedPnl": 1.25},
             "ETHUSDT": {"wins": 0, "losses": 1, "realizedPnl": -0.5},
         }
 
-        with mock.patch.object(main, "_load_learning_profiles", return_value={"ADAUSDT": {}}):
-            with mock.patch.object(main, "_aggregate_live_trade_stats_by_symbol_from_log", return_value=stats_by_symbol) as aggregate_all:
-                with mock.patch.object(main, "_aggregate_live_trade_stats_from_log", side_effect=AssertionError("per-symbol reread")):
-                    out = main.learning_status()
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ada_dir = vault / "symbols" / "ADAUSDT"
+            ada_dir.mkdir(parents=True)
+            (ada_dir / "profile.json").write_text("{}")
+            with mock.patch.object(main, "VAULT_DIR", vault), \
+                 mock.patch.object(main, "_aggregate_live_trade_stats_by_symbol_from_log", return_value=stats_by_symbol) as aggregate_all, \
+                 mock.patch.object(main, "_aggregate_live_trade_stats_from_log", side_effect=AssertionError("per-symbol reread")):
+                out = main.learning_status()
 
         aggregate_all.assert_called_once()
         by_symbol = {row["symbol"]: row for row in out["items"]}
@@ -1869,7 +1882,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["log"] = [{"ts": 123, "msg": "Skip: already in LONG"}]
         main.AUTO_TRADE["trades"] = [int(main.time.time())]
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["lastDecision"]["symbol"], "XRPUSDT")
         self.assertEqual(out["lastDecision"]["signal"], "LONG")
@@ -1880,7 +1893,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["hermesAgents"] = main.start_cycle(main.new_agent_state())
         main._agent_mark("market_analyst", "done", "scan completed", "BTCUSDT")
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertIn("hermesAgents", out)
         self.assertIn("market_analyst", out["hermesAgents"]["agents"])
@@ -1917,7 +1930,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.RISK["max_leverage"] = 25
         main.AUTO_TRADE["config"].update({"leverage": 10, "leverageMin": 10, "leverageMax": 25})
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         self.assertEqual(out["config"]["leverage"], 10)
         self.assertEqual(out["config"]["leverageMin"], 10)
@@ -1976,7 +1989,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         with (
             mock.patch.object(main, "_symbol_quality_score", return_value=0.10),
             mock.patch.object(main, "_rolling_symbol_perf", return_value={"trades": 0}),
-            mock.patch.object(main, "_load_learning_profiles", return_value={}),
+            mock.patch.object(main, "_load_single_profile", return_value={}),
         ):
             calm = main._adaptive_symbol_leverage("SLOWUSDT", calm_intel, cfg)
             volatile = main._adaptive_symbol_leverage("FASTUSDT", volatile_intel, cfg)
@@ -1999,24 +2012,24 @@ class TestStatusLitePositionCard(unittest.TestCase):
         state = main.mark_agent(state, "risk_manager", "blocked", "symbol daily cap", "XLMUSDT 14/14")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "high")
         self.assertTrue(any(x["agent"] == "risk_manager" for x in review["issues"]))
-        self.assertTrue(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_portfolio_capacity_as_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "portfolio_manager", "blocked", "portfolio capacity full", "4/4")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Capacity hold" for x in review["issues"]))
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_handles_symbol_day_cap_scan_loop(self):
         prev = {
@@ -2068,7 +2081,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for action in review["autoActions"]
             )
         )
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_handles_mixed_perf_lock_and_analyze_error_board(self):
         prev = {
@@ -2129,134 +2142,114 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for action in review["autoActions"]
             )
         )
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_adaptive_cooldown_as_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "risk_manager", "blocked", "adaptive cooldown hold", "market volatile (XLMUSDT)")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_no_trade_window_as_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "risk_manager", "blocked", "no trade window", "")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_late_chase_as_strategy_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "strategy_builder", "blocked", "late long chase", "bb=0.94 vwapDist=0.42%")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Inspect repeated blocked state for strategy_builder: late long chase" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_signal_wait_as_strategy_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "strategy_builder", "blocked", "signal wait", "")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" and x["agent"] == "strategy_builder" for x in review["issues"]))
-        self.assertFalse(
-            any(
-                x.get("task") == "Inspect repeated blocked state for strategy_builder: signal wait"
-                for x in review["cmuxHandoff"]
-            )
-        )
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_adaptive_confidence_as_strategy_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "strategy_builder", "blocked", "confidence below adaptive minimum", "0.620 < 0.630")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(
-            any(
-                x.get("task") == "Inspect repeated blocked state for strategy_builder: confidence below adaptive minimum"
-                for x in review["cmuxHandoff"]
-            )
-        )
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_primary_symbol_open_as_market_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "market_analyst", "blocked", "primary symbol already open", "BTCUSDT")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(
-            any(
-                x.get("task") == "Inspect repeated blocked state for market_analyst: primary symbol already open"
-                for x in review["cmuxHandoff"]
-            )
-        )
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_symbol_volatile_cooldown_as_market_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "market_analyst", "blocked", "symbol volatile cooldown", "HOMEUSDT 10m")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" and x["agent"] == "market_analyst" for x in review["issues"]))
-        self.assertFalse(
-            any(
-                x.get("task") == "Inspect repeated blocked state for market_analyst: symbol volatile cooldown"
-                for x in review["cmuxHandoff"]
-            )
-        )
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_keeps_cooldown_check_failed_actionable(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "risk_manager", "blocked", "adaptive cooldown check failed", "ValueError bad state")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "high")
-        self.assertTrue(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_treats_cooldown_check_timeout_as_safety_hold(self):
         state = main.new_agent_state()
         state = main.mark_agent(state, "risk_manager", "blocked", "adaptive cooldown check failed", "TimeoutError (no message)")
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
         self.assertEqual(review["severity"], "low")
         self.assertTrue(any(x["title"] == "Safety hold" for x in review["issues"]))
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_stale_guardian_with_open_position(self):
         state = main.new_agent_state()
@@ -2273,7 +2266,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(review["severity"], "high")
         self.assertTrue(any(x["title"] == "Open positions not actively monitored" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "position_guardian" for x in review["autoActions"]))
-        self.assertTrue(any(x.get("task") == "Wire Position Guardian heartbeat to openLivePositions source" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_repeated_fapi_agreement_rejects(self):
         state = main.new_agent_state()
@@ -2302,7 +2295,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for x in review["autoActions"]
             )
         )
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertFalse(any(x["title"] == "Low entry activity" for x in review["issues"]))
 
     def test_supervisor_escalates_unhandled_repeated_fapi_agreement_rejects(self):
@@ -2324,7 +2317,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertTrue(any(x["title"] == "Exchange agreement rejects entries" and x["severity"] == "high" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertTrue(
             any(
                 x.get("action") == "skip symbols rejected by -4411"
@@ -2359,7 +2352,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         self.assertFalse(any(x["title"] == "Exchange agreement rejects entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertTrue(any(x.get("action") == "skip symbols rejected by -4411" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertEqual(main.AUTO_TRADE["hermesAgents"]["agents"]["execution_agent"]["lastAction"], "skip symbols rejected by -4411")
 
@@ -2383,7 +2376,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         self.assertFalse(any(x["title"] == "Exchange agreement rejects entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertTrue(any(x.get("action") == "skip symbols rejected by -4411" and x.get("status") == "applied" for x in review["autoActions"]))
 
     def test_supervisor_auto_heals_live_scan_config_drift(self):
@@ -2428,7 +2421,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertEqual(main.AUTO_TRADE["perfLocks"]["XAUUSDT"]["reason"], "fapi_agreement")
         self.assertTrue(any(x.get("action") == "restored -4411 perf locks from logs" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review -4411 symbol eligibility and exchange permission handling" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_escalates_repeated_locked_scan_pick(self):
         state = main.new_agent_state()
@@ -2457,7 +2450,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertTrue(any(x["title"] == "Repeated scan pick concentration" and x["severity"] == "high" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Fix scan candidate lock enforcement for repeated rejected symbol picks" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_perf_locks_reducing_entries_when_no_qualified_candidates(self):
         state = main.new_agent_state()
@@ -2481,8 +2474,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "market_analyst" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Performance locks reducing entries" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_suppresses_no_qualified_scan_candidates_during_risk_cooldown_hold(self):
         state = main.new_agent_state()
@@ -2505,7 +2497,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Safety hold" and x["agent"] == "risk_manager" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_suppresses_no_qualified_scan_candidates_during_entry_risk_cooldown(self):
         state = main.new_agent_state()
@@ -2530,7 +2522,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Entry blocked by risk cooldown" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_perf_locks_when_qualified_candidates_exist(self):
         state = main.new_agent_state()
@@ -2551,7 +2543,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Performance locks reducing entries" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review perf_lock thresholds and symbol universe after repeated low entries" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_low_live_entry_activity(self):
         state = main.new_agent_state()
@@ -2628,7 +2620,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 for x in review["autoActions"]
             )
         )
-        self.assertFalse(review["cmuxHandoff"])
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_does_not_report_no_new_position_when_capacity_full(self):
         state = main.new_agent_state()
@@ -2822,7 +2814,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "No qualified scan candidates" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "No new position despite capacity" for x in review["issues"]))
         self.assertTrue(any(x["action"] == "auto-tuned scan-none fallback policy" and x["status"] == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_low_entry_tune_relaxes_quiet_market_and_targets_min_positions(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -2912,7 +2904,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Low entry activity" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review scan fallback when all candidates are guarded out" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_symbol_volatile_cooldown_as_root_entry_blocker(self):
         state = main.new_agent_state()
@@ -3009,7 +3001,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Profit capture may be too early" for x in review["issues"]))
         self.assertTrue(any(x["agent"] == "strategy_builder" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Profit capture may be too early" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review guardian early-exit and hold-winner thresholds" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_tunes_scan_timeout_when_live(self):
         state = main.new_agent_state()
@@ -3037,7 +3029,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Scan timeout detected" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned scan timeout workload" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertLess(main.AUTO_TRADE["config"]["scanAnalyzeTop"], 8)
         self.assertGreater(main.AUTO_TRADE["config"]["scanPerSymbolTimeoutSec"], 7.5)
 
@@ -3059,7 +3051,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Scan timeout detected" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Tune market scan timeout handling and symbol backoff" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_periodic_trade_review_keeps_negative_expectancy_supervisor_first(self):
         state = main.new_agent_state()
@@ -3089,7 +3081,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(review["periodicTradeReview"])
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_tunes_negative_expectancy_when_live(self):
         state = main.new_agent_state()
@@ -3133,8 +3125,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Periodic trade review: negative expectancy" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned negative expectancy policy" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertTrue(any(x.get("action") == "auto-tuned weak payoff policy" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any("negative expectancy" in x.get("task", "") for x in review["cmuxHandoff"]))
-        self.assertFalse(any("payoff ratio" in x.get("task", "") for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertGreater(cfg["minConfidence"], 0.62)
         self.assertGreater(cfg["earlyEntryScoreGapMin"], 1.40)
         self.assertGreater(cfg["hybridMinScore"], 0.72)
@@ -3286,7 +3277,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             self.assertEqual(supervisor["state"], "done")
             self.assertEqual(supervisor["lastAction"], "reviewed high-severity subagent issue")
             self.assertFalse(any(x.get("agent") == "hermes_supervisor" for x in review["issues"]))
-            self.assertFalse(any(x.get("agent") == "hermes_supervisor" for x in review["cmuxHandoff"]))
+            self.assertNotIn("cmuxHandoff", review)
         finally:
             main.AUTO_TRADE.clear()
             main.AUTO_TRADE.update(prev_auto)
@@ -3569,7 +3560,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any("already locked" in x.get("detail", "") for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "temporary perf-lock dominant symbol drag" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review symbol-specific filters and perf lock behavior for FETUSDT" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_profitable_small_win_cluster(self):
         state = main.new_agent_state()
@@ -3598,7 +3589,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(review["periodicTradeReview"])
         self.assertFalse(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_healthy_low_payoff_window(self):
         state = main.new_agent_state()
@@ -3657,8 +3648,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertFalse(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["cmuxHandoff"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_tunes_weak_payoff_when_live(self):
         state = main.new_agent_state()
@@ -3740,7 +3730,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "weak payoff policy already at safe limits" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review TP/SL, hold-winner, and profit-lock thresholds because payoff ratio is weak" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_reports_small_wins_without_weak_payoff(self):
         state = main.new_agent_state()
@@ -3769,7 +3759,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertFalse(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
         self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
-        self.assertTrue(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_tunes_small_wins_when_live(self):
         state = main.new_agent_state()
@@ -3808,7 +3798,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned small-profit capture policy" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertFalse(any(x.get("task") == "Review weak-signal exits, profit-lock, and hold-winner behavior for small-profit clustering" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
         self.assertLess(main.AUTO_TRADE["config"]["holdMinConfidence"], 0.72)
         self.assertGreater(main.AUTO_TRADE["config"]["tpTargetMinUsdt"], 0.55)
 
@@ -3834,7 +3824,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertIn("Backtest validation missing", titles)
         self.assertTrue(any(x["agent"] == "memory_agent" for x in review["autoActions"]))
         self.assertTrue(any(x["title"] == "Backtest validation missing" and x.get("supervisorFirst") for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Wire Backtest Agent validation for learning config proposals" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_known_operator_permission_hold(self):
         prev_errors = main.AUTO_TRADE.get("consecutiveErrors", 0)
@@ -3848,11 +3838,11 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 "msg": "LIVE ถูกหยุดชั่วคราว: Binance API key/IP/permission ไม่ผ่าน (-2015)",
             }
 
-            out = main.autotrade_status_lite()
+            out = main.asyncio.run(main.autotrade_status_lite())
 
             review = out["hermesSupervisorReview"]
             self.assertFalse(any(x["title"] == "Backend loop errors" for x in review["issues"]))
-            self.assertFalse(any(x.get("task") == "Trace AUTO_TRADE consecutiveErrors and add targeted recovery" for x in review["cmuxHandoff"]))
+            self.assertNotIn("cmuxHandoff", review)
         finally:
             main.AUTO_TRADE["consecutiveErrors"] = prev_errors
             main.AUTO_TRADE["lastSkip"] = prev_skip
@@ -3865,10 +3855,10 @@ class TestStatusLitePositionCard(unittest.TestCase):
         state["agents"]["portfolio_manager"]["runs"] = 1
         main.AUTO_TRADE["hermesAgents"] = state
 
-        out = main.autotrade_status_lite()
+        out = main.asyncio.run(main.autotrade_status_lite())
 
         review = out["hermesSupervisorReview"]
-        self.assertFalse(any(x.get("task") == "Review workload split around risk_manager" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_guardian_heartbeat_run_imbalance(self):
         state = main.new_agent_state()
@@ -3890,7 +3880,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         review = main._hermes_supervisor_review(bot)
 
-        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_guardian_loop_cadence_when_risk_manager_also_active(self):
         state = main.new_agent_state()
@@ -3926,7 +3916,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "position_guardian" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around position_guardian" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_compares_workload_against_cadence_agents_only(self):
         state = main.new_agent_state()
@@ -3956,7 +3946,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         )
 
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_portfolio_loop_cadence_workload(self):
         state = main.new_agent_state()
@@ -3995,7 +3985,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "portfolio_manager" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_ignores_market_workload_during_risk_cooldown_probe_timeout(self):
         state = main.new_agent_state()
@@ -4030,7 +4020,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "market_analyst" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_uses_wider_market_workload_threshold_for_scan_fanout(self):
         state = main.new_agent_state()
@@ -4061,7 +4051,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         )
 
         self.assertFalse(any(x["title"] == "Workload imbalance" and x["agent"] == "market_analyst" for x in review["issues"]))
-        self.assertFalse(any(x.get("task") == "Review workload split around market_analyst" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_weak_payoff_tune_tightens_loss_guard_when_losses_dwarf_wins(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -4163,7 +4153,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             }
         )
 
-        self.assertFalse(any(x.get("task") == "Review workload split around portfolio_manager" for x in review["cmuxHandoff"]))
+        self.assertNotIn("cmuxHandoff", review)
 
     def test_agent_start_cycle_clears_stale_action(self):
         state = main.mark_agent(main.new_agent_state(), "memory_agent", "done", "decision stored", "LIVE XLMUSDT LONG")
