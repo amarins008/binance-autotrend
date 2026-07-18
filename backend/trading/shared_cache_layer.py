@@ -19,6 +19,17 @@ from trading.per_symbol_storage import PerSymbolStorage
 from trading.shared_storage import SharedStorage
 
 
+_GLOBAL_CACHE: SharedCacheLayer | None = None
+
+
+def get_shared_cache(vault_dir: Path | None = None) -> SharedCacheLayer:
+    """Return a module-level singleton SharedCacheLayer."""
+    global _GLOBAL_CACHE
+    if _GLOBAL_CACHE is None:
+        _GLOBAL_CACHE = SharedCacheLayer(vault_dir)
+    return _GLOBAL_CACHE
+
+
 class SharedCacheLayer:
     """In-memory cache that sits above PerSymbolStorage / SharedStorage.
 
@@ -57,6 +68,10 @@ class SharedCacheLayer:
         # symbol -> runtime state dict (cooldowns, scan board, etc.)
         self._runtime_cache: dict[str, tuple[float, dict]] = {}
         self._runtime_ttl = 30.0
+
+        # symbol -> 3-tier symbol profile dict (autotuned params, volatility tier, etc.)
+        self._sym_profile_cache: dict[str, tuple[float, dict]] = {}
+        self._sym_profile_ttl = 60.0
 
     # ------------------------------------------------------------------
     # Storage accessors
@@ -199,6 +214,14 @@ class SharedCacheLayer:
         self._runtime_cache[symbol.upper().strip()] = (time.time(), dict(runtime))
 
     # ------------------------------------------------------------------
+    # Symbol profile cache (3-tier)
+    # ------------------------------------------------------------------
+
+    def set_symbol_profile(self, symbol: str, profile: dict) -> None:
+        """Update the in-memory cache for 3-tier symbol profile after a write."""
+        self._sym_profile_cache[symbol.upper().strip()] = (time.time(), dict(profile))
+
+    # ------------------------------------------------------------------
     # Invalidation
     # ------------------------------------------------------------------
 
@@ -211,9 +234,15 @@ class SharedCacheLayer:
         self._guardian_cache.pop(sym, None)
         self._tv_cache.pop(sym, None)
         self._runtime_cache.pop(sym, None)
+        self._sym_profile_cache.pop(sym, None)
 
     def invalidate_all(self) -> None:
         """Drop all caches (e.g. after a config change)."""
         self._profile_cache.clear()
         self._window_cache.clear()
         self._risk_cache.clear()
+        self._guardian_cache.clear()
+        self._tv_cache.clear()
+        self._runtime_cache.clear()
+        self._sym_profile_cache.clear()
+        self._storages.clear()

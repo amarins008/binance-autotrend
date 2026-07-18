@@ -46,7 +46,6 @@ from obsidian_memory import (
     append_trade_memory,
     ensure_trading_vault,
     write_self_review_memory,
-    write_symbol_memory,
 )
 from trading.regime import detect_market_regime
 from trading.config import apply_autotrade_defaults
@@ -54,11 +53,12 @@ from trading.live_guardian import (
     _manage_live_open_positions_once,
     _live_multi_profit_lock_manage,
 )
-from trading.trade_log import _live_closed_trades_from_log
+from trading.trade_log import _live_closed_trades_from_log, _live_closed_trades_from_symbol
 from trading.per_symbol_storage import PerSymbolStorage
 from trading.shared_storage import SharedStorage
-from trading.shared_cache_layer import SharedCacheLayer
+from trading.shared_cache_layer import SharedCacheLayer, get_shared_cache
 from trading.per_symbol_context import PerSymbolContext
+from trading.pipeline import EntryInputs, EntryPlan, evaluate_entry_plan
 
 
 # Centralized capacity defaults — keep a single source of truth so the loop,
@@ -1794,8 +1794,8 @@ def _per_symbol_streak_size_mult(symbol: str, cfg: dict | None = None) -> float:
         return 1.0
     try:
         from trading.per_symbol_context import PerSymbolContext
-        from trading.shared_cache_layer import SharedCacheLayer
-        cache = SharedCacheLayer(VAULT_DIR)
+        from trading.shared_cache_layer import get_shared_cache
+        cache = get_shared_cache(VAULT_DIR)
         ctx = PerSymbolContext(sym, cache, cfg)
         trades = ctx.get_trades("LIVE")
         if not trades:
@@ -2166,8 +2166,8 @@ def _early_entry_pullback_reset_ok(side: str, precision: dict | None, cfg: dict 
         vwap_dist = abs(float(px.get("vwapDistancePct", 0.0) or 0.0))
     except Exception:
         vwap_dist = 0.0
-    late_bb = float(cfg.get("lateEntryMaxBbPctB", 0.90) or 0.90)
-    late_vwap = float(cfg.get("lateEntryMaxVwapDistancePct", 0.32) or 0.32)
+    late_bb = float(cfg.get("lateEntryMaxBbPctB", 0.95) or 0.95)
+    late_vwap = float(cfg.get("lateEntryMaxVwapDistancePct", 0.40) or 0.40)
     long_max_bb = min(late_bb - 0.02, float(cfg.get("earlyEntryMaxBbPctB", 0.82) or 0.82))
     short_min_bb = max(1.0 - late_bb + 0.02, float(cfg.get("earlyEntryMinBbPctBShort", 0.18) or 0.18))
     max_vwap = min(late_vwap, float(cfg.get("earlyEntryMaxVwapDistancePct", 0.24) or 0.24))
@@ -2202,7 +2202,7 @@ def _learning_propose_from_trades(symbol: str, trades: list[dict]) -> dict:
                 "adaptiveSizeBoostMaxPct": 20.0,
                 "maxOpenPositions": 4,
                 "takeProfitPct": 1.2,
-                "stopLossPct": 0.9,
+                "stopLossPct": 0.75,
             },
             "reasons": ["insufficient_live_data"],
         }
@@ -2388,94 +2388,6 @@ def _walk_forward_from_trades(symbol: str, train_size: int, test_size: int, mode
     }
 
 
-def _update_symbol_note(symbol: str, profile: dict, last_trade: dict | None = None):
-    _ensure_vault()
-    p = VAULT_DIR / f"{symbol}.md"
-    wins = int(profile.get("wins", 0))
-    losses = int(profile.get("losses", 0))
-    total = wins + losses
-    wr = round((wins / total) * 100, 2) if total > 0 else 0.0
-    pnl = round(float(profile.get("realizedPnl", 0.0)), 6)
-    trades = int(profile.get("trades", 0))
-    obs = int(profile.get("observations", 0))
-    picks = int(profile.get("pickedCount", 0))
-    pick_rate = round((picks / obs) * 100, 2) if obs > 0 else 0.0
-    avg_pnl = round((pnl / trades), 6) if trades > 0 else 0.0
-    last_sig = str(profile.get("lastSignal", "WAIT"))
-    last_conf = profile.get("lastConfidence", 0.0)
-    last_score = profile.get("lastScanScore", 0.0)
-    lines = [
-        f"# {symbol}",
-        "",
-        "## Performance",
-        f"- Wins: {wins}",
-        f"- Losses: {losses}",
-        f"- Trades: {trades}",
-        f"- WinRate: {wr}%",
-        f"- RealizedPnL: {pnl}",
-        f"- AvgPnL/Trade: {avg_pnl}",
-        f"- RewardScore: {round(float(profile.get('rewardScore', 0.0) or 0.0), 6)}",
-        f"- RewardDelta: {round(float(profile.get('rewardDelta', 0.0) or 0.0), 6)}",
-        f"- RewardBehaviorDelta: {round(float(profile.get('rewardBehaviorDelta', 0.0) or 0.0), 6)}",
-        f"- RewardWinStreak: {int(profile.get('rewardWinStreak', 0) or 0)}",
-        f"- RewardLossStreak: {int(profile.get('rewardLossStreak', 0) or 0)}",
-        f"- LearningRankScore: {round(_symbol_quality_score(symbol), 6)}",
-        "",
-        "## Risk Tune",
-    ]
-    tune = profile.get("symbolRiskTune") if isinstance(profile.get("symbolRiskTune"), dict) else {}
-    if tune:
-        lines += [
-            f"- Active: {bool(tune.get('active'))}",
-            f"- Window: {tune.get('window', 0)}",
-            f"- WinRate: {tune.get('winRatePct', 0.0)}%",
-            f"- PnL: {tune.get('pnl', 0.0)}",
-            f"- SizeMult: {tune.get('sizeMult', 1.0)}",
-            f"- LeverageMult: {tune.get('leverageMult', 1.0)}",
-            f"- RecommendedLeverageMax: {tune.get('recommendedLeverageMax', '')}",
-            f"- Reason: {tune.get('reason', '')}",
-            "",
-        ]
-    else:
-        lines += ["- Active: False", "",]
-    lines += [
-        "## Scan Behavior",
-        f"- Observations: {obs}",
-        f"- PickedCount: {picks}",
-        f"- PickRate: {pick_rate}%",
-        f"- LastSignal: {last_sig}",
-        f"- LastConfidence: {last_conf}",
-        f"- LastScanScore: {last_score}",
-        f"- UpdatedAt: {int(time.time())}",
-        "",
-    ]
-    if last_trade:
-        lines += [
-            "## Last Trade",
-            f"- Side: {last_trade.get('side')}",
-            f"- Entry: {last_trade.get('entry')}",
-            f"- Exit: {last_trade.get('exit')}",
-            f"- PnL: {last_trade.get('pnl')}",
-            f"- Reason: {last_trade.get('reason')}",
-            f"- ClosedAt: {last_trade.get('closedAt')}",
-            f"- PatternTags: {last_trade.get('patternTags', [])}",
-            f"- PatternBias: {last_trade.get('patternBias', 0.0)}",
-            f"- PatternScore: {last_trade.get('patternScore', 0.0)}",
-            "",
-        ]
-    try:
-        p.write_text("\n".join(lines), encoding="utf-8")
-        write_symbol_memory(VAULT_DIR, symbol, profile, last_trade)
-    except Exception as exc:
-        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
-    # Also write to per-symbol vault
-    try:
-        storage = PerSymbolStorage(VAULT_DIR, symbol)
-        storage.update_symbol_note(profile, last_trade)
-    except Exception:
-        pass
-
-
 def _record_learning_trade(symbol: str, trade: dict, mode: str):
     global DAILY_REALIZED_PNL, _DAILY_PNL_DATE_KEY
     sym = str(symbol or "").upper()
@@ -2483,7 +2395,7 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         return
     print(f"[Record Trade] _record_learning_trade called: symbol={sym}, mode={mode}, pnl={trade.get('pnl')}, reason={trade.get('reason')}")
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
-    ctx = PerSymbolContext(sym, SharedCacheLayer(VAULT_DIR), cfg)
+    ctx = PerSymbolContext(sym, get_shared_cache(VAULT_DIR), cfg)
     pr = ctx.profile
     pnl = float(trade.get("pnl", 0.0) or 0.0)
     pr["wins"] = int(pr.get("wins", 0)) + (1 if pnl >= 0 else 0)
@@ -2529,6 +2441,17 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         pr["tpPct"] = round(guard_tp, 4)
         pr["slPct"] = round(guard_sl, 4)
         pr["profitLockTriggerUsdt"] = round(guard_lock, 4)
+        # Guardian autotune: adapt holdTrailPct and holdMinConfidence per symbol.
+        guard_trail = float(pr.get("holdTrailPct", float(cfg.get("holdTrailPct", 0.25) or 0.25)) or 0.25)
+        guard_conf = float(pr.get("holdMinConfidence", float(cfg.get("holdMinConfidence", 0.72) or 0.72)) or 0.72)
+        if win_like:
+            guard_trail *= 1.01
+            guard_conf *= 0.99
+        elif loss_like:
+            guard_trail *= 0.98
+            guard_conf *= 1.01
+        pr["holdTrailPct"] = round(max(0.10, min(0.50, guard_trail)), 4)
+        pr["holdMinConfidence"] = round(max(0.60, min(0.85, guard_conf)), 4)
         pr["tpslFeedback"] = {
             "updatedAt": int(time.time()),
             "mode": "LIVE",
@@ -2574,7 +2497,7 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         pr["rewardWinStreak"] = 0
     pr["updatedAt"] = int(time.time())
     try:
-        recent_rows = _live_closed_trades_from_log(symbol=sym, mode="ALL")
+        recent_rows = _live_closed_trades_from_symbol(sym, mode="ALL", vault_dir=VAULT_DIR)
         current_trade = {"_pnl": pnl, "_ts": int(time.time()), **trade, "symbol": sym}
         recent_with_current = [*recent_rows, current_trade]
         windows = _memory_windows_from_trades(recent_with_current)
@@ -2587,18 +2510,25 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     try:
         auto_profile = _auto_update_symbol_profile(sym, cfg)
         if isinstance(auto_profile, dict) and auto_profile:
-            sym_profiles = _load_symbol_profiles() or {}
-            existing = sym_profiles.get(sym) if isinstance(sym_profiles.get(sym), dict) else {}
-            merged = dict(existing)
-            merged.update(auto_profile)
-            merged["updatedAt"] = int(time.time())
-            merged["lastAutoLearnedAt"] = int(time.time())
-            merged["lastAutoLearnedFrom"] = "close_trade"
-            merged["learnedTrades"] = int(pr.get("trades", 0) or 0)
-            merged["learnedWinRatePct"] = float(pr.get("memoryWindows", {}).get("7d", {}).get("winRatePct", 0.0) or 0.0) if isinstance(pr.get("memoryWindows"), dict) else 0.0
-            merged["learnedPnl"] = float(pr.get("realizedPnl", 0.0) or 0.0)
-            sym_profiles[sym] = merged
-            _save_symbol_profiles(sym_profiles)
+            try:
+                existing = ctx._sym_profile if isinstance(ctx._sym_profile, dict) else {}
+                merged = dict(existing)
+                _AUTOTUNER_MANAGED = {"tpPct", "slPct", "holdTrailPct", "holdMinConfidence"}
+                _has_autotune = bool(existing.get("autotuneLastAt"))
+                for k, v in auto_profile.items():
+                    if _has_autotune and k in _AUTOTUNER_MANAGED:
+                        continue
+                    merged[k] = v
+                merged["updatedAt"] = int(time.time())
+                merged["lastAutoLearnedAt"] = int(time.time())
+                merged["lastAutoLearnedFrom"] = "close_trade"
+                merged["learnedTrades"] = int(pr.get("trades", 0) or 0)
+                merged["learnedWinRatePct"] = float(pr.get("memoryWindows", {}).get("7d", {}).get("winRatePct", 0.0) or 0.0) if isinstance(pr.get("memoryWindows"), dict) else 0.0
+                merged["learnedPnl"] = float(pr.get("realizedPnl", 0.0) or 0.0)
+                ctx._sym_profile = merged
+                ctx._dirty_sym_profile = True
+            except Exception:
+                pass  # per-symbol write failed, skip fallback to global
     except Exception:
         pass
 
@@ -2609,6 +2539,27 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             trade_log_entry["mode"] = "LIVE"
             trade_log_entry.setdefault("closedAt", int(trade.get("closedAt") or trade.get("ts") or time.time()))
             trade_log_entry.setdefault("reason", str(trade.get("reason", "LIVE_CLOSE") or "LIVE_CLOSE"))
+            # Attach params_at_entry and guardian_stats from per-symbol storage
+            # (lock may already be popped from in-memory dict, so read from disk)
+            try:
+                from trading.per_symbol_storage import PerSymbolStorage
+                _ps = PerSymbolStorage(VAULT_DIR, sym)
+                _gl = _ps.load_guardian_lock()
+                if isinstance(_gl, dict) and _gl:
+                    _snap = _gl.get("entrySnapshot", {})
+                    if isinstance(_snap, dict) and _snap.get("params_at_entry"):
+                        trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                    _gs = _gl.get("guardianStats", {})
+                    if isinstance(_gs, dict) and _gs:
+                        trade_log_entry["guardian_stats"] = {
+                            "peakProfitUsdt": _gs.get("peakProfitUsdt", 0.0),
+                            "holdWinnerActivated": _gs.get("holdWinnerActivated", 0),
+                            "tpExtensionCount": _gs.get("tpExtensionCount", 0),
+                            "notionalUsdt": _gs.get("notionalUsdt", 0.0),
+                            "timeInPositionSec": int(time.time()) - int(_gs.get("openedAt", time.time())),
+                        }
+            except Exception:
+                pass
             _append_trade_log(trade_log_entry)
             ctx.record_trade(trade_log_entry)
         append_trade_memory(VAULT_DIR, trade_log_entry, mode)
@@ -2618,6 +2569,21 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     ctx.commit()
     ctx.update_symbol_note(trade)
     _mark_trade_learning_agents(sym, trade, mode)
+    # Per-symbol autotuner: trigger evaluation after LIVE trades
+    # Delay 1s to avoid file I/O race with ctx.commit() (symbol_profile.json)
+    if str(mode).upper() == "LIVE":
+        def _deferred_autotune():
+            import time as _t; _t.sleep(1.0)
+            try:
+                from trading.symbol_autotuner import record_trade_outcome
+                record_trade_outcome(sym, trade)
+            except Exception:
+                pass
+        try:
+            import threading as _th
+            _th.Thread(target=_deferred_autotune, daemon=True).start()
+        except Exception:
+            pass
 
 
 async def _record_learning_trade_async(symbol: str, trade: dict, mode: str):
@@ -2630,7 +2596,7 @@ def _record_symbol_observation(symbol: str, intel: dict, chosen: bool, score: fl
     if not sym:
         return
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
-    ctx = PerSymbolContext(sym, SharedCacheLayer(VAULT_DIR), cfg)
+    ctx = PerSymbolContext(sym, get_shared_cache(VAULT_DIR), cfg)
     pr = ctx.profile
     ctx.record_observation(intel, chosen, score)
     # If the scanner has enough evidence for this symbol, let it refresh the
@@ -2639,17 +2605,24 @@ def _record_symbol_observation(symbol: str, intel: dict, chosen: bool, score: fl
     try:
         auto_profile = _auto_update_symbol_profile(sym, cfg=None)
         if isinstance(auto_profile, dict) and auto_profile:
-            sym_profiles = _load_symbol_profiles() or {}
-            existing = sym_profiles.get(sym) if isinstance(sym_profiles.get(sym), dict) else {}
-            merged = dict(existing)
-            merged.update(auto_profile)
-            merged["updatedAt"] = int(time.time())
-            merged["lastAutoLearnedAt"] = int(time.time())
-            merged["lastAutoLearnedFrom"] = "scan_observation"
-            merged["observations"] = int(pr.get("observations", 0) or 0)
-            merged["pickedCount"] = int(pr.get("pickedCount", 0) or 0)
-            sym_profiles[sym] = merged
-            _save_symbol_profiles(sym_profiles)
+            try:
+                existing = ctx._sym_profile if isinstance(ctx._sym_profile, dict) else {}
+                merged = dict(existing)
+                _AUTOTUNER_MANAGED = {"tpPct", "slPct", "holdTrailPct", "holdMinConfidence"}
+                _has_autotune = bool(existing.get("autotuneLastAt"))
+                for k, v in auto_profile.items():
+                    if _has_autotune and k in _AUTOTUNER_MANAGED:
+                        continue
+                    merged[k] = v
+                merged["updatedAt"] = int(time.time())
+                merged["lastAutoLearnedAt"] = int(time.time())
+                merged["lastAutoLearnedFrom"] = "scan_observation"
+                merged["observations"] = int(pr.get("observations", 0) or 0)
+                merged["pickedCount"] = int(pr.get("pickedCount", 0) or 0)
+                ctx._sym_profile = merged
+                ctx._dirty_sym_profile = True
+            except Exception:
+                pass  # per-symbol write failed, skip fallback to global
     except Exception:
         pass
     _append_trade_log(
@@ -2708,63 +2681,26 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
         out -= min(0.05, 0.014 * (win_streak - 2))
     if loss_streak >= 2:
         out += min(0.08, 0.022 * (loss_streak - 1))
+    # Per-symbol exemption: if global tunes raised base_min_conf above default
+    # (0.65) but this symbol has strong performance, dampen the global tightening.
+    default_base = 0.65
+    global_tightening = base_min_conf - default_base
+    if global_tightening > 0.03 and wr >= 58 and reward_score > 0:
+        exemption = min(global_tightening * 0.6, 0.08)
+        out -= exemption
     return max(0.42, min(0.90, out))
 
 
 def _symbol_quality_score(symbol: str) -> float:
-    pr = _load_single_profile(symbol)
-    if not isinstance(pr, dict):
-        return 0.0
-    windows = pr.get("memoryWindows") if isinstance(pr.get("memoryWindows"), dict) else {}
-    recent = windows.get("7d") if isinstance(windows.get("7d"), dict) else {}
-    weighted = pr.get("weightedRecentScore") if isinstance(pr.get("weightedRecentScore"), dict) else {}
-    n = int(recent.get("trades", 0) or 0)
-    if n >= 3:
-        wr = float(recent.get("winRatePct", 0.0) or 0.0) / 100.0
-        pnl = float(recent.get("pnl", 0.0) or 0.0)
-    else:
-        wins = int(pr.get("wins", 0))
-        losses = int(pr.get("losses", 0))
-        n = wins + losses
-        wr = wins / max(n, 1) if n > 0 else 0.0
-        pnl = float(pr.get("realizedPnl", 0.0) or 0.0)
-    if n < 3:
-        return 0.0
-    # bounded bonus/penalty from historical behaviour of each symbol
-    wr_bonus = (wr - 0.5) * 0.12
-    pnl_bonus = max(-0.05, min(0.05, pnl / 200.0))
-    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
-    recent_score = float(weighted.get("score", 0.0) or 0.0)
-    reward_delta = float(pr.get("rewardDelta", 0.0) or 0.0)
-    reward_behavior = float(pr.get("rewardBehaviorDelta", 0.0) or 0.0)
-    components = pr.get("rewardComponents") if isinstance(pr.get("rewardComponents"), dict) else {}
-    entry_quality = float(components.get("entryQuality", 0.0) or 0.0) + float(components.get("riskReward", 0.0) or 0.0)
-    reward_bonus = max(-0.06, min(0.06, reward_score / 250.0))
-    memory_bonus = max(-0.06, min(0.06, recent_score * 0.06))
-    recent_bonus = max(-0.02, min(0.02, reward_delta / 25.0))
-    behavior_bonus = max(-0.035, min(0.035, reward_behavior / 40.0))
-    entry_bonus = max(-0.025, min(0.025, entry_quality / 20.0))
-    win_streak = int(pr.get("rewardWinStreak", 0) or 0)
-    loss_streak = int(pr.get("rewardLossStreak", 0) or 0)
-    streak_bonus = 0.0
-    if win_streak >= 2:
-        streak_bonus += min(0.07, 0.018 * (win_streak - 1))
-    if loss_streak >= 2:
-        streak_bonus -= min(0.09, 0.024 * (loss_streak - 1))
-    return wr_bonus + pnl_bonus + reward_bonus + memory_bonus + recent_bonus + behavior_bonus + entry_bonus + streak_bonus
+    """Delegate to authoritative implementation in intel_pipeline."""
+    from analysis.intel_pipeline import _symbol_quality_score as _iqs
+    return _iqs(symbol)
 
 
 def _intel_score(symbol: str, intel: dict) -> float:
-    sig = str((intel or {}).get("signal", "WAIT")).upper()
-    conf = float((intel or {}).get("confidence", 0.0) or 0.0)
-    ex = (intel or {}).get("execution") if isinstance((intel or {}).get("execution"), dict) else {}
-    spread_penalty = min(0.2, max(0.0, float(ex.get("spreadBps", 0.0) or 0.0) / 200.0))
-    momentum = abs(float(ex.get("momentumPct", 0.0) or 0.0))
-    qual = _symbol_quality_score(symbol)
-    score = conf + min(0.12, momentum / 5.0) + qual - spread_penalty
-    if sig not in ("LONG", "SHORT"):
-        score -= 0.25
-    return score
+    """Delegate to authoritative implementation in intel_pipeline."""
+    from analysis.intel_pipeline import _intel_score as _is
+    return _is(symbol, intel)
 
 
 _SCAN_TICKER_CACHE: dict = {"ts": 0.0, "data": None}
@@ -2866,9 +2802,9 @@ def _apply_per_symbol_scan_cadence(symbols: list[str], now: float | None = None)
     now_f = float(now if now is not None else time.time())
     try:
         from trading.per_symbol_context import PerSymbolContext
-        from trading.shared_cache_layer import SharedCacheLayer
+        from trading.shared_cache_layer import get_shared_cache
         from services.config_paths import VAULT_DIR
-        cache = SharedCacheLayer(VAULT_DIR)
+        cache = get_shared_cache(VAULT_DIR)
         out = []
         for s in symbols:
             try:
@@ -2894,9 +2830,9 @@ def _record_per_symbol_scan_time(symbols: list[str], now: float | None = None) -
     now_f = float(now if now is not None else time.time())
     try:
         from trading.per_symbol_context import PerSymbolContext
-        from trading.shared_cache_layer import SharedCacheLayer
+        from trading.shared_cache_layer import get_shared_cache
         from services.config_paths import VAULT_DIR
-        cache = SharedCacheLayer(VAULT_DIR)
+        cache = get_shared_cache(VAULT_DIR)
         for s in symbols:
             try:
                 ctx = PerSymbolContext(s, cache, cfg)
@@ -3079,7 +3015,8 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         conf = float(out.get("confidence", 0.0) or 0.0)
         ex = out.get("execution") if isinstance(out.get("execution"), dict) else {}
         spread_penalty = min(0.2, max(0.0, float(ex.get("spreadBps", 0.0) or 0.0) / 200.0))
-        momentum = abs(float(ex.get("momentumPct", 0.0) or 0.0))
+        _mm = out.get("momentum") if isinstance(out.get("momentum"), dict) else {}
+        momentum = abs(float(_mm.get("momentumPct", 0.0) or 0.0))
         qual = _symbol_quality_score(sym)
         # Resolve per-symbol 3-tier policy (System -> Group -> Symbol) and
         # apply the group-specific confidence floor + long-bias to the score.
@@ -3637,6 +3574,42 @@ async def _lifespan(app: FastAPI):
     )
     _load_autotrade_snapshot()
 
+    # ── Startup: rotate old SCAN entries to reduce data bloat ──────────────
+    def _startup_rotate_scan_entries():
+        try:
+            from trading.trade_log import rotate_scan_entries
+            result = rotate_scan_entries(keep_scan_days=7)
+            if result.get("removed", 0) > 0:
+                _autotrade_log(f"Startup SCAN rotation: removed {result['removed']} old SCAN entries from global log")
+        except Exception:
+            pass
+        try:
+            from trading.per_symbol_storage import PerSymbolStorage
+            from services.config_paths import VAULT_DIR
+            vault = VAULT_DIR
+            symbols_dir = vault / "symbols"
+            if symbols_dir.exists():
+                total_removed = 0
+                for sym_dir in symbols_dir.iterdir():
+                    if sym_dir.is_dir():
+                        try:
+                            storage = PerSymbolStorage(vault, sym_dir.name)
+                            res = storage.rotate_trades(keep_scan_days=7)
+                            total_removed += res.get("removed", 0)
+                        except Exception:
+                            pass
+                if total_removed > 0:
+                    _autotrade_log(f"Startup SCAN rotation: removed {total_removed} old SCAN entries from per-symbol trades")
+        except Exception:
+            pass
+
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_startup_rotate_scan_entries)
+    except Exception:
+        pass
+
     # ── Auto-resume autotrade if snapshot says it was running ─────────────────
     async def _maybe_resume():
         """
@@ -3788,6 +3761,7 @@ AUTO_TRADE = {
     "startedAt": 0,
     "config": None,
     "lastDecision": None,
+    "lastDecisions": {},
     "lastSkip": None,
     "lastTradeAt": 0,
     "trades": [],  # unix timestamps
@@ -4416,7 +4390,7 @@ def _signed_request_diagnostic(base: str, endpoint: str, key: str | None, params
         "side": str(params.get("side", "") or ""),
         "positionSide": str(params.get("positionSide", "") or ""),
         "reduceOnly": params.get("reduceOnly"),
-        "binanceTestnet": os.getenv("BINANCE_TESTNET", "true").lower() == "true",
+        "binanceTestnet": os.getenv("BINANCE_TESTNET", "false").lower() == "true",
     }
 
 
@@ -4551,7 +4525,7 @@ def debug_env_status():
         "binanceApiKeyLen": len(key),
         "binanceApiSecretSet": bool(secret),
         "binanceApiSecretLen": len(secret),
-        "binanceTestnet": os.getenv("BINANCE_TESTNET", "true"),
+        "binanceTestnet": os.getenv("BINANCE_TESTNET", "false"),
     }
 
 
@@ -5220,6 +5194,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
             "momentumPct": round(mm["momentumPct"], 4),
             "volumeRatio": round(mm["volumeRatio"], 4),
             "divergence": mm["divergence"],
+            "strength": round(mm.get("strength", 0.0), 4),
         },
         "precision": {
             "rsi14": round(pk["rsi14"], 3),
@@ -5356,7 +5331,7 @@ async def _market_momentum(symbol: str, interval: str = "1m", limit: int = 60, _
     symbol = _normalize_symbol(symbol)
     rows = _rows if _rows is not None else await _cached_klines(symbol, interval, limit)
     if not isinstance(rows, list) or len(rows) < 25:
-        return {"momentumPct": 0.0, "volumeRatio": 1.0, "divergence": "NONE"}
+        return {"momentumPct": 0.0, "volumeRatio": 1.0, "divergence": "NONE", "strength": 0.0}
 
     closes = [float(x[4]) for x in rows]
     vols = [float(x[5]) for x in rows]
@@ -5380,10 +5355,16 @@ async def _market_momentum(symbol: str, interval: str = "1m", limit: int = 60, _
     elif abs(now_price_slope) < abs(prev_price_slope) * 0.6 and now_vol > prev_vol * 1.15:
         divergence = "POSSIBLE_REVERSAL_BUILDUP"
 
+    # Momentum strength: combined price move magnitude + volume confirmation.
+    # 0.0 = dead market, 1.0 = strong trend with volume backing.
+    mom_abs = abs(momentum_pct)
+    strength = min(1.0, (mom_abs / 5.0) * min(volume_ratio, 2.0))
+
     return {
         "momentumPct": momentum_pct,
         "volumeRatio": volume_ratio,
         "divergence": divergence,
+        "strength": round(strength, 4),
     }
 
 
@@ -5679,14 +5660,31 @@ async def _candlestick_pattern_context(symbol: str) -> dict:
 
 
 def _last_decision_intel(symbol: str | None = None, max_age_sec: int | None = None) -> dict | None:
+    # Per-symbol lookup: check lastDecisions dict first
+    want = str(symbol or "").upper().strip() if symbol else ""
+    if want:
+        per_sym = AUTO_TRADE.get("lastDecisions")
+        if isinstance(per_sym, dict):
+            ld = per_sym.get(want)
+            if isinstance(ld, dict):
+                intel = ld.get("intel") if "intel" in ld else ld
+                if isinstance(intel, dict):
+                    if max_age_sec is not None:
+                        try:
+                            ts = int(ld.get("ts", 0) or intel.get("ts", 0) or 0)
+                        except Exception:
+                            ts = 0
+                        if ts <= 0 or int(time.time()) - ts > int(max_age_sec):
+                            return None
+                    return intel
+    # Fallback to global lastDecision (for backward compatibility)
     ld = AUTO_TRADE.get("lastDecision")
     if not isinstance(ld, dict):
         return None
     intel = ld.get("intel") if "intel" in ld else ld
     if not isinstance(intel, dict):
         return None
-    if symbol:
-        want = str(symbol or "").upper().strip()
+    if want:
         got = str(intel.get("symbol") or ld.get("symbol") or "").upper().strip()
         if got and want and got != want:
             return None
@@ -6114,60 +6112,9 @@ async def _open_positions_count(key: str | None, secret: str | None, base: str) 
 async def _pick_live_orphan_positions(
     key: str | None, secret: str | None, base: str
 ) -> list[dict]:
-    """Return all open live positions from Binance Futures, sorted by notional desc.
-    
-    Cached for 5 seconds to avoid duplicate API calls within the same loop iteration."""
-    global _LIVE_POSITIONS_CACHE
-    if not key or not secret:
-        return []
-    now = time.time()
-    cached_at, cached = _LIVE_POSITIONS_CACHE
-    if (now - cached_at) < 5.0:
-        return list(cached)
-    client = _get_um_client(key, secret, base)
-    if client:
-        pos = await _um_client_position_risk(client)
-    else:
-        pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {})
-    rows = pos if isinstance(pos, list) else ([pos] if isinstance(pos, dict) else [])
-    out: list[dict] = []
-    for p in rows:
-        try:
-            amt = float(p.get("positionAmt", 0) or 0)
-            if abs(amt) <= 0:
-                continue
-            sym = str(p.get("symbol", "") or "").upper().strip()
-            if not sym or not sym.endswith("USDT"):
-                continue
-            mark = float(p.get("markPrice", 0) or 0)
-            entry = float(p.get("entryPrice", 0) or 0)
-            notional = abs(amt) * max(mark, 0.0)
-            lev_raw = float(p.get("leverage", 0) or 0)
-            leverage = int(lev_raw) if lev_raw > 0 else 0
-            pos_init_margin = float(p.get("positionInitialMargin", 0) or 0)
-            iso_wallet = float(p.get("isolatedWallet", 0) or 0)
-            margin_used = pos_init_margin if pos_init_margin > 0 else (
-                (notional / max(leverage, 1)) if leverage > 0 else 0.0
-            )
-            out.append(
-                {
-                    "symbol": sym,
-                    "side": "LONG" if amt > 0 else "SHORT",
-                    "qty": abs(amt),
-                    "entryMark": round(float(entry), 10),
-                    "markPrice": round(float(mark), 10),
-                    "notionalUsdtApprox": round(notional, 6),
-                    "unRealizedProfit": round(float(p.get("unRealizedProfit", 0) or 0), 6),
-                    "leverage": leverage,
-                    "marginUsedUsdt": round(float(margin_used), 6),
-                    "isolatedWalletUsdt": round(float(iso_wallet), 6),
-                }
-            )
-        except Exception:
-            continue
-    out.sort(key=lambda x: float(x.get("notionalUsdtApprox", 0.0) or 0.0), reverse=True)
-    _LIVE_POSITIONS_CACHE = (now, out)
-    return out
+    """Delegate to live_guardian's unified implementation (shared 25s cache)."""
+    from trading.live_guardian import _pick_live_orphan_positions as _guardian_pick
+    return await _guardian_pick(key, secret, base)
 
 
 _ACCOUNT_CACHE: dict = {"ts": 0.0, "key": None, "data": None}
@@ -6617,6 +6564,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 1.10,
         "sl_mult": 0.90,
         "lock_trigger_mult": 0.95,
+        "holdTrail_base": 0.28,
+        "holdMinConf_base": 0.72,
         "min_conf_floor": 0.50,
         "max_trade_notional_mult": 1.15,
         "scan_long_bias": 0.55,
@@ -6628,6 +6577,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 0.85,
         "sl_mult": 0.85,
         "lock_trigger_mult": 0.75,
+        "holdTrail_base": 0.20,
+        "holdMinConf_base": 0.76,
         "min_conf_floor": 0.62,
         "max_trade_notional_mult": 0.95,
         "scan_long_bias": 0.50,
@@ -6639,6 +6590,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 1.35,
         "sl_mult": 1.20,
         "lock_trigger_mult": 1.50,
+        "holdTrail_base": 0.22,
+        "holdMinConf_base": 0.74,
         "min_conf_floor": 0.65,
         "max_trade_notional_mult": 0.60,
         "scan_long_bias": 0.50,
@@ -6650,6 +6603,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 0.95,
         "sl_mult": 0.80,
         "lock_trigger_mult": 0.50,
+        "holdTrail_base": 0.18,
+        "holdMinConf_base": 0.78,
         "min_conf_floor": 0.70,
         "max_trade_notional_mult": 0.40,
         "scan_long_bias": 0.50,
@@ -6701,8 +6656,11 @@ def _symbol_group(symbol: str) -> str:
         return SYMBOL_GROUP_DEFAULT[sym]
     # Otherwise consult the learned profile (in case an autotune decided
     # this coin belongs to a different group based on observed behavior).
-    profiles = _load_symbol_profiles() or {}
-    pr = profiles.get(sym) if isinstance(profiles, dict) else None
+    try:
+        _ps = PerSymbolStorage(VAULT_DIR, sym)
+        pr = _ps.load_symbol_profile()
+    except Exception:
+        pr = None
     if isinstance(pr, dict):
         grp = pr.get("group")
         if isinstance(grp, str) and grp in SYMBOL_GROUP_DEFS:
@@ -6719,12 +6677,16 @@ SYMBOL_PROFILE_MIN_TRADES = 8
 def _symbol_sample_count(symbol: str) -> int:
     """Number of closed LIVE trades recorded for ``symbol`` (capped to last 30d)."""
     try:
-        rows = _live_closed_trades_from_log(symbol=str(symbol or "").upper().strip(), mode="LIVE")
+        sym = str(symbol or "").upper().strip()
+        if not sym:
+            return 0
+        storage = PerSymbolStorage(VAULT_DIR, sym)
+        trades = storage.load_trades(mode="LIVE")
+        if not isinstance(trades, list):
+            return 0
+        return len(trades)
     except Exception:
         return 0
-    if not isinstance(rows, list):
-        return 0
-    return len(rows)
 
 
 # Symbol profile storage: persisted in obsidian_vault alongside learning
@@ -6816,6 +6778,14 @@ def _attach_symbol_profile(position: dict, profiles: dict | None) -> None:
     if not sym:
         return
     prof = profiles.get(sym) if isinstance(profiles, dict) else None
+    if prof is None:
+        try:
+            from services.config_paths import VAULT_DIR
+            from trading.per_symbol_storage import PerSymbolStorage
+            _ps = PerSymbolStorage(VAULT_DIR, sym)
+            prof = _ps.load_symbol_profile()
+        except Exception:
+            prof = None
     if isinstance(prof, dict):
         for key in _SYMBOL_PROFILE_DASHBOARD_FIELDS:
             if key in prof and position.get(key) is None:
@@ -7037,8 +7007,11 @@ def _symbol_effective_profile(symbol: str, cfg: dict | None = None) -> dict:
 
     n_trades = _symbol_sample_count(sym)
     if n_trades >= SYMBOL_PROFILE_MIN_TRADES:
-        learned = _load_symbol_profiles() or {}
-        sym_profile = learned.get(sym) if isinstance(learned.get(sym), dict) else None
+        try:
+            _ps = PerSymbolStorage(VAULT_DIR, sym)
+            sym_profile = _ps.load_symbol_profile()
+        except Exception:
+            sym_profile = None
         if isinstance(sym_profile, dict):
             for k, v in sym_profile.items():
                 if k in ("group", "source"):
@@ -7065,8 +7038,13 @@ def hermes_get_symbol_profile(symbol: str):
     if not sym:
         return {"ok": False, "error": "missing symbol"}
     profile = _symbol_effective_profile(sym)
-    raw = _load_symbol_profiles() or {}
-    sym_raw = raw.get(sym) if isinstance(raw.get(sym), dict) else {}
+    try:
+        from services.config_paths import VAULT_DIR
+        from trading.per_symbol_storage import PerSymbolStorage
+        _ps = PerSymbolStorage(VAULT_DIR, sym)
+        sym_raw = _ps.load_symbol_profile() or {}
+    except Exception:
+        sym_raw = {}
     perf = _rolling_symbol_perf(sym, 30) or {}
     return {
         "ok": True,
@@ -7122,12 +7100,22 @@ def hermes_set_symbol_profile(payload: dict = Body(default_factory=dict)):
     if "group" in clean and clean["group"] not in SYMBOL_GROUP_DEFS:
         return {"ok": False, "error": f"unknown group: {clean['group']}",
                 "allowed_groups": list(SYMBOL_GROUP_DEFS.keys())}
-    profiles = _load_symbol_profiles() or {}
-    existing = profiles.get(sym) if isinstance(profiles.get(sym), dict) else {}
+    try:
+        from services.config_paths import VAULT_DIR
+        from trading.per_symbol_storage import PerSymbolStorage
+        _ps = PerSymbolStorage(VAULT_DIR, sym)
+        existing = _ps.load_symbol_profile() or {}
+    except Exception:
+        existing = {}
     merged = dict(existing)
     merged.update(clean)
-    profiles[sym] = merged
-    _save_symbol_profiles(profiles)
+    try:
+        from services.config_paths import VAULT_DIR
+        from trading.per_symbol_storage import PerSymbolStorage
+        _ps = PerSymbolStorage(VAULT_DIR, sym)
+        _ps.save_symbol_profile(merged)
+    except Exception as exc:
+        print(f"[SymbolProfiles] ERROR saving per-symbol profile for {sym}: {exc}")
     return {"ok": True, "symbol": sym, "saved": clean,
             "effective": _symbol_effective_profile(sym)}
 
@@ -7231,13 +7219,15 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
             "profitLockMaxGivebackUsdt": round(base_lock_giveback, 4),
             "tpTargetMinUsdt": round(base_tp_min, 4),
             "tpTargetMaxUsdt": round(base_tp_max, 4),
+            "holdTrailPct": round(float(sym_profile.get("holdTrail_base", float(cfg.get("holdTrailPct", 0.25) or 0.25))), 4),
+            "holdMinConfidence": round(float(sym_profile.get("holdMinConf_base", float(cfg.get("holdMinConfidence", 0.72) or 0.72))), 4),
         }
 
     # Allow per-symbol explicit overrides to win when sample count is
     # sufficient (>= SYMBOL_PROFILE_MIN_TRADES). Missing keys still fall
     # through to the computed values.
     sym_overrides = sym_profile if sym_profile.get("source") == "symbol+group" else {}
-    return {
+    ret = {
         "symbol": str(symbol or "").upper().strip(),
         "tier": vol.get("tier", "med"),
         "group": sym_profile.get("group", "trend-friendly"),
@@ -7259,6 +7249,34 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
         "tpTargetMinUsdt": round(float(sym_overrides.get("tpTargetMinUsdt", base_tp_min * lock_mult)), 4),
         "tpTargetMaxUsdt": round(float(sym_overrides.get("tpTargetMaxUsdt", base_tp_max * lock_mult)), 4),
     }
+    # Guardian autotune: per-symbol trailing and hold-confidence
+    # Fallback chain: symbol_profile → group base → global cfg → hardcoded default
+    ret["holdTrailPct"] = round(float(sym_overrides.get("holdTrailPct", sym_profile.get("holdTrail_base", float(cfg.get("holdTrailPct", 0.25) or 0.25)))), 4)
+    ret["holdMinConfidence"] = round(float(sym_overrides.get("holdMinConfidence", sym_profile.get("holdMinConf_base", float(cfg.get("holdMinConfidence", 0.72) or 0.72)))), 4)
+
+    # Fee-based TP% floor: ensure gross profit covers round-trip fees + min net edge.
+    # Without this, tight TP% (e.g. 0.35%) on small notional loses money to fees.
+    try:
+        _usdt = max(1.0, float(cfg.get("usdtAmount", 20.0) or 20.0))
+        _taker = float(AUTOTRADE_TAKER_FEE_BPS_PER_SIDE)
+        _extra = float(AUTOTRADE_EXTRA_COST_BPS)
+        _slip = float(cfg.get("maxSlippageBps", 18.0) or 18.0)
+        _cost_bps = (2.0 * _taker) + _extra + (_slip * 0.5)
+        _min_net_usdt = float(cfg.get("feeMinNetProfitUSDT", AUTOTRADE_MIN_NET_PROFIT_USDT) or AUTOTRADE_MIN_NET_PROFIT_USDT)
+        _tp_fee_floor_pct = ((_cost_bps / 10000.0 * _usdt) + _min_net_usdt) / _usdt * 100.0
+        _tp_fee_floor_pct = max(_tp_fee_floor_pct, 0.25)  # absolute floor
+        cur_tp = float(ret.get("tpPct", base_tp))
+        if cur_tp < _tp_fee_floor_pct:
+            ret["tpPct"] = round(_tp_fee_floor_pct, 4)
+        cur_sl = float(ret.get("slPct", base_sl))
+        _sl_fee_floor_pct = _tp_fee_floor_pct * 0.5  # SL floor = half of TP floor (R:R ≥ 2)
+        if cur_sl < _sl_fee_floor_pct:
+            ret["slPct"] = round(_sl_fee_floor_pct, 4)
+        ret["tpFeeFloorPct"] = round(_tp_fee_floor_pct, 4)
+    except Exception:
+        pass
+
+    return ret
 
 
 def _calc_tp_sl_prices(side: str, entry_mark: float, tp_pct: float, sl_pct: float):
@@ -7588,10 +7606,10 @@ def _persist_autotrade_snapshot(force: bool = False):
         # own file so a single symbol cannot corrupt the shared global snapshot.
         try:
             from trading.per_symbol_context import PerSymbolContext
-            from trading.shared_cache_layer import SharedCacheLayer
+            from trading.shared_cache_layer import get_shared_cache
             _rc = AUTO_TRADE.get("riskCooldownBySymbol")
             if isinstance(_rc, dict) and _rc:
-                _rcache = SharedCacheLayer(VAULT_DIR)
+                _rcache = get_shared_cache(VAULT_DIR)
                 for _sym, _cd in _rc.items():
                     if not isinstance(_cd, dict):
                         continue
@@ -7671,8 +7689,8 @@ def _load_autotrade_snapshot():
         # each symbol's independent runtime copy (only keys missing globally).
         try:
             from trading.per_symbol_context import PerSymbolContext
-            from trading.shared_cache_layer import SharedCacheLayer
-            _rcache = SharedCacheLayer(VAULT_DIR)
+            from trading.shared_cache_layer import get_shared_cache
+            _rcache = get_shared_cache(VAULT_DIR)
             _rcd = AUTO_TRADE.get("riskCooldownBySymbol")
             if not isinstance(_rcd, dict):
                 _rcd = {}
@@ -7699,8 +7717,8 @@ def _load_autotrade_snapshot():
         # restore during the per-symbol transition.
         try:
             from trading.per_symbol_context import PerSymbolContext
-            from trading.shared_cache_layer import SharedCacheLayer
-            _gcache = SharedCacheLayer(VAULT_DIR)
+            from trading.shared_cache_layer import get_shared_cache
+            _gcache = get_shared_cache(VAULT_DIR)
             _sym_root = VAULT_DIR / "symbols"
             if _sym_root.is_dir():
                 for _d in _sym_root.iterdir():
@@ -7756,6 +7774,35 @@ def _load_autotrade_snapshot():
         AUTO_TRADE["log"] = (
             [{"ts": AUTO_TRADE["_snapshot_loaded_at"], "msg": msg}] + AUTO_TRADE.get("log", [])
         )[:80]
+        # Schedule startup reconcile: remove stale liveProfitLocks after snapshot load.
+        locks_data = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
+        if locks_data:
+            async def _startup_reconcile():
+                try:
+                    await asyncio.sleep(5.0)
+                    bkey = os.getenv("BINANCE_API_KEY")
+                    bsecret = os.getenv("BINANCE_API_SECRET")
+                    bbase = _binance_base()
+                    if not (bkey and bsecret):
+                        return
+                    live_pos = await asyncio.wait_for(_pick_live_orphan_positions(bkey, bsecret, bbase), timeout=8.0)
+                    live_keys = {_live_lock_key(str(p.get("symbol", "")), str(p.get("side", ""))) for p in live_pos}
+                    lk = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
+                    stale = [k for k in list(lk.keys()) if k not in live_keys]
+                    for k in stale:
+                        lk.pop(k, None)
+                    if stale:
+                        AUTO_TRADE["liveProfitLocks"] = lk
+                        _persist_autotrade_snapshot(force=True)
+                        _autotrade_log(f"[Startup] Cleaned {len(stale)} phantom lock(s): {', '.join(stale)}")
+                except Exception as exc:
+                    _autotrade_log(f"[Startup] Reconcile skipped: {exc}")
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(_startup_reconcile())
+            except Exception:
+                pass
     except Exception as e:
         AUTO_TRADE["_snapshot_recovered_log"] = f"Snapshot unreadable: {_format_loop_error(e)}"
         AUTO_TRADE["_snapshot_loaded_at"] = int(time.time())
@@ -8254,8 +8301,13 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         raise last_err
 
     protective = None
-    local_guardian = None
     entry_snapshot = _entry_snapshot_from_intel(symbol, side, _last_decision_intel(symbol))
+    try:
+        from trading.symbol_autotuner import snapshot_active_params
+        _eff_at_open = _effective_tp_sl(symbol, AUTO_TRADE.get("config") or {}, _last_decision_intel(symbol))
+        entry_snapshot["params_at_entry"] = snapshot_active_params(symbol, _eff_at_open)
+    except Exception:
+        pass
     try:
         protective = await _place_tp_sl(symbol, side, qty, mark, tp_pct, sl_pct, key, secret, base, filters["tickSize"], filters.get("tickSizeStr", "0.0001"), hedge_mode, position_side)
     except Exception as e:
@@ -8283,7 +8335,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         AUTO_TRADE["liveProfitLocks"] = locks
         _autotrade_log(f"LIVE profit lock seeded for {symbol} {side} TP={tp_price:.6f} SL={sl_price:.6f}")
     trailing = await _place_trailing_stop(symbol, side, key, secret, base, trailing_stop_pct)
-    return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": local_guardian, "trailing": trailing, "entrySnapshot": entry_snapshot}
+    return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": None, "trailing": trailing, "entrySnapshot": entry_snapshot}
 
 
 @app.post("/trade")
@@ -8685,8 +8737,12 @@ async def _autotrade_loop():
                 if day_cap_scan > 0:
                     picked_today = _live_trades_count_today_symbol(str(picked_symbol))
                     if picked_today >= day_cap_scan:
-                        fb_symbol = None
+                        _fb_max = 3
+                        fb_done = False
+                        fb_tried = 0
                         for row in board:
+                            if fb_tried >= _fb_max:
+                                break
                             if not isinstance(row, dict):
                                 continue
                             if not bool(row.get("qualified", False)):
@@ -8695,20 +8751,52 @@ async def _autotrade_loop():
                             if not cand or cand == str(picked_symbol).upper():
                                 continue
                             cand_today = _live_trades_count_today_symbol(cand)
-                            if cand_today < day_cap_scan:
-                                fb_symbol = cand
-                                break
-                        if fb_symbol:
+                            if cand_today >= day_cap_scan:
+                                continue
+                            fb_tried += 1
                             try:
                                 fb_intel = await asyncio.wait_for(
-                                    intel_analyze(IntelAnalyzeRequest(symbol=fb_symbol)),
+                                    intel_analyze(IntelAnalyzeRequest(symbol=cand)),
                                     timeout=max(8.0, float(cfg.get("scanPerSymbolTimeoutSec", 7.5) or 7.5) + 3.0),
                                 )
-                                if isinstance(fb_intel, dict):
-                                    _autotrade_log(f"SCAN fallback: {picked_symbol} capped {picked_today}/{day_cap_scan} -> {fb_symbol}")
-                                    picked_symbol, picked_intel = fb_symbol, fb_intel
+                                if not isinstance(fb_intel, dict):
+                                    continue
+                                # Quick pipeline pre-check: skip symbols that would fail common gates
+                                _fb_sig = str(fb_intel.get("signal", "WAIT") or "WAIT").upper()
+                                _fb_conf = float(fb_intel.get("confidence", 0) or 0)
+                                _fb_prec = fb_intel.get("precision") if isinstance(fb_intel.get("precision"), dict) else {}
+                                _fb_bb = float(_fb_prec.get("bbPctB", 0.5) or 0.5)
+                                _fb_vwap = abs(float(_fb_prec.get("vwapDistancePct", 0.0) or 0.0))
+                                _fb_mom = abs(float(_fb_prec.get("momentumPct", 0.0) or 0.0))
+                                _fb_anti_late_bb = float(cfg.get("lateEntryMaxBbPctB", 0.95) or 0.95)
+                                _fb_anti_late_vwap = float(cfg.get("lateEntryMaxVwapDistancePct", 0.40) or 0.40)
+                                _fb_min_conf = float(cfg.get("minConfidence", 0.66) or 0.66)
+                                # Anti-chase: LONG stretched or SHORT stretched (relaxed +0.05 for SHORT)
+                                if _fb_sig == "LONG" and _fb_bb >= _fb_anti_late_bb and _fb_vwap >= _fb_anti_late_vwap:
+                                    _autotrade_log(f"SCAN fallback pre-check: {cand} skip (late LONG chase bb={_fb_bb:.2f})")
+                                    continue
+                                _short_bb_thr = max(0.05, (1.0 - _fb_anti_late_bb) + 0.05)
+                                if _fb_sig == "SHORT" and _fb_bb <= _short_bb_thr and _fb_vwap >= _fb_anti_late_vwap:
+                                    _autotrade_log(f"SCAN fallback pre-check: {cand} skip (late SHORT chase bb={_fb_bb:.2f})")
+                                    continue
+                                # Weak momentum
+                                if _fb_mom < 0.08:
+                                    _autotrade_log(f"SCAN fallback pre-check: {cand} skip (weak momentum {_fb_mom:.3f})")
+                                    continue
+                                # Low confidence
+                                if _fb_conf < _fb_min_conf:
+                                    _autotrade_log(f"SCAN fallback pre-check: {cand} skip (conf {_fb_conf:.3f} < {_fb_min_conf:.3f})")
+                                    continue
+                                _autotrade_log(f"SCAN fallback: {picked_symbol} capped {picked_today}/{day_cap_scan} -> {cand} (sig={_fb_sig} conf={_fb_conf:.3f})")
+                                picked_symbol, picked_intel = cand, fb_intel
+                                fb_done = True
+                                break
                             except Exception:
-                                pass
+                                continue
+                        if not fb_done:
+                            _autotrade_skip("symbol_day_cap", f"Skip: {picked_symbol} capped {picked_today}/{day_cap_scan}; tried {fb_tried} fallbacks")
+                            await asyncio.sleep(cfg.get("intervalSec", 20))
+                            continue
                 if cfg.get("symbol") != picked_symbol:
                     cfg["symbol"] = picked_symbol
                     AUTO_TRADE["config"] = copy.deepcopy(cfg)
@@ -8775,7 +8863,9 @@ async def _autotrade_loop():
                                 )
                     except Exception:
                         pass
-            AUTO_TRADE["lastDecision"] = {"intel": intel, "symbol": cfg.get("symbol"), "ts": now}
+            _sym_decision = str(cfg.get("symbol", "")).upper()
+            AUTO_TRADE["lastDecision"] = {"intel": intel, "symbol": _sym_decision, "ts": now}
+            AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "symbol": _sym_decision, "ts": now}
             dq = _intel_data_quality_guard(intel)
             if bool(dq.get("ok")):
                 _agent_mark("data_quality_guard", "done", "intel quality ok", str(dq.get("symbol", "")), dq)
@@ -8910,11 +9000,6 @@ async def _autotrade_loop():
                     continue
                 mid = (bid + ask) / 2
                 spread_bps = ((ask - bid) / max(mid, 1e-9)) * 10000
-            if spread_bps > cfg["maxSpreadBps"]:
-                _autotrade_skip("spread", f"Skip: spread too wide {spread_bps:.2f} bps")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-
             signal = intel.get("signal", "WAIT")
             conf = float(intel.get("confidence", 0))
             session_bias = _entry_session_bias(cfg, now)
@@ -8927,78 +9012,10 @@ async def _autotrade_loop():
             )
             vision = intel.get("vision")
             px = intel.get("precision") if isinstance(intel, dict) and isinstance(intel.get("precision"), dict) else {}
-            if signal == "WAIT" and cfg.get("aggressiveScalp"):
-                ob = intel.get("orderBook") if isinstance(intel, dict) else None
-                imb = float((ob or {}).get("imbalance", 0))
-                thr = float(cfg.get("waitOverrideImbalance", 0.08))
-                if imb >= thr:
-                    signal = "LONG"
-                    conf = max(conf, 0.5)
-                    _autotrade_log(f"Aggressive override: WAIT->LONG (imbalance={imb:.4f})")
-                elif imb <= -thr:
-                    signal = "SHORT"
-                    conf = max(conf, 0.5)
-                    _autotrade_log(f"Aggressive override: WAIT->SHORT (imbalance={imb:.4f})")
-            # Early entry: do not wait for a fully-formed late candle when score edge is already clear.
-            if signal == "WAIT" and bool(cfg.get("earlyEntryEnabled", True)):
-                long_score = float((px or {}).get("longScore", 0.0) or 0.0)
-                short_score = float((px or {}).get("shortScore", 0.0) or 0.0)
-                gap_need = float(cfg.get("earlyEntryScoreGapMin", 1.4) or 1.4)
-                conf_need = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
-                long_gap = long_score - short_score
-                short_gap = short_score - long_score
-                ultra_gap = gap_need + 0.8
-                early_conf_floor = min(max(conf_need, adaptive_min_conf), 0.72)
-                if long_gap >= gap_need and (conf >= conf_need or long_gap >= ultra_gap):
-                    pullback_ok, pullback_reason = _early_entry_pullback_reset_ok("LONG", px, cfg)
-                    if not pullback_ok:
-                        _autotrade_log(f"Early entry wait: {pullback_reason} (gap={long_gap:.2f})")
-                    elif not bool((px or {}).get("nearResistance", False)):
-                        signal = "LONG"
-                        conf = max(conf, early_conf_floor)
-                        _autotrade_log(f"Early entry override: WAIT->LONG (gap={long_gap:.2f} conf={conf:.3f})")
-                elif short_gap >= gap_need and (conf >= conf_need or short_gap >= ultra_gap):
-                    pullback_ok, pullback_reason = _early_entry_pullback_reset_ok("SHORT", px, cfg)
-                    if not pullback_ok:
-                        _autotrade_log(f"Early entry wait: {pullback_reason} (gap={short_gap:.2f})")
-                    elif not bool((px or {}).get("nearSupport", False)):
-                        signal = "SHORT"
-                        conf = max(conf, early_conf_floor)
-                        _autotrade_log(f"Early entry override: WAIT->SHORT (gap={short_gap:.2f} conf={conf:.3f})")
-            if signal not in ("LONG", "SHORT"):
-                if _maybe_skip_stale_wait_symbol(cfg, str(cfg.get("symbol", "")), signal, scan_mode=scan_mode, now=now):
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
-                _agent_mark("strategy_builder", "blocked", "signal wait")
-                _autotrade_skip("signal_wait", "Skip: signal WAIT")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-            # MarketContext MCP removed — entry-gate and confidence boost are disabled.
-            if conf < adaptive_min_conf:
-                _agent_mark("strategy_builder", "blocked", "confidence below adaptive minimum", f"{conf:.3f} < {adaptive_min_conf:.3f}")
-                _autotrade_skip(
-                    "low_confidence",
-                    f"Skip: low confidence {conf} < adaptive {adaptive_min_conf:.2f} ({session_bias.get('reason')})",
-                )
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-            # Anti-chase: avoid entering when candle is already too stretched and prone to snap-back.
-            bb = float((px or {}).get("bbPctB", 0.5) or 0.5)
-            vwap_dist = abs(float((px or {}).get("vwapDistancePct", 0.0) or 0.0))
-            late_bb = float(cfg.get("lateEntryMaxBbPctB", 0.90) or 0.90)
-            late_vwap = float(cfg.get("lateEntryMaxVwapDistancePct", 0.32) or 0.32)
-            if signal == "LONG" and bb >= late_bb and vwap_dist >= late_vwap:
-                _agent_mark("strategy_builder", "blocked", "late long chase")
-                _autotrade_skip("late_long_chase", f"Skip: late LONG chase (bb={bb:.2f} vwapDist={vwap_dist:.3f}%)")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-            if signal == "SHORT" and bb <= (1.0 - late_bb) and vwap_dist >= late_vwap:
-                _agent_mark("strategy_builder", "blocked", "late short chase")
-                _autotrade_skip("late_short_chase", f"Skip: late SHORT chase (bb={bb:.2f} vwapDist={vwap_dist:.3f}%)")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
             # Pre-reversal guard: block entries that look likely to reverse
             # before they have a chance to run (RSI extremes, divergence, wick rejection).
+            pre_reversal_score = 0.0
+            pre_reversal_side_at_risk = ""
             try:
                 pre_rev_thr = float(cfg.get("preReversalScoreBlock", 0.55) or 0.55)
                 pre_rev_thr_marg = float(cfg.get("preReversalScoreSoftener", 0.20) or 0.20)
@@ -9052,69 +9069,17 @@ async def _autotrade_loop():
                             **pre,
                         }
                         side_at_risk = pre.get("side_at_risk")
-                        # Block only when the detected reversal side matches our entry side
-                        # and the confidence is high enough.
-                        block_score = pre_rev_thr
-                        if (conf or 0) < adaptive_min_conf + 0.05:
-                            block_score = max(0.30, pre_rev_thr - pre_rev_thr_marg)
-                        if (
-                            pre.get("score", 0) >= block_score
-                            and side_at_risk == signal
-                        ):
-                            _agent_mark(
-                                "strategy_builder",
-                                "blocked",
-                                "pre reversal detected",
-                                f"score={pre.get('score'):.2f} reason={pre.get('reason')}",
-                            )
-                            _autotrade_skip(
-                                "pre_reversal",
-                                f"Skip: pre-reversal {signal} (score={pre.get('score'):.2f} {pre.get('reason')})",
-                            )
-                            AUTO_TRADE.setdefault("preReversalBlocks", []).append({
-                                "ts": int(time.time()),
-                                "symbol": cfg["symbol"],
-                                "side": signal,
-                                "score": pre.get("score"),
-                                "reason": pre.get("reason"),
-                            })
-                            if len(AUTO_TRADE["preReversalBlocks"]) > 50:
-                                AUTO_TRADE["preReversalBlocks"] = AUTO_TRADE["preReversalBlocks"][-50:]
-                            await asyncio.sleep(cfg["intervalSec"])
-                            continue
+                        pre_reversal_score = float(pre.get("score", 0) or 0)
+                        pre_reversal_side_at_risk = str(side_at_risk or "")
             except Exception as e:
                 _autotrade_log(f"pre-reversal check skipped: {type(e).__name__}: {e}")
-            if cfg["requireVisionConsensus"] and not vision:
-                _agent_mark("strategy_builder", "blocked", "vision consensus required")
-                _autotrade_skip("vision", "Skip: vision consensus required")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-
-            thr_fund = float(cfg.get("skipFundingAgainst") or 0)
-            if thr_fund > 0 and ex.get("lastFundingRate") is not None:
-                fr = float(ex["lastFundingRate"])
-                if signal == "LONG" and fr > thr_fund:
-                    _agent_mark("risk_manager", "blocked", "funding adverse for LONG")
-                    _autotrade_skip("funding", f"Skip: funding adverse for LONG ({fr:.6f} > {thr_fund})")
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
-                if signal == "SHORT" and fr < -thr_fund:
-                    _agent_mark("risk_manager", "blocked", "funding adverse for SHORT")
-                    _autotrade_skip("funding", f"Skip: funding adverse for SHORT ({fr:.6f} < {-thr_fund})")
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
-
+            # ── Compute sizing + slippage before pipeline ──
             key = os.getenv("BINANCE_API_KEY")
             secret = os.getenv("BINANCE_API_SECRET")
             base = _binance_base()
             ref_px = ask if signal == "LONG" else bid
             slippage_bps = abs((ref_px - mark) / max(mark, 1e-9)) * 10000
-            if slippage_bps > cfg["maxSlippageBps"]:
-                _agent_mark("execution_agent", "blocked", "slippage too high", f"{slippage_bps:.2f} bps")
-                _autotrade_skip("slippage", f"Skip: slippage estimate too high {slippage_bps:.2f} bps")
-                await asyncio.sleep(cfg["intervalSec"])
-                continue
-            _agent_mark("strategy_builder", "done", "entry approved", f"{cfg['symbol']} {signal} c={conf:.3f}")
+
             lev_meta = _adaptive_symbol_leverage(cfg["symbol"], intel, cfg)
             eff_leverage = int(lev_meta.get("leverage", cfg.get("leverage", 1)) or 1)
             cfg["lastAdaptiveLeverage"] = lev_meta
@@ -9134,8 +9099,6 @@ async def _autotrade_loop():
                     f"confShift={float(session_bias.get('confidenceShift', 0.0) or 0.0):+.3f} "
                     f"size {old_trade_usdt:.2f}->{trade_usdt:.2f}"
                 )
-            # Per-symbol position size: apply the symbol's learned/cached size multiplier
-            # from its effective profile (group base + learned nudge from recent trades).
             eff_prof = _symbol_effective_profile(cfg["symbol"], cfg)
             symbol_size_mult = float(eff_prof.get("positionSizeMult") or eff_prof.get("position_size_mult", 1.0) or 1.0)
             if abs(symbol_size_mult - 1.0) >= 0.001:
@@ -9146,8 +9109,6 @@ async def _autotrade_loop():
                     f"sizeMult={symbol_size_mult:.3f} {old_trade_usdt:.2f}->{trade_usdt:.2f}"
                 )
             supervisor_size_mult = float(cfg.get("supervisorSizeMultiplier", 1.0) or 1.0)
-            # Per-symbol streak override: prefer this symbol's own recent streak
-            # signal over the global multiplier when it has one.
             sym_streak_mult = _per_symbol_streak_size_mult(cfg["symbol"], cfg)
             if abs(sym_streak_mult - 1.0) >= 0.001:
                 supervisor_size_mult = sym_streak_mult
@@ -9158,7 +9119,6 @@ async def _autotrade_loop():
                     f"Supervisor streak size: mult={supervisor_size_mult:.3f} "
                     f"size {old_trade_usdt:.2f}->{trade_usdt:.2f}"
                 )
-            # Per-symbol effective cap (scaled by volatility tier).
             eff_cap = _effective_tp_sl(cfg["symbol"], cfg, intel)
             trade_cap = max(20.0, float(eff_cap.get("notionalCapUsdt", RISK["max_notional"])))
             if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
@@ -9174,44 +9134,87 @@ async def _autotrade_loop():
                     f"cap={trade_cap:.2f} USDT (mult={eff_cap.get('capMult', 1.0)})"
                 )
                 _agent_mark("portfolio_manager", "done", "capped position notional", f"{old_trade_usdt:.2f}->{trade_usdt:.2f} USDT")
-                _autotrade_log(f"Position size cap: {old_trade_usdt:.2f}->{trade_usdt:.2f} USDT")
-            # Binance may enforce higher minimum notional (e.g., 20 USDT on some symbols/accounts).
-            # Ensure order size is never below configured/exchange floor to avoid -4164.
-            min_order_usdt = max(
-                20.0,
-                float(cfg.get("feeMinOrderUsdt", 7.5) or 7.5),
-            )
+            min_order_usdt = max(20.0, float(cfg.get("feeMinOrderUsdt", 7.5) or 7.5))
             if trade_usdt < min_order_usdt:
                 action = str(cfg.get("usdtTooSmallAction", "multiply") or "multiply").lower()
                 if action == "skip":
                     _agent_mark("risk_manager", "blocked", "order notional too small")
-                    _autotrade_skip(
-                        "usdt_too_small",
-                        f"Skip: order notional too small {trade_usdt:.2f} < {min_order_usdt:.2f} USDT",
-                    )
+                    _autotrade_skip("usdt_too_small", f"Skip: order notional too small {trade_usdt:.2f} < {min_order_usdt:.2f} USDT")
                     await asyncio.sleep(cfg["intervalSec"])
                     continue
-                old_amt = trade_usdt
                 trade_usdt = min_order_usdt
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
                 AUTO_TRADE["config"] = copy.deepcopy(cfg)
-                _autotrade_log(
-                    f"Order floor: adjusted USDT {old_amt:.2f} → {trade_usdt:.2f} (min notional guard)"
-                )
+                _autotrade_log(f"Order floor: adjusted USDT → {trade_usdt:.2f} (min notional guard)")
             if trade_usdt > float(RISK["max_notional"]):
                 trade_usdt = float(RISK["max_notional"])
-            gross_u, est_cost_u, net_u = _estimate_trade_edge_usdt(
-                trade_usdt, cfg["takeProfitPct"], cfg["maxSlippageBps"]
+
+            # ── Run entry pipeline (replaces inline gate checks) ──
+            htf = intel.get("htf") if isinstance(intel, dict) and isinstance(intel.get("htf"), dict) else {}
+            candle_ctx = intel.get("candles") if isinstance(intel, dict) and isinstance(intel.get("candles"), dict) else {}
+            regime = detect_market_regime(intel) if intel else {}
+            rv_pct = float((intel.get("precision") or {}).get("rvPct", 0.0) or 0.0) if isinstance(intel, dict) else None
+            pb_pct = float((intel.get("precision") or {}).get("pullbackAllowancePct", 0.0) or 0.0) if isinstance(intel, dict) else None
+            live_loss_streak = AUTO_TRADE.get("liveLossStreak", 0)
+            bb_val = float((px or {}).get("bbPctB", 0.5) or 0.5)
+            vwap_dist_val = abs(float((px or {}).get("vwapDistancePct", 0.0) or 0.0))
+            long_sc = float((px or {}).get("longScore", 0.0) or 0.0)
+            short_sc = float((px or {}).get("shortScore", 0.0) or 0.0)
+            near_res = bool((px or {}).get("nearResistance", False))
+            near_sup = bool((px or {}).get("nearSupport", False))
+            ob = intel.get("orderBook") if isinstance(intel, dict) else None
+            wait_imb = float((ob or {}).get("imbalance", 0)) if cfg.get("aggressiveScalp") else 0.0
+
+            entry_inp = EntryInputs(
+                cfg=cfg,
+                intel=intel,
+                regime=regime,
+                signal=signal,
+                confidence=conf,
+                spread_bps=spread_bps,
+                slippage_bps=slippage_bps,
+                mark=mark,
+                ex=ex,
+                htf=htf,
+                candle_ctx=candle_ctx,
+                adaptive_min_conf=adaptive_min_conf,
+                live_loss_streak=live_loss_streak,
+                vision_ok=bool(vision),
+                trade_usdt=trade_usdt,
+                rv_pct=rv_pct,
+                pb_pct=pb_pct,
+                eff_leverage=eff_leverage,
+                max_notional=float(RISK["max_notional"]),
+                pre_reversal_score=pre_reversal_score,
+                pre_reversal_side_at_risk=pre_reversal_side_at_risk,
+                bb_pct_b=bb_val,
+                vwap_distance_pct=vwap_dist_val,
+                long_score=long_sc,
+                short_score=short_sc,
+                near_resistance=near_res,
+                near_support=near_sup,
+                wait_override_imbalance=wait_imb,
+                scan_chase_speed=str(eff_prof.get("scan_chase_speed", "normal")),
+                scan_long_bias=float(eff_prof.get("scan_long_bias", 0.50) or 0.50),
             )
-            min_net_u = _fee_edge_min_net_usdt(cfg, est_cost_u, trade_usdt)
-            if net_u <= min_net_u:
-                _agent_mark("risk_manager", "blocked", "net fee edge too low", f"{net_u:.4f}")
-                _autotrade_skip(
-                    "fee_edge",
-                    f"Skip: net edge too low (gross {gross_u:.4f} - cost {est_cost_u:.4f} = {net_u:.4f} < min {min_net_u:.4f} USDT)",
-                )
+            plan = evaluate_entry_plan(entry_inp)
+
+            if not plan.approved:
+                skip_code = plan.skip_code or "pipeline"
+                skip_msg = plan.skip_message or "Entry pipeline rejected"
+                _agent_mark("strategy_builder", "blocked", skip_code, skip_msg)
+                _autotrade_skip(skip_code, f"Skip: {skip_msg}")
+                if scan_mode and picked_symbol:
+                    _cooldown_scan_symbol(str(picked_symbol), 30, f"pipeline:{skip_code}")
                 await asyncio.sleep(cfg["intervalSec"])
                 continue
+
+            # Pipeline approved — use plan values
+            signal = plan.signal
+            conf = plan.confidence
+            trade_usdt = plan.trade_usdt
+            eff_leverage = plan.eff_leverage
+            _agent_mark("strategy_builder", "done", "entry approved", f"{cfg['symbol']} {signal} c={conf:.3f} pipeline={len(plan.pipeline)} gates")
 
             if mode == "PAPER":
                 _agent_mark("execution_agent", "doing", "paper execution", f"{cfg['symbol']} {signal}")
@@ -9376,7 +9379,9 @@ async def _autotrade_loop():
             AUTO_TRADE["consecutiveErrors"] = 0
             AUTO_TRADE["lastSkip"] = None
             _autotrade_log(f"{mode} trade executed: {signal} {cfg['symbol']} {trade_usdt} USDT")
-            AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": trade_res, "symbol": cfg["symbol"], "side": signal, "ts": now}
+            _sym_decision = str(cfg["symbol"]).upper()
+            AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
+            AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
             _agent_mark("memory_agent", "done", "decision stored", f"{mode} {cfg['symbol']} {signal}")
         except asyncio.TimeoutError:
             # Network timeout — not a logic error, use softer backoff
@@ -9771,7 +9776,6 @@ async def autotrade_status(symbol: str | None = None):
             )
             if open_live_positions:
                 lock_map = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
-                _profiles = _load_symbol_profiles() or {}
                 for op in open_live_positions:
                     k = _live_lock_key(str(op.get("symbol", "")), str(op.get("side", "")))
                     lk = lock_map.get(k) if isinstance(lock_map, dict) else None
@@ -9782,7 +9786,7 @@ async def autotrade_status(symbol: str | None = None):
                         op["localTp"] = lk.get("tp")
                         op["localSl"] = lk.get("sl")
                     op["leverage"] = _position_display_leverage(op.get("symbol"), cfg, op.get("leverage"))
-                    _attach_symbol_profile(op, _profiles)
+                    _attach_symbol_profile(op, None)
                 lead = open_live_positions[0]
                 live_position = {
                     "symbol": str(lead.get("symbol", "") or ""),
@@ -11463,7 +11467,6 @@ async def autotrade_status_lite():
     if isinstance(cfg, dict) and cfg:
         _sync_autotrade_leverage_cap_from_cfg(cfg)
     live_locks = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
-    _profiles = _load_symbol_profiles() or {}
     open_live_positions: list[dict] = []
     
     # Fetch current market prices for real-time uPnL calculation
@@ -11513,7 +11516,7 @@ async def autotrade_status_lite():
             "localTp": lock.get("tp"),
             "localSl": lock.get("sl"),
         }
-        _attach_symbol_profile(op, _profiles)
+        _attach_symbol_profile(op, None)
         open_live_positions.append(op)
     # Binance is source of truth — always try to fetch live positions directly.
     # This ensures positions are visible even when guardian hasn't populated
@@ -11538,13 +11541,14 @@ async def autotrade_status_lite():
                     op["localTp"] = lk.get("tp")
                     op["localSl"] = lk.get("sl")
                 op["leverage"] = _position_display_leverage(op.get("symbol"), cfg, op.get("leverage"))
-                _attach_symbol_profile(op, _profiles)
+                _attach_symbol_profile(op, None)
             open_live_positions = binance_positions
             _binance_fetched = True
     except Exception as e:
         _log.warning("status-lite Binance position fetch failed: %s", e)
-    # Fallback to liveProfitLocks when Binance fetch failed or returned empty
-    if not _binance_fetched or not open_live_positions:
+    # Fallback to liveProfitLocks ONLY when Binance API call failed (not when it returned empty).
+    # If Binance explicitly returns empty, the positions are truly closed.
+    if not _binance_fetched:
         # liveProfitLocks fallback
         for lock in live_locks.values():
             if not isinstance(lock, dict):
@@ -11578,7 +11582,7 @@ async def autotrade_status_lite():
                 "localTp": lock.get("tp"),
                 "localSl": lock.get("sl"),
             }
-            _attach_symbol_profile(op, _profiles)
+            _attach_symbol_profile(op, None)
             open_live_positions.append(op)
     open_live_positions.sort(key=lambda pos: float(pos.get("notionalUsdtApprox", 0.0) or 0.0), reverse=True)
     _position_guardian_status_heartbeat(open_live_positions)
@@ -12047,8 +12051,8 @@ async def combined_status():
             _binance_fetched = True
     except Exception as e:
         _log.warning("combined_status Binance position fetch failed: %s", e)
-    # Fallback to liveProfitLocks when Binance fetch failed or returned empty
-    if not _binance_fetched or not open_live_positions:
+    # Fallback to liveProfitLocks ONLY when Binance API call failed.
+    if not _binance_fetched:
         for lock in live_locks.values():
             if not isinstance(lock, dict):
                 continue
@@ -12120,7 +12124,7 @@ async def combined_status():
                     "realizedPnl": round(float(live_all_stats.get("realizedPnlToday", 0.0) or 0.0), 6),
                 }
             },
-            "log": (AUTO_TRADE.get("log") or [])[-30:],
+            "log": (AUTO_TRADE.get("log") or [])[:30],
         },
         "learning": {
             "items": [],
@@ -12241,12 +12245,15 @@ def _ip_info_snapshot() -> dict[str, Any]:
     cached = _PUBLIC_IP_CACHE
     cache_fresh = (now - int(cached.get("ts", 0) or 0)) < 300
     if not cache_fresh:
+        old_ip = str(cached.get("ip") or "")
         def _bg():
             ip, src = _fetch_public_ip()
             with _PUBLIC_IP_LOCK:
                 _PUBLIC_IP_CACHE["ip"] = ip
                 _PUBLIC_IP_CACHE["source"] = src
                 _PUBLIC_IP_CACHE["ts"] = int(time.time())
+            if ip and old_ip and ip != old_ip:
+                print(f"[IP-CHANGE] Public IP changed: {old_ip} → {ip} — update Binance whitelist!", flush=True)
         with _PUBLIC_IP_LOCK:
             threading.Thread(target=_bg, daemon=True).start()
     lan_ip = _local_publish_hint()

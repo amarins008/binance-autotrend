@@ -278,12 +278,12 @@ class PerSymbolContext:
 
         if self._dirty_sym_profile and self._sym_profile is not None:
             self._storage.save_symbol_profile(self._sym_profile)
+            self._cache.set_symbol_profile(self.symbol, self._sym_profile)
             self._dirty_sym_profile = False
 
         # Write daily stats to shared storage
         for trade in self._pending_trades:
             pnl = float(trade.get("pnl", 0.0) or 0.0)
-            self._cache.shared.append_global_trade(trade)
             stats = self._cache.shared.load_daily_stats()
             stats["trades"] = int(stats.get("trades", 0) or 0) + 1
             if pnl >= 0:
@@ -295,9 +295,6 @@ class PerSymbolContext:
 
         self._pending_trades.clear()
         self._pending_observation = None
-
-        # Invalidate after commit so next cycle gets fresh data
-        self._cache.invalidate_symbol(self.symbol)
 
     # ------------------------------------------------------------------
     # Utilities
