@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#080c16" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <title>System Monitor — Autotrend Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design Tokens (matching main dashboard) ── */
+    :root {
+      --bg: #080c16; --bg-subtle: #0c1220; --surface: #0f1729;
+      --surface-2: #15203a; --surface-3: #1a2744;
+      --border: rgba(255,255,255,.07); --border-2: rgba(255,255,255,.12); --border-3: rgba(255,255,255,.18);
+      --text: #e8ecf4; --text-2: #b0bcd0; --muted: #6b7a99; --dim: #3d4d6a;
+      --accent: #38bdf8; --accent-dim: rgba(56,189,248,.15);
+      --green: #22c55e; --green-dim: rgba(34,197,94,.12);
+      --amber: #f59e0b; --amber-dim: rgba(245,158,11,.12);
+      --red: #ef4444; --red-dim: rgba(239,68,68,.12);
+      --purple: #a78bfa; --purple-dim: rgba(167,139,250,.12);
+      --cyan: #06b6d4; --cyan-dim: rgba(6,182,212,.12);
+      --r: 10px; --r-sm: 6px; --r-lg: 14px; --r-full: 999px;
+      --gap: 8px; --card-p: 12px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 13px; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100dvh; line-height: 1.5;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -8%, rgba(56,189,248,.06) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 90% 100%, rgba(139,92,246,.04) 0%, transparent 60%);
+    }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+
+    /* ── Header ── */
+    .hdr { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px; background: rgba(8,12,22,.92); backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border); }
+    .hdr-left { display: flex; align-items: center; gap: 10px; }
+    .brand-icon { width: 32px; height: 32px; border-radius: var(--r-sm); background: linear-gradient(135deg, var(--accent), var(--purple));
+      display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .brand-name { font-weight: 700; font-size: 15px; color: var(--text); }
+    .brand-sub { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 6px; }
+    .hdr-right { display: flex; align-items: center; gap: 8px; }
+    .status-pill { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-full);
+      font-size: 11px; font-weight: 600; }
+    .status-pill.ok { background: var(--green-dim); color: var(--green); }
+    .status-pill.err { background: var(--red-dim); color: var(--red); }
+    .status-pill.warn { background: var(--amber-dim); color: var(--amber); }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .status-pill.ok .status-dot { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+    .btn { padding: 5px 12px; border-radius: var(--r-sm); border: 1px solid var(--border-2); background: var(--surface);
+      color: var(--text-2); font-size: 11px; font-weight: 600; cursor: pointer; transition: .15s; }
+    .btn:hover { background: var(--surface-2); border-color: var(--border-3); }
+    .btn.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
+    /* ── Layout ── */
+    .main { padding: 12px; max-width: 960px; margin: 0 auto; }
+    .grid { display: grid; gap: 8px; }
+    .g2 { grid-template-columns: 1fr 1fr; }
+    .g3 { grid-template-columns: 1fr 1fr 1fr; }
+    @media (max-width: 600px) { .g2, .g3 { grid-template-columns: 1fr; } }
+    .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px;
+      color: var(--muted); padding: 12px 0 6px; display: flex; align-items: center; gap: 6px; }
+    .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: var(--card-p);
+      transition: .2s; }
+    .card:hover { border-color: var(--border-2); }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .card-title { font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 5px; }
+    .card-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: var(--r-full); }
+    .badge-ok { background: var(--green-dim); color: var(--green); }
+    .badge-err { background: var(--red-dim); color: var(--red); }
+    .badge-warn { background: var(--amber-dim); color: var(--amber); }
+    .badge-info { background: var(--accent-dim); color: var(--accent); }
+    .badge-purple { background: var(--purple-dim); color: var(--purple); }
+
+    /* ── KPI Row ── */
+    .kpi-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .kpi { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+    .kpi-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+    .kpi-value { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi-value.good { color: var(--green); }
+    .kpi-value.bad { color: var(--red); }
+    .kpi-value.warn { color: var(--amber); }
+    .kpi-value.accent { color: var(--accent); }
+
+    /* ── Table ── */
+    .tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .tbl th { text-align: left; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
+      color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+    .tbl td { padding: 4px 6px; border-bottom: 1px solid var(--border); font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; white-space: nowrap; }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl tr:hover td { background: var(--surface-2); }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .dim { color: var(--muted); }
+    .text-right { text-align: right; }
+
+    /* ── Issue List ── */
+    .issue-item { display: flex; gap: 6px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+    .issue-item:last-child { border-bottom: none; }
+    .issue-sev { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: var(--r-full); white-space: nowrap; }
+
+    /* ── Agent Badge ── */
+    .agent-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--r-full);
+      font-size: 10px; font-weight: 600; border: 1px solid var(--border); margin: 2px; }
+    .agent-badge.running { background: var(--green-dim); color: var(--green); border-color: rgba(34,197,94,.3); }
+    .agent-badge.idle { background: var(--surface-2); color: var(--muted); border-color: var(--border); }
+    .agent-badge.error { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,.3); }
+
+    /* ── Loading / Error ── */
+    .loading { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--muted); font-size: 12px; }
+    .error-banner { background: var(--red-dim); border: 1px solid rgba(239,68,68,.3); border-radius: var(--r);
+      padding: 10px 14px; color: var(--red); font-size: 12px; margin-bottom: 8px; }
+
+    /* ── Footer ── */
+    .footer { text-align: center; padding: 16px; font-size: 10px; color: var(--dim); }
+
+    /* ── Animations ── */
+    .fade-in { animation: fadeIn .3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body>
+  <!-- HEADER -->
+  <header class="hdr">
+    <div class="hdr-left">
+      <div class="brand-icon">🔍</div>
+      <span class="brand-name">System Monitor</span>
+      <span class="brand-sub" id="lastUpdate">—</span>
+    </div>
+    <div class="hdr-right">
+      <div class="status-pill" id="sysStatus"><span class="status-dot"></span><span id="sysStatusText">loading...</span></div>
+      <button class="btn" id="btnPause" onclick="togglePause()">⏸ Pause</button>
+      <button class="btn active" id="btnAuto" onclick="toggleAuto()">Auto 5s</button>
+      <a href="/dashboard/" class="btn">← Dashboard</a>
+    </div>
+  </header>
+
+  <div class="main" id="app">
+    <div class="loading" id="loadingState">กำลังโหลดข้อมูล...</div>
+  </div>
+
+  <div class="footer">Autotrend Lab · System Monitor · Auto-refresh every 5s</div>
+
+  <script>
+    let autoRefresh = true;
+    let refreshTimer = null;
+    let paused = false;
+
+    function toggleAuto() {
+      autoRefresh = !autoRefresh;
+      document.getElementById('btnAuto').classList.toggle('active', autoRefresh);
+      document.getElementById('btnAuto').textContent = autoRefresh ? 'Auto 5s' : 'Auto OFF';
+      if (autoRefresh && !paused) startRefresh();
+      else stopRefresh();
+    }
+
+    function togglePause() {
+      paused = !paused;
+      document.getElementById('btnPause').textContent = paused ? '▶ Resume' : '⏸ Pause';
+      document.getElementById('btnPause').classList.toggle('active', paused);
+      if (paused) stopRefresh();
+      else if (autoRefresh) startRefresh();
+    }
+
+    function startRefresh() {
+      stopRefresh();
+      refreshTimer = setInterval(fetchData, 5000);
+    }
+
+    function stopRefresh() {
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    }
+
+    async function fetchData() {
+      try {
+        const r = await fetch('/monitor');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        render(d);
+      } catch (e) {
+        document.getElementById('sysStatus').className = 'status-pill err';
+        document.getElementById('sysStatusText').textContent = 'ERROR';
+        document.getElementById('loadingState').innerHTML =
+          `<div class="error-banner">เชื่อมต่อไม่ได้: ${e.message}</div>`;
+      }
+    }
+
+    function render(d) {
+      const app = document.getElementById('app');
+      document.getElementById('loadingState')?.remove();
+
+      // Update header
+      document.getElementById('lastUpdate').textContent =
+        new Date(d.ts * 1000).toLocaleTimeString('th-TH', { hour12: false });
+      const sp = document.getElementById('sysStatus');
+      if (d.system.running) { sp.className = 'status-pill ok'; document.getElementById('sysStatusText').textContent = 'RUNNING'; }
+      else if (d.system.paused) { sp.className = 'status-pill warn'; document.getElementById('sysStatusText').textContent = 'PAUSED'; }
+      else { sp.className = 'status-pill err'; document.getElementById('sysStatusText').textContent = 'STOPPED'; }
+
+      app.innerHTML = buildHTML(d);
+    }
+
+    function esc(s) { return String(s ?? '—').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function ago(sec) { return sec != null ? (sec < 60 ? `${Math.round(sec)}s` : `${Math.round(sec/60)}m`) : '—'; }
+    function pnlColor(v) { return v > 0 ? 'good' : v < 0 ? 'bad' : ''; }
+    function fmtPnl(v) { return v > 0 ? `+$${v.toFixed(2)}` : v < 0 ? `-$${Math.abs(v).toFixed(2)}` : '$0.00'; }
+
+    function buildHTML(d) {
+      let h = '';
+
+      // ═══════ SYSTEM HEALTH ═══════
+      h += `<div class="section-title">⚡ สถานะระบบ</div>`;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">🖥️ System Health</div>
+          <div class="card-badge ${d.system.running ? 'badge-ok' : d.system.paused ? 'badge-warn' : 'badge-err'}">
+            ${d.system.running ? 'RUNNING' : d.system.paused ? 'PAUSED' : 'STOPPED'}
+          </div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Mode</span><span class="kpi-value ${d.system.mode === 'LIVE' ? 'good' : 'warn'}">${d.system.mode}</span></div>
+          <div class="kpi"><span class="kpi-label">Uptime</span><span class="kpi-value">${d.system.uptimeMin}m</span></div>
+          <div class="kpi"><span class="kpi-label">Session</span><span class="kpi-value mono" style="font-size:10px">${esc(d.system.sessionId?.slice(0,12))}</span></div>
+          <div class="kpi"><span class="kpi-label">Trades</span><span class="kpi-value">${d.system.tradesThisSession}</span></div>
+          <div class="kpi"><span class="kpi-label">Daily PnL</span><span class="kpi-value ${pnlColor(d.system.dailyPnl)}">${fmtPnl(d.system.dailyPnl)}</span></div>
+          <div class="kpi"><span class="kpi-label">Errors</span><span class="kpi-value ${d.system.errorStreakCritical ? 'bad' : d.system.consecutiveErrors > 0 ? 'warn' : ''}">${d.system.consecutiveErrors}</span></div>
+          <div class="kpi"><span class="kpi-label">Last Trade</span><span class="kpi-value dim">${ago(d.system.lastTradeAgeSec)}</span></div>
+          <div class="kpi"><span class="kpi-label">Open Only</span><span class="kpi-value ${d.system.manageOpenOnly ? 'warn' : ''}">${d.system.manageOpenOnly ? 'YES' : 'No'}</span></div>
+        </div>
+      </div>`;
+
+      // ═══════ TRADINGVIEW ═══════
+      h += `<div class="section-title">📡 TradingView</div>`;
+      const tv = d.tradingview;
+      const tvOk = tv.healthy && !tv.autoDisabled && !tv.failCountCritical;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">📊 TV Integration</div>
+          <div class="card-badge ${tvOk ? 'badge-ok' : tv.autoDisabled ? 'badge-err' : 'badge-warn'}">
+            ${tvOk ? 'HEALTHY' : tv.autoDisabled ? 'DISABLED' : tv.enabled ? 'DEGRADED' : 'OFF'}
+          </div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Enabled</span><span class="kpi-value ${tv.enabled ? 'good' : 'bad'}">${tv.enabled ? 'Yes' : 'No'}</span></div>
+          <div class="kpi"><span class="kpi-label">Failures</span><span class="kpi-value ${tv.failCountCritical ? 'bad' : tv.failCount > 0 ? 'warn' : ''}">${tv.failCount ?? 0}/${tv.tradingviewMaxFailures ?? 5}</span></div>
+          <div class="kpi"><span class="kpi-label">Cache</span><span class="kpi-value">${tv.cacheSize ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">TA Available</span><span class="kpi-value ${tv.tradingviewTaAvailable ? 'good' : 'bad'}">${tv.tradingviewTaAvailable ? 'Yes' : 'No'}</span></div>
+          <div class="kpi"><span class="kpi-label">Last Check</span><span class="kpi-value dim">${ago(tv.lastCheckAgeSec)}</span></div>
+        </div>`;
+      // TV Features
+      if (tv.features) {
+        h += `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">`;
+        for (const [k, v] of Object.entries(tv.features)) {
+          h += `<span class="card-badge ${v ? 'badge-ok' : 'badge-err'}" style="font-size:9px">${k}: ${v ? 'ON' : 'OFF'}</span>`;
+        }
+        h += `</div>`;
+      }
+      // Recent signals
+      if (tv.recentSignals?.length) {
+        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Signal</th><th>Conf</th><th>Age</th></tr>`;
+        for (const s of tv.recentSignals) {
+          const sigColor = s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--muted)';
+          h += `<tr><td>${esc(s.symbol)}</td><td style="color:${sigColor};font-weight:600">${esc(s.signal)}</td><td>${(s.confidence*100).toFixed(1)}%</td><td class="dim">${ago(s.ageSec)}</td></tr>`;
+        }
+        h += `</table></div>`;
+      }
+      h += `</div>`;
+
+      // ═══════ ENTRY PIPELINE ═══════
+      h += `<div class="section-title">🚪 Entry Pipeline</div>`;
+      const en = d.entry;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">📋 Pipeline Status</div>
+          <div class="card-badge badge-info">${en.scanBoardQualified}/${en.scanBoardCount} qualified</div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Last Decision</span><span class="kpi-value">${en.lastDecisionSymbol ? `${esc(en.lastDecisionSymbol)} ${esc(en.lastDecisionSide)}` : '—'}</span></div>
+          <div class="kpi"><span class="kpi-label">Decision Age</span><span class="kpi-value dim">${ago(en.lastDecisionAgeSec)}</span></div>
+          <div class="kpi"><span class="kpi-label">Has Trade</span><span class="kpi-value ${en.lastDecisionHasTrade ? 'good' : ''}">${en.lastDecisionHasTrade ? 'Yes' : 'No'}</span></div>
+          <div class="kpi"><span class="kpi-label">Last Skip</span><span class="kpi-value ${en.lastSkipCode ? 'warn' : ''}">${en.lastSkipCode ? esc(en.lastSkipCode) : '—'}</span></div>
+          <div class="kpi"><span class="kpi-label">Skip Age</span><span class="kpi-value dim">${ago(en.lastSkipAgeSec)}</span></div>
+        </div>`;
+      // Scan board
+      if (en.scanBoardSymbols?.length) {
+        h += `<div style="margin-top:8px;"><span class="dim" style="font-size:10px">Scan Board:</span> `;
+        h += en.scanBoardSymbols.map(s => `<span class="card-badge badge-info" style="font-size:10px">${esc(s)}</span>`).join(' ');
+        h += `</div>`;
+      }
+      // Per-symbol decisions
+      const syms = Object.entries(en.perSymbolDecisions || {});
+      if (syms.length) {
+        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Signal</th><th>Conf</th><th>Trade</th><th>Age</th></tr>`;
+        for (const [sym, dec] of syms.slice(0, 10)) {
+          h += `<tr><td>${esc(sym)}</td><td>${esc(dec.signal ?? '—')}</td><td>${dec.confidence ? (dec.confidence*100).toFixed(1)+'%' : '—'}</td><td>${dec.hasTrade ? '✅' : '—'}</td><td class="dim">${ago(dec.ageSec)}</td></tr>`;
+        }
+        h += `</table></div>`;
+      }
+      h += `</div>`;
+
+      // ═══════ GUARDIAN ═══════
+      h += `<div class="section-title">🛡️ Guardian</div>`;
+      const g = d.guardian;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">🔒 Open Positions</div>
+          <div class="card-badge ${g.positionCount > 0 ? 'badge-ok' : 'badge-info'}">${g.positionCount} position${g.positionCount !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Armed</span><span class="kpi-value ${g.armedCount > 0 ? 'good' : ''}">${g.armedCount}</span></div>
+          <div class="kpi"><span class="kpi-label">Guarding</span><span class="kpi-value warn">${g.guardingCount}</span></div>
+          <div class="kpi"><span class="kpi-label">Total UPnL</span><span class="kpi-value ${pnlColor(g.totalUpnl)}">${fmtPnl(g.totalUpnl)}</span></div>
+          <div class="kpi"><span class="kpi-label">Peak PnL</span><span class="kpi-value ${pnlColor(g.totalPeakPnl)}">${fmtPnl(g.totalPeakPnl)}</span></div>
+          <div class="kpi"><span class="kpi-label">Net Exposure</span><span class="kpi-value ${pnlColor(g.netExposure)}">${fmtPnl(g.netExposure)}</span></div>
+        </div>`;
+      // Position details
+      if (g.positions?.length) {
+        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Lev</th><th>UPnL</th><th>Peak</th><th>TP</th><th>SL</th><th>State</th></tr>`;
+        for (const p of g.positions) {
+          const state = p.armed ? '🟢 Armed' : p.peak > 0 ? '👁️ Guarding' : '⬜ Open';
+          h += `<tr>
+            <td style="font-weight:600">${esc(p.symbol)}</td>
+            <td style="color:${p.side === 'LONG' ? 'var(--green)' : 'var(--red)'}">${esc(p.side)}</td>
+            <td>${p.qty}</td>
+            <td>${p.leverage}×</td>
+            <td class="${pnlColor(p.unRealizedProfit)}" style="font-weight:600">${fmtPnl(p.unRealizedProfit)}</td>
+            <td class="${pnlColor(p.peak)}">${fmtPnl(p.peak)}</td>
+            <td class="dim">${p.tp ? p.tp.toFixed(8) : '—'}</td>
+            <td class="dim">${p.sl ? p.sl.toFixed(8) : '—'}</td>
+            <td>${state}</td>
+          </tr>`;
+        }
+        h += `</table></div>`;
+        // Per-position guardian stats
+        h += `<div style="margin-top:8px;">`;
+        for (const p of g.positions) {
+          if (!p.volatilityTier && !p.holdWinnerActivated && !p.tpExtensionCount) continue;
+          h += `<div style="display:flex;gap:6px;align-items:center;padding:3px 0;font-size:11px;">
+            <span style="font-weight:600;min-width:70px">${esc(p.symbol)}</span>
+            <span class="card-badge badge-purple" style="font-size:9px">tier: ${esc(p.volatilityTier)}</span>
+            ${p.holdWinnerActivated ? `<span class="card-badge badge-info" style="font-size:9px">hold×${p.holdWinnerActivated}</span>` : ''}
+            ${p.tpExtensionCount ? `<span class="card-badge badge-ok" style="font-size:9px">tpExt×${p.tpExtensionCount}</span>` : ''}
+            ${p.breakevenGuardArmed ? `<span class="card-badge badge-warn" style="font-size:9px">BE Armed</span>` : ''}
+            ${p.guardianAgeSec != null ? `<span class="dim" style="font-size:10px">${ago(p.guardianAgeSec)} ago</span>` : ''}
+          </div>`;
+        }
+        h += `</div>`;
+      }
+      h += `</div>`;
+
+      // ═══════ RISK ═══════
+      h += `<div class="section-title">⚙️ Risk Management</div>`;
+      h += `<div class="grid g3">
+        <div class="card fade-in">
+          <div class="card-header"><div class="card-title">Cooldown</div></div>
+          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value ${d.risk.cooldownSymbols > 0 ? 'warn' : ''}">${d.risk.cooldownSymbols}</span></div>
+        </div>
+        <div class="card fade-in">
+          <div class="card-header"><div class="card-title">Perf Locks</div></div>
+          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value ${d.risk.perfLockSymbols > 0 ? 'accent' : ''}">${d.risk.perfLockSymbols}</span></div>
+        </div>
+        <div class="card fade-in">
+          <div class="card-header"><div class="card-title">Watchlist</div></div>
+          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value">${d.risk.cooldownWatchlist}</span></div>
+        </div>
+      </div>`;
+
+      // ═══════ LEARNING ═══════
+      h += `<div class="section-title">🧠 Learning System</div>`;
+      const ls = d.learning;
+      if (ls.summary?.totalSymbols > 0) {
+        h += `<div class="card fade-in">
+          <div class="card-header">
+            <div class="card-title">📊 Symbol Performance</div>
+            <div class="card-badge badge-info">${ls.summary.totalSymbols} symbols</div>
+          </div>
+          <div class="kpi-row">
+            <div class="kpi"><span class="kpi-label">Total Trades</span><span class="kpi-value">${ls.summary.totalTrades}</span></div>
+            <div class="kpi"><span class="kpi-label">Win Rate</span><span class="kpi-value ${ls.summary.overallWinRatePct >= 50 ? 'good' : 'bad'}">${ls.summary.overallWinRatePct}%</span></div>
+            <div class="kpi"><span class="kpi-label">Total PnL</span><span class="kpi-value ${pnlColor(ls.summary.totalPnl)}">${fmtPnl(ls.summary.totalPnl)}</span></div>
+            <div class="kpi"><span class="kpi-label">Best</span><span class="kpi-value good">${ls.summary.bestSymbol ? `${esc(ls.summary.bestSymbol.symbol)} ${fmtPnl(ls.summary.bestSymbol.pnl)}` : '—'}</span></div>
+            <div class="kpi"><span class="kpi-label">Worst</span><span class="kpi-value bad">${ls.summary.worstSymbol ? `${esc(ls.summary.worstSymbol.symbol)} ${fmtPnl(ls.summary.worstSymbol.pnl)}` : '—'}</span></div>
+          </div>`;
+        // Top 15 symbols table
+        if (ls.symbols?.length) {
+          h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>#</th><th>Symbol</th><th>Trades</th><th>W/L</th><th>Win%</th><th>PnL</th></tr>`;
+          for (let i = 0; i < Math.min(ls.symbols.length, 15); i++) {
+            const s = ls.symbols[i];
+            h += `<tr><td class="dim">${i+1}</td><td style="font-weight:600">${esc(s.symbol)}</td><td>${s.trades}</td><td>${s.wins}/${s.losses}</td>
+              <td class="${s.winRatePct >= 50 ? 'good' : 'bad'}">${s.winRatePct}%</td><td class="${pnlColor(s.pnl)}">${fmtPnl(s.pnl)}</td></tr>`;
+          }
+          h += `</table></div>`;
+        }
+        h += `</div>`;
+      } else {
+        h += `<div class="card fade-in"><div class="dim" style="padding:12px;text-align:center">ยังไม่มีข้อมูล learning</div></div>`;
+      }
+
+      // ═══════ KANBAN AGENTS ═══════
+      h += `<div class="section-title">🤖 Kanban Agents</div>`;
+      const kb = d.kanban;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">📋 Agent Board</div>
+          <div class="card-badge badge-purple">${kb.agents?.length ?? 0} agents · ${kb.totalRuns ?? 0} runs</div>
+        </div>`;
+      // Agent badges
+      if (kb.agents?.length) {
+        h += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">`;
+        for (const ag of kb.agents) {
+          const cls = ag.state === 'running' ? 'running' : ag.state === 'error' ? 'error' : 'idle';
+          h += `<span class="agent-badge ${cls}">
+            <span class="status-dot" style="width:5px;height:5px;background:${cls === 'running' ? 'var(--green)' : cls === 'error' ? 'var(--red)' : 'var(--muted)'}"></span>
+            ${esc(ag.name || ag.id)}
+            <span class="dim" style="font-size:9px">×${ag.runs}</span>
+          </span>`;
+        }
+        h += `</div>`;
+      }
+      // Kanban columns
+      if (kb.todo?.length || kb.doing?.length || kb.blocked?.length) {
+        h += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px">`;
+        const col = (title, items, color) => {
+          h += `<div><div style="font-weight:700;font-size:10px;color:${color};margin-bottom:4px">${title} (${items.length})</div>`;
+          for (const item of items.slice(0, 5)) {
+            h += `<div style="padding:3px 0;border-bottom:1px solid var(--border);color:var(--text-2)">${esc(typeof item === 'string' ? item : JSON.stringify(item).slice(0,40))}</div>`;
+          }
+          h += `</div>`;
+        };
+        col('TODO', kb.todo || [], 'var(--muted)');
+        col('DOING', kb.doing || [], 'var(--accent)');
+        col('BLOCKED', kb.blocked || [], 'var(--red)');
+        h += `</div>`;
+      }
+      h += `</div>`;
+
+      // ═══════ SUPERVISOR REVIEW ═══════
+      h += `<div class="section-title">📋 Supervisor Review</div>`;
+      const sv = d.supervisor;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">🔍 Analysis</div>
+          <div class="card-badge ${sv.severity === 'ok' ? 'badge-ok' : sv.severity === 'critical' ? 'badge-err' : 'badge-warn'}">
+            ${esc(sv.severity?.toUpperCase())}
+          </div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Issues</span><span class="kpi-value ${sv.issueCount > 0 ? 'warn' : 'good'}">${sv.issueCount}</span></div>
+          <div class="kpi"><span class="kpi-label">Last Review</span><span class="kpi-value dim">${ago(sv.reviewedAgeSec)}</span></div>
+          <div class="kpi"><span class="kpi-label">Cached</span><span class="kpi-value dim">${sv.cached ? 'Yes' : 'No'}</span></div>
+        </div>`;
+      if (sv.summary) {
+        h += `<div style="margin-top:8px;padding:6px 8px;background:var(--surface-2);border-radius:var(--r-sm);font-size:11px;color:var(--text-2)">${esc(sv.summary)}</div>`;
+      }
+      if (sv.issues?.length) {
+        h += `<div style="margin-top:8px">`;
+        for (const issue of sv.issues) {
+          const sevCls = issue.severity === 'critical' ? 'badge-err' : issue.severity === 'high' ? 'badge-warn' : 'badge-info';
+          h += `<div class="issue-item">
+            <span class="issue-sev ${sevCls}">${esc(issue.severity?.toUpperCase())}</span>
+            <span style="flex:1">${esc(issue.message || issue.text || JSON.stringify(issue).slice(0,100))}</span>
+          </div>`;
+        }
+        h += `</div>`;
+      }
+      h += `</div>`;
+
+      return h;
+    }
+
+    // Start
+    fetchData();
+    if (autoRefresh) startRefresh();
+  </script>
+</body>
+</html>

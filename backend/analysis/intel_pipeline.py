@@ -945,13 +945,18 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     try:
         from trading.confluence import evaluate_confluence
         _loss_streak = 0
+        _cfg_live = {}
         try:
-            from services import app_state as _app_state
-            _cfg_live = (_app_state.AUTO_TRADE.get("config") or {}) if isinstance(_app_state.AUTO_TRADE, dict) else {}
+            _main_state = _main()
+            _cfg_live = (_main_state.AUTO_TRADE.get("config") or {}) if isinstance(_main_state.AUTO_TRADE, dict) else {}
+            if not _cfg_live:
+                from services import app_state as _app_state
+                _cfg_live = (_app_state.AUTO_TRADE.get("config") or {}) if isinstance(_app_state.AUTO_TRADE, dict) else {}
             _loss_streak = int(_cfg_live.get("_recentLossStreak", 0) or 0)
         except Exception:
             pass
-        cr = await evaluate_confluence(
+        cr = await asyncio.to_thread(
+            evaluate_confluence,
             pk,
             mm,
             pre_signal=pre_confluence_signal,
@@ -960,6 +965,8 @@ async def intel_analyze(req: IntelAnalyzeRequest):
             order_book=order_book,
             bias_signal=pre_confluence_signal,
             loss_streak=_loss_streak,
+            cfg=_cfg_live,
+            symbol=symbol,
         )
         final_signal = cr.signal
         confidence = cr.confidence

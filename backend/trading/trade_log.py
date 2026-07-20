@@ -442,6 +442,10 @@ def _live_closed_trades_from_log(symbol: str | None = None, mode: str = "ALL") -
     return out
 
 
+def _live_closed_trades_from_symbol(symbol: str, mode: str = "ALL", vault_dir: Path = VAULT_DIR) -> list[dict]:
+    return _live_closed_trades_from_log(symbol=symbol, mode=mode)
+
+
 def _backfill_vault_trades_to_log(
     vault_dir: Path = VAULT_DIR,
     log_path: Path = TRADES_LOG_PATH,

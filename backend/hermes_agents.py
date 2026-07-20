@@ -60,6 +60,8 @@ def new_agent_state() -> dict[str, Any]:
     return {
         "version": "hermes-multi-agent-1",
         "engine": dict(HERMES_ENGINE_IDENTITY),
+        "cycle": 0,
+        "cycleStartedAt": now,
         "updatedAt": now,
         "kanban": {
             "todo": [agent_id for agent_id, _name, _role in HERMES_AGENT_PIPELINE],
@@ -78,6 +80,12 @@ def new_agent_state() -> dict[str, Any]:
                 "lastReason": "",
                 "updatedAt": now,
                 "runs": 0,
+                "starts": 0,
+                "completions": 0,
+                "startedAt": 0,
+                "completedAt": 0,
+                "blockedAt": 0,
+                "lastCompletedAction": "",
             }
             for agent_id, name, role in HERMES_AGENT_PIPELINE
         },
@@ -111,7 +119,15 @@ def ensure_agent_state(state: dict[str, Any] | None) -> dict[str, Any]:
             existing.setdefault("lastReason", "")
             existing.setdefault("updatedAt", int(time.time()))
             existing.setdefault("runs", 0)
+            existing.setdefault("starts", 0)
+            existing.setdefault("completions", int(existing.get("runs", 0) or 0))
+            existing.setdefault("startedAt", 0)
+            existing.setdefault("completedAt", 0)
+            existing.setdefault("blockedAt", 0)
+            existing.setdefault("lastCompletedAction", "")
     state["version"] = state.get("version") or template["version"]
+    state.setdefault("cycle", 0)
+    state.setdefault("cycleStartedAt", int(time.time()))
     engine = state.get("engine")
     if not isinstance(engine, dict):
         state["engine"] = dict(HERMES_ENGINE_IDENTITY)
@@ -168,6 +184,20 @@ def mark_agent(
     agent["lastReason"] = next_reason
     agent["updatedAt"] = now
     agent["runs"] = int(agent.get("runs", 0) or 0) + (1 if bucket == "done" else 0)
+    cycle = int(state.get("cycle", 0) or 0)
+    if bucket == "doing":
+        agent["startedAt"] = now
+        if int(agent.get("lastStartedCycle", -1) or -1) != cycle:
+            agent["starts"] = int(agent.get("starts", 0) or 0) + 1
+            agent["lastStartedCycle"] = cycle
+    elif bucket == "done":
+        agent["completedAt"] = now
+        agent["lastCompletedAction"] = next_action
+        if int(agent.get("lastCompletedCycle", -1) or -1) != cycle:
+            agent["completions"] = int(agent.get("completions", 0) or 0) + 1
+            agent["lastCompletedCycle"] = cycle
+    elif bucket == "blocked":
+        agent["blockedAt"] = now
     if isinstance(data, dict):
         agent["data"] = data
     return rebuild_kanban(state)
@@ -176,10 +206,15 @@ def mark_agent(
 def start_cycle(state: dict[str, Any] | None) -> dict[str, Any]:
     state = ensure_agent_state(state)
     now = int(time.time())
+    state["cycle"] = int(state.get("cycle", 0) or 0) + 1
+    state["cycleStartedAt"] = now
     for agent in state["agents"].values():
-        agent["state"] = "todo"
-        agent["lastAction"] = "waiting"
-        agent["lastReason"] = ""
-        agent.pop("data", None)
-        agent["updatedAt"] = now
+        # A prior cycle cannot still be executing. Preserve its last completed
+        # or blocked result so operators can see what happened between cycles.
+        if str(agent.get("state", "todo") or "todo") == "doing":
+            agent["state"] = "todo"
+            agent["lastAction"] = "waiting"
+            agent["lastReason"] = ""
+            agent.pop("data", None)
+            agent["updatedAt"] = now
     return rebuild_kanban(state)

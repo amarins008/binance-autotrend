@@ -1,0 +1,53 @@
+{
+  "signal": "LONG",
+  "confidence": 0.6,
+  "timestamp": 1784353107.5743957,
+  "source": "tradingview-ta",
+  "metadata": {
+    "recommendation": "BUY",
+    "oscillators": {
+      "RECOMMENDATION": "BUY",
+      "BUY": 3,
+      "SELL": 0,
+      "NEUTRAL": 8,
+      "COMPUTE": {
+        "RSI": "NEUTRAL",
+        "STOCH.K": "NEUTRAL",
+        "CCI": "NEUTRAL",
+        "ADX": "NEUTRAL",
+        "AO": "BUY",
+        "Mom": "BUY",
+        "MACD": "BUY",
+        "Stoch.RSI": "NEUTRAL",
+        "W%R": "NEUTRAL",
+        "BBP": "NEUTRAL",
+        "UO": "NEUTRAL"
+      }
+    },
+    "moving_averages": {
+      "RECOMMENDATION": "BUY",
+      "BUY": 10,
+      "SELL": 4,
+      "NEUTRAL": 1,
+      "COMPUTE": {
+        "EMA10": "BUY",
+        "SMA10": "BUY",
+        "EMA20": "BUY",
+        "SMA20": "BUY",
+        "EMA30": "BUY",
+        "SMA30": "BUY",
+        "EMA50": "SELL",
+        "SMA50": "SELL",
+        "EMA100": "SELL",
+        "SMA100": "SELL",
+        "EMA200": "BUY",
+        "SMA200": "BUY",
+        "Ichimoku": "NEUTRAL",
+        "VWMA": "BUY",
+        "HullMA": "BUY"
+      }
+    },
+    "strength": 0.7647058823529411
+  },
+  "ts": 1784353107.5744305
+}

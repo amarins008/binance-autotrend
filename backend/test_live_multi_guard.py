@@ -1784,7 +1784,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         guardian = out["hermesAgents"]["agents"]["position_guardian"]
         self.assertEqual(guardian["state"], "done")
         self.assertEqual(guardian["lastAction"], "open positions heartbeat")
-        self.assertEqual(guardian["runs"], 7)
+        self.assertEqual(guardian["runs"], 8)
         self.assertTrue(guardian["data"]["heartbeat"])
         self.assertLessEqual(int(main.time.time()) - int(guardian["updatedAt"]), 2)
         self.assertNotIn("cmuxHandoff", out["hermesSupervisorReview"])

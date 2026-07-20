@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,21 @@ def _safe_name(value: str) -> str:
 
 def _today_key(ts: int | None = None) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(int(ts or time.time())))
+
+
+_SYMBOL_LOCKS: dict[str, threading.RLock] = {}
+_SYMBOL_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def per_symbol_lock(vault_dir: Path | str | None, symbol: str):
+    """Serialize read-modify-write work for one symbol within this process."""
+    root = Path(vault_dir) if vault_dir else VAULT_DIR
+    key = f"{root.resolve()}:{_safe_name(symbol).upper()}"
+    with _SYMBOL_LOCKS_GUARD:
+        lock = _SYMBOL_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        yield
 
 
 def _append_section(path: Path, heading: str, lines: list[str]) -> None:
@@ -255,6 +272,15 @@ class PerSymbolStorage:
             self._dir / "guardian_lock.json",
             json.dumps(out, ensure_ascii=False, indent=2, default=str),
         )
+
+    def delete_guardian_lock(self) -> None:
+        """Remove the per-symbol guardian lock file when position is closed."""
+        try:
+            path = self._dir / "guardian_lock.json"
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # TradingView signal cache (per-symbol)

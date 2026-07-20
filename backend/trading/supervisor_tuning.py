@@ -531,7 +531,7 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         min_loss_usdt = float(cfg.get("payoffLossGuardMinLossUsdt", 0.22) or 0.22)
         set_float("payoffLossGuardMinLossUsdt", max(0.12, min(min_loss_usdt, avg_win * 0.90)), 3)
         size_mult = float(cfg.get("supervisorSizeMultiplier", 1.0) or 1.0)
-        set_float("supervisorSizeMultiplier", max(0.65, min(size_mult, 0.85 - 0.10 * severity)), 3)
+        set_float("supervisorSizeMultiplier", max(0.70, min(size_mult, 0.85 - 0.10 * severity)), 3)
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
@@ -737,7 +737,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     set_float("earlyEntryMaxVwapDistancePct", min(float(cfg.get("earlyEntryMaxVwapDistancePct", 0.24) or 0.24), 0.18), 3)
     set_float("riskCooldownResumeScoreGapMin", min(2.60, max(float(cfg.get("riskCooldownResumeScoreGapMin", 2.0) or 2.0), 2.20 + 0.40 * severity)), 3)
     max_spread = float(cfg.get("maxSpreadBps", 22.0) or 22.0)
-    set_float("maxSpreadBps", max(10.0, min(max_spread, max_spread * (0.90 - 0.05 * severity))), 2)
+    set_float("maxSpreadBps", max(12.0, min(max_spread, max_spread * (0.90 - 0.05 * severity))), 2)
     if not bool(cfg.get("scanFallbackNearEnabled", True)):
         changes["scanFallbackNearEnabled"] = {"old": False, "new": True}
         cfg["scanFallbackNearEnabled"] = True

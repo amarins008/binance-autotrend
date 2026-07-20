@@ -4,6 +4,54 @@ import os
 
 from trading.presets import PRO_STANDALONE_PRESET
 
+# ── Schema version ────────────────────────────────────────────────────────
+# Bump this when you change default values that should override stale
+# snapshot config.  On the first restart after a bump, force-override keys
+# listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
+# the same version preserve user customizations from the dashboard.
+CONFIG_VERSION = 4
+
+# Keys that are force-overridden when _configVersion < CONFIG_VERSION.
+# After the override, users can still change these via the dashboard; the
+# override only fires on a version bump.
+_FORCE_DEFAULTS_V1: dict = {
+    # Guardian safety thresholds
+    "guardianMinHoldSec": 180,
+    "deadZoneExitSec": 600,
+    "preemptiveLossExitMinEntryPct": 0.50,
+    "preemptiveLossExitMinConfirmations": 2,
+    "strongFlipMinConfidence": 0.90,
+    # TV signal freshness
+    "tvStaleEntrySec": 120,
+    "tvExhaustionPenalty": 0.03,
+    "tradingviewConfidenceBoost": 0.08,
+    # Hold window
+    "holdMinConfidence": 0.78,
+    # Auto-enable TV after restart (user disabled → saved → re-enabled on bump)
+    "tradingviewEnabled": True,
+}
+_FORCE_DEFAULTS_V2: dict = {
+    # Enable TV-based early exit for Guardian (was disabled → Guardian never used TV)
+    "tradingviewEarlyExitEnabled": True,
+    "tradingviewEarlyExitMinStrength": 0.45,
+}
+_FORCE_DEFAULTS_V3: dict = {
+    # Entry quality: higher min confidence, fewer trades per hour
+    "minConfidence": 0.74,
+    "maxTradesPerHour": 5,
+}
+_FORCE_DEFAULTS_V4: dict = {
+    # Guardian: faster loss cut for 30+min bleeds
+    "deadZoneExitSec": 480,
+    "preemptiveLossExitMinEntryPct": 0.42,
+    "preemptiveLossExitMaxEntryPct": 0.75,
+    # Perf gate: lock out bad symbols sooner
+    "perfGateMinWinRatePct": 38.0,
+    "perfGateMinPnlUsdt": -0.40,
+    "perfGateEarlyMinWinRatePct": 35.0,
+    "perfGateEarlyMinPnlUsdt": -0.30,
+}
+
 
 def _normalize_config_symbol(symbol: str) -> str:
     return str(symbol or "").upper().replace("/", "").strip()
@@ -24,14 +72,14 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out = merge_preset(cfg, preset or "pro")
     out.setdefault("intervalSec", 25)
     out.setdefault("cooldownSec", 20)
-    out.setdefault("maxTradesPerHour", 8)
+    out.setdefault("maxTradesPerHour", 5)
     out.setdefault("allowFlip", False)
     out.setdefault("strongFlipEnabled", True)
-    out.setdefault("strongFlipMinConfidence", 0.76)
+    out.setdefault("strongFlipMinConfidence", 0.90)
     out.setdefault("strongFlipMinScoreGap", 1.5)
     out.setdefault("strongFlipUltraScoreGap", 2.2)
     out.setdefault("strongFlipUltraConfRelax", 0.08)
-    out.setdefault("minConfidence", 0.72)
+    out.setdefault("minConfidence", 0.74)
     out.setdefault("htfStrictEnabled", True)
     out.setdefault("htfMinStrength", 0.28)
     out.setdefault("requireVisionConsensus", False)
@@ -76,9 +124,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("holdWinners", True)
     out.setdefault("holdMinConfidence", 0.78)
     out.setdefault("holdTrailPct", 0.32)
-    out.setdefault("profitLockTriggerUsdt", 0.35)
-    out.setdefault("profitLockKeepUsdt", 0.15)
-    out.setdefault("profitLockMaxGivebackUsdt", 0.22)
+    out.setdefault("profitLockTriggerUsdt", 0.25)
+    out.setdefault("profitLockKeepUsdt", 0.10)
+    out.setdefault("profitLockMaxGivebackUsdt", 0.18)
     out.setdefault("payoffLossGuardEnabled", True)
     out.setdefault("payoffLossGuardMinTrades", 6)
     out.setdefault("payoffLossGuardWindowTrades", 8)
@@ -86,6 +134,40 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("payoffLossGuardLossToWinCap", 0.95)
     out.setdefault("payoffLossGuardMinLossUsdt", 0.18)
     out.setdefault("payoffLossGuardMaxLossUsdt", 0.75)
+    out.setdefault("preemptiveLossExitEnabled", True)
+    out.setdefault("preemptiveLossExitMinConfidence", 0.55)
+    out.setdefault("preemptiveLossExitMinEntryPct", 0.50)
+    out.setdefault("preemptiveLossExitMaxEntryPct", 0.85)
+    out.setdefault("preemptiveLossExitMinConfirmations", 2)
+    out.setdefault("swingDecelerationEnabled", True)
+    out.setdefault("tryGreenExitEnabled", True)
+    out.setdefault("tryGreenExitMinProfitUsdt", 0.06)
+    out.setdefault("tryGreenExitMaxProfitUsdt", 0.15)
+    out.setdefault("tryGreenExitMinPriorLossUsdt", 0.20)
+    out.setdefault("tryGreenExitMinRecoveryPct", 0.70)
+    out.setdefault("guardianMinHoldSec", 180)
+    out.setdefault("deadZoneExitSec", 600)
+    # ── Guardian: proactive trail + TP extension (Improvement 1) ──
+    out.setdefault("proactiveTrailEnabled", True)
+    out.setdefault("proactiveTrailMinProfitPct", 0.25)
+    out.setdefault("proactiveTrailStepPct", 0.12)
+    out.setdefault("proactiveTrailMaxSlFromEntryPct", 0.40)
+    out.setdefault("proactiveTrailTpExtendPct", 0.08)
+    # ── Guardian: adaptive preemptive exit (Improvement 2) ──
+    out.setdefault("preemptiveExitAdaptiveEnabled", True)
+    out.setdefault("preemptiveExitHighConfMinEntryPct", 0.15)
+    out.setdefault("preemptiveExitHighConfThreshold", 0.75)
+    out.setdefault("preemptiveExitVolumeConfirmEnabled", True)
+    out.setdefault("preemptiveExitRecoveryPenaltyPct", 0.12)
+    # ── Guardian: swing peak detection (Improvement 3) ──
+    out.setdefault("swingPeakDetectionEnabled", True)
+    out.setdefault("swingPeakLookbackCycles", 8)
+    out.setdefault("swingPeakRsiOverbought", 72)
+    out.setdefault("swingPeakRsiOversold", 38)
+    out.setdefault("swingPeakBbUpperPct", 0.78)
+    out.setdefault("swingPeakBbLowerPct", 0.22)
+    out.setdefault("swingPeakMinProfitUsdt", 0.08)
+    out.setdefault("swingPeakMomDecelThreshold", 0.30)
     out.setdefault("slCandleAdaptiveEnabled", True)
     out.setdefault("slCandleLookback", 5)
     out.setdefault("candlePatternLookback", 5)
@@ -93,8 +175,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tpSlTargetUsdtEnabled", True)
     out.setdefault("tpTargetMinUsdt", 0.55)
     out.setdefault("tpTargetMaxUsdt", 2.2)
-    out.setdefault("feeMinNetProfitUSDT", 0.1)
-    out.setdefault("feeMinEdgeVsCostMultiple", 1.55)
+    out.setdefault("feeMinNetProfitUSDT", 0.06)
+    out.setdefault("feeMinEdgeVsCostMultiple", 1.35)
     out.setdefault("feeMinOrderUsdt", 20.0)
     out.setdefault("tradeNotionalCapUsdt", 80.0)
     out.setdefault("autoScanTradeNotionalCapUsdt", 80.0)
@@ -124,7 +206,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("volumeSpikeThreshold", 3.0)  # Volume spike threshold (multiple of average)
     out.setdefault("wickRejectionThreshold", 0.4)  # Wick size threshold for rejection detection
     out.setdefault("keyLevelBuffer", 0.08)  # Buffer around key levels (BB extremes)
-    out.setdefault("orderFlowConfirmation", True)  # Require order flow confirmation
+    out.setdefault("orderFlowConfirmation", False)  # Require order flow confirmation (disabled: too aggressive)
     out.setdefault("minOrderFlowImbalance", 0.03)  # Minimum order flow imbalance for confirmation
     out.setdefault("tradingviewEnabled", False)  # TradingView MCP integration
     # Allow enabling TradingView MCP via env var (set by Start Binance AutoTrade.bat).
@@ -140,8 +222,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewCacheTtl", 60)  # Cache TTL in seconds
     out.setdefault("tradingviewRateLimit", 30)  # Rate limit per minute
     out.setdefault("tradingviewTimeout", 5.0)  # API timeout in seconds
-    out.setdefault("tradingviewConfidenceBoost", 0.05)  # Confidence boost on confirmation
+    out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
     out.setdefault("tradingviewMaxFailures", 5)  # Max failures before auto-disable
+    out.setdefault("tvStaleEntrySec", 120)  # TV signal age limit for entry boost (seconds)
+    out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)
     # TradingView position management (global defaults)
     out.setdefault("tradingviewTpExtensionEnabled", False)  # Enable TP extension based on TradingView
     out.setdefault("tradingviewTpExtensionMinStrength", 0.7)  # Min strength for TP extension
@@ -151,8 +235,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewSlTrailingMinStrength", 0.6)  # Min strength for SL trailing
     out.setdefault("tradingviewSlTrailingBasePct", 0.15)  # Base SL trailing percentage
     out.setdefault("tradingviewSlTrailingMaxPct", 0.3)  # Max SL trailing percentage
-    out.setdefault("tradingviewEarlyExitEnabled", False)  # Enable early exit based on TradingView
-    out.setdefault("tradingviewEarlyExitMinStrength", 0.7)  # Min strength for early exit
+    out.setdefault("tradingviewEarlyExitEnabled", True)  # Enable early exit based on TradingView
+    out.setdefault("tradingviewEarlyExitMinStrength", 0.45)  # Min strength for early exit (TV rarely >0.7)
     # Per-symbol overrides (optional - overrides global defaults)
     out.setdefault("tradingviewTpExtensionOverride", {})  # {"BTCUSDT": True, "ETHUSDT": False}
     out.setdefault("tradingviewSlTrailingOverride", {})  # {"BTCUSDT": True, "ETHUSDT": False}
@@ -314,4 +398,26 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     except Exception:
         out["strongFlipUltraScoreGap"] = 2.2
     out["engineVersion"] = "pro-2.1"  # Updated version for adaptive improvements
+    # ── Force-override stale snapshot config on version bump ───────────────
+    # When CONFIG_VERSION increases, keys in _FORCE_DEFAULTS_VN are
+    # overwritten to their new defaults — regardless of what the snapshot
+    # had stored.  The snapshot is then saved with the new version so the
+    # override only fires once (the first restart after a code update).
+    try:
+        _stored_ver = int(out.get("_configVersion", 0) or 0)
+    except (TypeError, ValueError):
+        _stored_ver = 0
+    if _stored_ver < CONFIG_VERSION:
+        for _fk, _fv in _FORCE_DEFAULTS_V1.items():
+            out[_fk] = _fv
+        if _stored_ver < 2:
+            for _fk, _fv in _FORCE_DEFAULTS_V2.items():
+                out[_fk] = _fv
+        if _stored_ver < 3:
+            for _fk, _fv in _FORCE_DEFAULTS_V3.items():
+                out[_fk] = _fv
+        if _stored_ver < 4:
+            for _fk, _fv in _FORCE_DEFAULTS_V4.items():
+                out[_fk] = _fv
+        out["_configVersion"] = CONFIG_VERSION
     return out

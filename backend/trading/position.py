@@ -83,9 +83,9 @@ def should_extend_tp_with_tradingview(side: str, tv_guidance: Optional[Dict[str,
     
     rec = tv_guidance.get("recommendation")
     strength = tv_guidance.get("strength", 0.0)
-    min_strength = float(cfg.get("tradingviewTpExtensionMinStrength", 0.7))
+    min_strength = float(cfg.get("tradingviewTpExtensionMinStrength", 0.45))
     
-    # Extend TP if TradingView strongly confirms
+    # Extend TP if TradingView confirms direction (lowered threshold for TV data)
     if side == "LONG" and rec in ("STRONG_BUY", "BUY") and strength >= min_strength:
         return True
     if side == "SHORT" and rec in ("STRONG_SELL", "SELL") and strength >= min_strength:
@@ -114,7 +114,7 @@ def should_trail_sl_with_tradingview(side: str, tv_guidance: Optional[Dict[str, 
     
     rec = tv_guidance.get("recommendation")
     strength = tv_guidance.get("strength", 0.0)
-    min_strength = float(cfg.get("tradingviewSlTrailingMinStrength", 0.6))
+    min_strength = float(cfg.get("tradingviewSlTrailingMinStrength", 0.45))
     
     # Trail SL if TradingView still confirms the direction
     if side == "LONG" and rec in ("STRONG_BUY", "BUY", "NEUTRAL") and strength >= min_strength:
@@ -145,21 +145,24 @@ def should_exit_early_with_tradingview(side: str, tv_guidance: Optional[Dict[str
     
     rec = tv_guidance.get("recommendation")
     strength = tv_guidance.get("strength", 0.0)
-    min_strength = float(cfg.get("tradingviewEarlyExitMinStrength", 0.7))
+    min_strength = float(cfg.get("tradingviewEarlyExitMinStrength", 0.45))
     opp = "SHORT" if side == "LONG" else "LONG"
-    
-    # Exit early if TradingView strongly reverses
+
+    # Exit early if TradingView reverses (lowered threshold — TV rarely >0.7)
     if rec in (opp, f"STRONG_{opp}") and strength >= min_strength:
         return True
-    
+
+    # Also exit if TV confidence is high enough and signal is opposite
+    if strength >= 0.6 and rec == opp:
+        return True
+
     # Check for divergence in oscillators
     oscillators = tv_guidance.get("oscillators", {})
     if oscillators:
-        # Simple divergence check: if RSI is overbought/oversold but price still going
         rsi = oscillators.get("RSI", 50)
-        if side == "LONG" and rsi > 70 and strength >= min_strength:
+        if side == "LONG" and rsi > 65 and strength >= min_strength:
             return True
-        if side == "SHORT" and rsi < 30 and strength >= min_strength:
+        if side == "SHORT" and rsi < 35 and strength >= min_strength:
             return True
     
     return False

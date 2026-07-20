@@ -18,8 +18,36 @@ from trading.position import (
     should_trail_sl_with_tradingview,
 )
 from trading.tradingview_mcp import get_tv_mcp, async_get_position_guidance
+from trading.per_symbol_storage import PerSymbolStorage
 
 AUTO_TRADE = app_state.AUTO_TRADE
+
+
+def _persist_tv_signal(symbol: str, guidance: dict) -> None:
+    """Persist TradingView signal to per-symbol disk so restarts don't lose TV data."""
+    try:
+        from services.config_paths import VAULT_DIR
+        sym = str(symbol).upper().strip()
+        if not sym:
+            return
+        storage = PerSymbolStorage(str(VAULT_DIR), sym)
+        # Convert guidance dict to signal format
+        signal = {
+            "signal": guidance.get("signal", "WAIT"),
+            "confidence": guidance.get("confidence", 0.0),
+            "strength": guidance.get("strength", 0.0),
+            "source": "tradingview-ta",
+            "metadata": {
+                "recommendation": guidance.get("recommendation", ""),
+                "oscillators": guidance.get("oscillators", {}),
+                "moving_averages": guidance.get("moving_averages", {}),
+                "strength": guidance.get("strength", 0.0),
+            },
+            "timestamp": guidance.get("timestamp", time.time()),
+        }
+        storage.save_tv_signal(signal)
+    except Exception:
+        pass
 
 
 def _main():
@@ -74,8 +102,8 @@ async def fetch_mark_price(*args, **kwargs):
 async def _current_position_amount(*args, **kwargs):
     return await _main()._current_position_amount(*args, **kwargs)
 
-async def _close_position_one_side(*args, **kwargs):
-    return await _main()._close_position_one_side(*args, **kwargs)
+async def _close_position_one_side(*args, reason: str = "LIVE_CUT_LOSING_SIDE", **kwargs):
+    return await _main()._close_position_one_side(*args, reason=reason, **kwargs)
 
 async def place_futures_order(*args, **kwargs):
     return await _main().place_futures_order(*args, **kwargs)
@@ -204,24 +232,25 @@ def _should_hold_winner(side: str, intel: dict | None, cfg: dict, hold_min_conf:
         return False
     sig = str(intel.get("signal", "WAIT")).upper()
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.72))
+    min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55))
     if sig != side or conf < min_conf:
         return False
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
     mom = float(ex.get("momentumPct", 0.0) or 0.0)
-    # Keep running only when momentum is clearly supporting the current side.
-    # Use a minimum momentum threshold to avoid holding on weak momentum.
-    min_momentum = float(cfg.get("holdMinMomentumPct", 0.30) or 0.30)
+    min_momentum = float(cfg.get("holdMinMomentumPct", 0.15) or 0.15)
     return (side == "LONG" and mom >= min_momentum) or (side == "SHORT" and mom <= -min_momentum)
 
-async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None) -> tuple[float, float]:
+async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None, _tv_guidance: dict | None = None) -> tuple[float, float]:
     t = max(0.05, float(trail_pct))
     
     # Get TradingView guidance for SL trailing if enabled
     if cfg and symbol and cfg.get("tradingviewEnabled", False):
         try:
-            tv_client = get_tv_mcp(cfg)
-            tv_guidance = await async_get_position_guidance(tv_client, symbol, side)
+            # Use pre-fetched guidance from Phase 3.5 if available
+            tv_guidance = _tv_guidance
+            if tv_guidance is None:
+                tv_client = get_tv_mcp(cfg)
+                tv_guidance = await async_get_position_guidance(tv_client, symbol, side)
             if tv_guidance and should_trail_sl_with_tradingview(side, tv_guidance, cfg, symbol):
                 tv_trail_pct = get_tradingview_sl_trailing_pct(side, tv_guidance, cfg)
                 t = max(t, tv_trail_pct)  # Use the larger trail percentage
@@ -251,7 +280,7 @@ def _strong_reversal_exit(side: str, intel: dict | None, cfg: dict) -> tuple[boo
     if sig != opposite:
         return False, ""
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    min_conf = float(cfg.get("strongFlipMinConfidence", 0.82) or 0.82)
+    min_conf = float(cfg.get("strongFlipMinConfidence", 0.90) or 0.90)
     if conf < min_conf:
         return False, ""
     px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
@@ -362,7 +391,7 @@ def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_m
     if sig != current_side:
         return False, ""
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    base_min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.72) or 0.72)
+    base_min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55) or 0.55)
     min_conf = max(base_min_conf, float(cfg.get("tpExtendMinConfidence", 0.78) or 0.78))
     if conf < min_conf:
         return False, ""
@@ -380,7 +409,524 @@ def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_m
         return False, ""
     return True, f"{current_side} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}%"
 
-async def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: float, old_sl: float, cfg: dict, symbol: str = None, hold_trail_pct: float | None = None) -> tuple[float, float, bool]:
+
+def _momentum_deceleration_detected(side: str, intel: dict | None, cfg: dict, st: dict) -> tuple[bool, str]:
+    """Detect momentum deceleration across guardian cycles."""
+    if not bool(cfg.get("swingDecelerationEnabled", True)):
+        return False, ""
+    if not isinstance(intel, dict):
+        return False, ""
+
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+    conf = float(intel.get("confidence", 0.0) or 0.0)
+
+    prev_conf = float(st.get("lastConfidence", 0.0) or 0.0)
+    prev_mom = float(st.get("lastMomentumPct", 0.0) or 0.0)
+
+    if prev_conf == 0.0 and prev_mom == 0.0:
+        return False, ""
+
+    conf_drop = prev_conf - conf
+    significant_conf_drop = conf_drop >= 0.08
+
+    mom_reversed = False
+    if side == "LONG":
+        mom_reversed = prev_mom > 0.05 and mom < -0.05
+    else:
+        mom_reversed = prev_mom < -0.05 and mom > 0.05
+
+    mom_decel = False
+    if side == "LONG":
+        mom_decel = prev_mom > 0.1 and mom < prev_mom * 0.3
+    else:
+        mom_decel = prev_mom < -0.1 and mom > prev_mom * 0.3
+
+    if not (significant_conf_drop or mom_reversed or mom_decel):
+        return False, ""
+
+    parts = []
+    if significant_conf_drop:
+        parts.append(f"conf_drop={conf_drop:.3f}")
+    if mom_reversed:
+        parts.append(f"mom_reversed prev={prev_mom:.3f} now={mom:.3f}")
+    if mom_decel:
+        parts.append(f"mom_decel prev={prev_mom:.3f} now={mom:.3f}")
+    return True, " ".join(parts)
+
+
+def _preemptive_loss_exit(side: str, intel: dict | None, cfg: dict, upnl: float, mark: float, entry: float, sl: float, notional: float, st: dict, decel_reason: str = "") -> tuple[bool, str]:
+    """Exit early from a losing position when signal weakens before full SL hit."""
+    if not bool(cfg.get("preemptiveLossExitEnabled", True)):
+        return False, ""
+    if upnl >= 0:
+        return False, ""
+    if not isinstance(intel, dict):
+        return False, ""
+
+    sig = str(intel.get("signal", "WAIT")).upper()
+    conf = float(intel.get("confidence", 0.0) or 0.0)
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+
+    sig_against = (side == "LONG" and sig in ("SHORT", "WAIT")) or (side == "SHORT" and sig in ("LONG", "WAIT"))
+    if not sig_against:
+        return False, ""
+
+    min_conf = float(cfg.get("preemptiveLossExitMinConfidence", 0.55) or 0.55)
+    if conf < min_conf:
+        return False, ""
+
+    sl_dist = abs(entry - sl) if entry > 0 and sl > 0 else 0
+    if sl_dist <= 0:
+        return False, ""
+    qty_abs = abs(float(st.get("qty", 1.0) or 1.0))
+    total_sl_loss = sl_dist * qty_abs
+    if total_sl_loss <= 0:
+        return False, ""
+    loss_vs_sl = abs(upnl) / total_sl_loss
+    min_entry = float(cfg.get("preemptiveLossExitMinEntryPct", 0.50) or 0.50)
+    max_entry = float(cfg.get("preemptiveLossExitMaxEntryPct", 0.85) or 0.85)
+    if loss_vs_sl < min_entry or loss_vs_sl > max_entry:
+        return False, ""
+
+    px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
+    confirms = 0
+    if px:
+        if side == "LONG":
+            if px.get("macdBearish") or px.get("macdCrossDn"):
+                confirms += 1
+            if px.get("trendDown") or px.get("trendDnPartial"):
+                confirms += 1
+            try:
+                if float(px.get("bbPctB", 0.5)) < 0.35:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(px.get("rsi14", 50)) < 45:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+        else:
+            if px.get("macdBullish") or px.get("macdCrossUp"):
+                confirms += 1
+            if px.get("trendUp") or px.get("trendUpPartial"):
+                confirms += 1
+            try:
+                if float(px.get("bbPctB", 0.5)) > 0.65:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(px.get("rsi14", 50)) > 55:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+
+    min_confirms = int(cfg.get("preemptiveLossExitMinConfirmations", 2) or 2)
+    if confirms < min_confirms:
+        return False, ""
+
+    reason = f"sig={sig} c={conf:.3f} mom={mom:.3f}% sl_hit={loss_vs_sl:.0%} confirms={confirms}"
+    if decel_reason:
+        reason += f" decel=[{decel_reason}]"
+    return True, reason
+
+
+def _try_green_exit(side: str, upnl: float, st: dict, fee_min: float, cfg: dict) -> tuple[bool, str]:
+    """Detect when a position bounced from loss to small profit — exit to lock green."""
+    if not bool(cfg.get("tryGreenExitEnabled", True)):
+        return False, ""
+
+    min_profit = float(cfg.get("tryGreenExitMinProfitUsdt", 0.06) or 0.06)
+    max_profit = float(cfg.get("tryGreenExitMaxProfitUsdt", 0.15) or 0.15)
+    if upnl < min_profit or upnl > max_profit:
+        return False, ""
+
+    lowest = float(st.get("lowestLoss", 0.0) or 0.0)
+    min_prior_loss = float(cfg.get("tryGreenExitMinPriorLossUsdt", 0.20) or 0.20)
+    if lowest >= -min_prior_loss:
+        return False, ""
+
+    loss_range = abs(lowest)
+    if loss_range <= 0:
+        return False, ""
+    recovery_pct = upnl / loss_range
+    min_recovery = float(cfg.get("tryGreenExitMinRecoveryPct", 0.70) or 0.70)
+    if recovery_pct < min_recovery:
+        return False, ""
+
+    last_sig = str(st.get("lastSignal", "WAIT")).upper()
+    last_mom = float(st.get("lastMomentumPct", 0.0) or 0.0)
+    sig_against = (side == "LONG" and last_sig in ("SHORT", "WAIT")) or (side == "SHORT" and last_sig in ("LONG", "WAIT"))
+    mom_against = (side == "LONG" and last_mom < 0) or (side == "SHORT" and last_mom > 0)
+    # Require BOTH signal and momentum against — not just one
+    if not (sig_against and mom_against):
+        return False, ""
+
+    if upnl <= fee_min * 1.5:
+        return False, ""
+
+    return True, f"lowest={lowest:.3f} recovery={recovery_pct:.0%} pnl={upnl:.3f} sig={last_sig} mom={last_mom:.3f}%"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Improvement 1: Proactive Trail — trail SL + extend TP when in profit
+# ═══════════════════════════════════════════════════════════════════════
+
+def _proactive_trail_in_profit(
+    side: str, mark: float, entry: float, upnl: float,
+    old_tp: float, old_sl: float, notional: float,
+    cfg: dict, intel: dict | None, st: dict,
+) -> tuple[bool, float, float, str]:
+    """Trail SL up and optionally extend TP when signal is strong + position is in profit.
+
+    Unlike the reactive extend (which only fires on hit_tp), this proactively
+    adjusts levels every cycle while the position is profitable and the signal
+    remains strong.  Returns (changed, new_tp, new_sl, reason).
+    """
+    if not bool(cfg.get("proactiveTrailEnabled", True)):
+        return False, old_tp, old_sl, ""
+
+    side = str(side or "").upper()
+    if side not in ("LONG", "SHORT") or mark <= 0 or entry <= 0:
+        return False, old_tp, old_sl, ""
+
+    # Must be in profit above the minimum threshold
+    min_profit_pct = float(cfg.get("proactiveTrailMinProfitPct", 0.25) or 0.25)
+    profit_pct = ((mark - entry) / entry * 100.0) if side == "LONG" else ((entry - mark) / entry * 100.0)
+    if profit_pct < min_profit_pct:
+        return False, old_tp, old_sl, ""
+
+    # Signal must be strongly aligned
+    if not isinstance(intel, dict):
+        return False, old_tp, old_sl, ""
+    sig = str(intel.get("signal", "WAIT")).upper()
+    conf = float(intel.get("confidence", 0.0) or 0.0)
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+
+    aligned = (side == "LONG" and sig == "LONG" and mom > 0) or (side == "SHORT" and sig == "SHORT" and mom < 0)
+    min_conf = float(cfg.get("holdMinConfidence", 0.55) or 0.55)
+    if not (aligned and conf >= min_conf):
+        return False, old_tp, old_sl, ""
+
+    # Compute trail step — scale with profit (more profit = tighter trail)
+    step_pct = float(cfg.get("proactiveTrailStepPct", 0.12) or 0.12)
+    # Dynamic step: tighten as profit grows
+    if profit_pct > 1.0:
+        step_pct *= 0.8
+    if profit_pct > 2.0:
+        step_pct *= 0.7
+
+    # Cap SL distance from entry
+    max_sl_from_entry = float(cfg.get("proactiveTrailMaxSlFromEntryPct", 0.40) or 0.40)
+
+    new_tp = old_tp
+    new_sl = old_sl
+    changed = False
+
+    if side == "LONG":
+        # Trail SL up: max of current SL, mark - step, entry * (1 - max_sl)
+        candidate_sl = max(
+            old_sl,
+            mark * (1 - step_pct / 100.0),
+            entry * (1 - max_sl_from_entry / 100.0),
+        )
+        # Never trail SL above entry until profit is substantial (> 0.5%)
+        if profit_pct < 0.5:
+            candidate_sl = min(candidate_sl, entry)
+        if candidate_sl > old_sl + 1e-12:
+            new_sl = candidate_sl
+            changed = True
+        # Extend TP slightly to capture more upside
+        tp_extend = float(cfg.get("proactiveTrailTpExtendPct", 0.08) or 0.08)
+        cap_tp = entry * (1 + max(1.8, profit_pct * 2.5) / 100.0)
+        candidate_tp = min(max(old_tp, mark * (1 + tp_extend / 100.0)), cap_tp)
+        if candidate_tp > old_tp + 1e-12:
+            new_tp = candidate_tp
+            changed = True
+    else:
+        # SHORT — mirror logic
+        candidate_sl = min(
+            old_sl,
+            mark * (1 + step_pct / 100.0),
+            entry * (1 + max_sl_from_entry / 100.0),
+        )
+        if profit_pct < 0.5:
+            candidate_sl = max(candidate_sl, entry)
+        if candidate_sl < old_sl - 1e-12:
+            new_sl = candidate_sl
+            changed = True
+        tp_extend = float(cfg.get("proactiveTrailTpExtendPct", 0.08) or 0.08)
+        cap_tp = entry * (1 - max(1.8, profit_pct * 2.5) / 100.0)
+        candidate_tp = max(min(old_tp, mark * (1 - tp_extend / 100.0)), cap_tp)
+        if candidate_tp < old_tp - 1e-12:
+            new_tp = candidate_tp
+            changed = True
+
+    if changed:
+        reason = f"profit={profit_pct:.2f}% c={conf:.3f} mom={mom:.3f}% sl={new_sl:.6f} tp={new_tp:.6f}"
+        return True, new_tp, new_sl, reason
+    return False, old_tp, old_sl, ""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Improvement 2: Adaptive Preemptive Exit — smarter dip vs reversal
+# ═══════════════════════════════════════════════════════════════════════
+
+def _adaptive_preemptive_exit(
+    side: str, intel: dict | None, cfg: dict,
+    upnl: float, mark: float, entry: float, sl: float,
+    notional: float, st: dict, decel_reason: str = "",
+) -> tuple[bool, str]:
+    """Improved preemptive exit with adaptive thresholds and dip vs reversal detection.
+
+    Key improvements over _preemptive_loss_exit:
+    1. Adaptive min_entry: high-confidence signals can exit earlier (15% of SL)
+    2. Dip detection: checks if price is recovering (momentum turning) → skip exit
+    3. Volume/candle confirmation: requires more evidence for small losses
+    4. Recovery penalty: if UPnL is improving, raise the bar for exit
+    """
+    if not bool(cfg.get("preemptiveExitAdaptiveEnabled", True)):
+        # Fall back to original function
+        return _preemptive_loss_exit(side, intel, cfg, upnl, mark, entry, sl, notional, st, decel_reason)
+
+    if upnl >= 0:
+        return False, ""
+    if not isinstance(intel, dict):
+        return False, ""
+
+    sig = str(intel.get("signal", "WAIT")).upper()
+    conf = float(intel.get("confidence", 0.0) or 0.0)
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+
+    sig_against = (side == "LONG" and sig in ("SHORT", "WAIT")) or (side == "SHORT" and sig in ("LONG", "WAIT"))
+    if not sig_against:
+        return False, ""
+
+    # ── Adaptive threshold: high confidence → lower min_entry ──
+    high_conf_threshold = float(cfg.get("preemptiveExitHighConfThreshold", 0.75) or 0.75)
+    high_conf_min_entry = float(cfg.get("preemptiveExitHighConfMinEntryPct", 0.15) or 0.15)
+    default_min_entry = float(cfg.get("preemptiveLossExitMinEntryPct", 0.50) or 0.50)
+    max_entry = float(cfg.get("preemptiveLossExitMaxEntryPct", 0.85) or 0.85)
+
+    min_entry = high_conf_min_entry if conf >= high_conf_threshold else default_min_entry
+
+    min_conf = float(cfg.get("preemptiveLossExitMinConfidence", 0.55) or 0.55)
+    if conf < min_conf:
+        return False, ""
+
+    sl_dist = abs(entry - sl) if entry > 0 and sl > 0 else 0
+    if sl_dist <= 0:
+        return False, ""
+    qty_abs = abs(float(st.get("qty", 1.0) or 1.0))
+    total_sl_loss = sl_dist * qty_abs
+    if total_sl_loss <= 0:
+        return False, ""
+    loss_vs_sl = abs(upnl) / total_sl_loss
+    if loss_vs_sl < min_entry or loss_vs_sl > max_entry:
+        return False, ""
+
+    # ── Dip detection: if momentum is recovering, this might be a dip ──
+    prev_mom = float(st.get("lastMomentumPct", 0.0) or 0.0)
+    mom_turning = False
+    if side == "LONG":
+        # Was negative, now less negative or positive → recovering
+        mom_turning = prev_mom < -0.05 and mom > prev_mom * 0.5
+    else:
+        mom_turning = prev_mom > 0.05 and mom < prev_mom * 0.5
+
+    if mom_turning:
+        # Momentum is recovering — this looks like a dip, not a reversal
+        # Require higher evidence to exit
+        recovery_penalty = float(cfg.get("preemptiveExitRecoveryPenaltyPct", 0.12) or 0.12)
+        min_entry = min_entry + recovery_penalty
+        if loss_vs_sl < min_entry:
+            return False, ""
+
+    # ── Indicator confirmations ──
+    px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
+    confirms = 0
+    if px:
+        if side == "LONG":
+            if px.get("macdBearish") or px.get("macdCrossDn"):
+                confirms += 1
+            if px.get("trendDown") or px.get("trendDnPartial"):
+                confirms += 1
+            try:
+                if float(px.get("bbPctB", 0.5)) < 0.35:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(px.get("rsi14", 50)) < 45:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+        else:
+            if px.get("macdBullish") or px.get("macdCrossUp"):
+                confirms += 1
+            if px.get("trendUp") or px.get("trendUpPartial"):
+                confirms += 1
+            try:
+                if float(px.get("bbPctB", 0.5)) > 0.65:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(px.get("rsi14", 50)) > 55:
+                    confirms += 1
+            except (TypeError, ValueError):
+                pass
+
+    # Adaptive min_confirmations: small loss needs more evidence
+    base_min_confirms = int(cfg.get("preemptiveLossExitMinConfirmations", 2) or 2)
+    if loss_vs_sl < 0.40:
+        # Small loss — require extra confirmation to avoid premature exit
+        min_confirms = base_min_confirms + 1
+    else:
+        min_confirms = base_min_confirms
+
+    if confirms < min_confirms:
+        return False, ""
+
+    reason = f"sig={sig} c={conf:.3f} mom={mom:.3f}% sl_hit={loss_vs_sl:.0%} confirms={confirms} adaptive_min={min_entry:.2f}"
+    if mom_turning:
+        reason += " [detection: dip-confirmed]"
+    if decel_reason:
+        reason += f" decel=[{decel_reason}]"
+    return True, reason
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Improvement 3: Swing Peak Detection — close at detected local tops
+# ═══════════════════════════════════════════════════════════════════════
+
+def _swing_peak_detection(
+    side: str, upnl: float, peak: float, mark: float, entry: float,
+    notional: float, cfg: dict, intel: dict | None, st: dict,
+) -> tuple[bool, str]:
+    """Detect when position is near a local swing peak and should close.
+
+    Uses multi-factor confluence:
+    1. UPnL near peak (within 85% of highest seen)
+    2. Momentum decelerating or reversed
+    3. RSI overbought/oversold from intel
+    4. BB near upper/lower band from intel
+    5. Signal confidence dropping from previous cycle
+
+    Returns (should_close, reason).
+    """
+    if not bool(cfg.get("swingPeakDetectionEnabled", True)):
+        return False, ""
+
+    side = str(side or "").upper()
+    if side not in ("LONG", "SHORT"):
+        return False, ""
+
+    # Must be in profit
+    min_profit = float(cfg.get("swingPeakMinProfitUsdt", 0.08) or 0.08)
+    if upnl < min_profit:
+        return False, ""
+
+    # Must have a meaningful peak to compare against
+    if peak <= 0 or peak < min_profit:
+        return False, ""
+
+    # UPnL should be near the peak (within 85%)
+    near_peak_ratio = upnl / peak if peak > 0 else 0
+    if near_peak_ratio < 0.80:
+        return False, ""
+
+    if not isinstance(intel, dict):
+        return False, ""
+
+    px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    conf = float(intel.get("confidence", 0.0) or 0.0)
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+    prev_conf = float(st.get("lastConfidence", 0.0) or 0.0)
+    prev_mom = float(st.get("lastMomentumPct", 0.0) or 0.0)
+
+    # ── Factor 1: Momentum deceleration ──
+    mom_decel = False
+    decel_threshold = float(cfg.get("swingPeakMomDecelThreshold", 0.30) or 0.30)
+    if side == "LONG":
+        mom_decel = prev_mom > 0.05 and mom < prev_mom * decel_threshold
+    else:
+        mom_decel = prev_mom < -0.05 and mom > prev_mom * decel_threshold
+
+    # ── Factor 2: RSI extreme ──
+    rsi_extreme = False
+    rsi_overbought = float(cfg.get("swingPeakRsiOverbought", 72) or 72)
+    rsi_oversold = float(cfg.get("swingPeakRsiOversold", 28) or 28)
+    try:
+        rsi = float(px.get("rsi14", 50.0) or 50.0)
+        if side == "LONG" and rsi >= rsi_overbought:
+            rsi_extreme = True
+        if side == "SHORT" and rsi <= rsi_oversold:
+            rsi_extreme = True
+    except (TypeError, ValueError):
+        pass
+
+    # ── Factor 3: BB extreme ──
+    bb_extreme = False
+    bb_upper = float(cfg.get("swingPeakBbUpperPct", 0.88) or 0.88)
+    bb_lower = float(cfg.get("swingPeakBbLowerPct", 0.12) or 0.12)
+    try:
+        bb = float(px.get("bbPctB", 0.5) or 0.5)
+        if side == "LONG" and bb >= bb_upper:
+            bb_extreme = True
+        if side == "SHORT" and bb <= bb_lower:
+            bb_extreme = True
+    except (TypeError, ValueError):
+        pass
+
+    # ── Factor 4: Confidence dropping ──
+    conf_dropping = False
+    if prev_conf > 0:
+        conf_drop = prev_conf - conf
+        conf_dropping = conf_drop >= 0.05
+
+    # ── Factor 5: Momentum direction against position ──
+    mom_against = False
+    if side == "LONG":
+        mom_against = mom < -0.02
+    else:
+        mom_against = mom > 0.02
+
+    # ── Scoring: need at least 2 of 5 factors ──
+    factors = [mom_decel, rsi_extreme, bb_extreme, conf_dropping, mom_against]
+    score = sum(1 for f in factors if f)
+
+    # Require more factors if profit is small
+    min_score = 2
+    if upnl < float(cfg.get("swingPeakMinProfitUsdt", 0.08) or 0.08) * 2:
+        min_score = 3
+
+    if score < min_score:
+        return False, ""
+
+    parts = []
+    if mom_decel:
+        parts.append(f"mom_decel prev={prev_mom:.3f} now={mom:.3f}")
+    if rsi_extreme:
+        parts.append(f"rsi_extreme={rsi:.1f}")
+    if bb_extreme:
+        parts.append(f"bb_extreme={bb:.2f}")
+    if conf_dropping:
+        parts.append(f"conf_drop={prev_conf:.3f}→{conf:.3f}")
+    if mom_against:
+        parts.append(f"mom_against={mom:.3f}%")
+
+    reason = f"swing_peak score={score}/{len(factors)} near_peak={near_peak_ratio:.0%} pnl={upnl:.3f} peak={peak:.3f} [{', '.join(parts)}]"
+    return True, reason
+
+
+async def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: float, old_sl: float, cfg: dict, symbol: str = None, hold_trail_pct: float | None = None, _tv_guidance: dict | None = None) -> tuple[float, float, bool]:
     current_side = str(side or "").upper()
     mark = float(mark or 0.0)
     entry = float(entry or 0.0)
@@ -390,8 +936,8 @@ async def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: flo
         return old_tp, old_sl, False
     
     # Get TradingView guidance if enabled
-    tv_guidance = None
-    if symbol and cfg.get("tradingviewEnabled", False):
+    tv_guidance = _tv_guidance
+    if tv_guidance is None and symbol and cfg.get("tradingviewEnabled", False):
         try:
             tv_client = get_tv_mcp(cfg)
             tv_guidance = await async_get_position_guidance(tv_client, symbol, current_side)
@@ -470,7 +1016,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
     now = int(time.time())
     live_keys = set()
     tp_max = max(0.15, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
-    hold_min_conf = float(cfg.get("holdMinConfidence", 0.72) or 0.72)
+    hold_min_conf = float(cfg.get("holdMinConfidence", 0.55) or 0.55)
     close_decisions: list[str] = []  # Req 9
     _closed_symbols: set[str] = set()  # Double-close guard: track already-closed positions this cycle
 
@@ -588,12 +1134,22 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             st["entryVolatilityTier"] = eff_g.get("tier", "med")
 
         # Cache per-row computed values as temp keys; cleaned in Phase 4.
-        lock_policy_ph1 = _profit_lock_policy(cfg, max(float(st.get("peak", upnl) or upnl), upnl), sym, _last_decision_intel(sym, max_age_sec=30))
+        lock_policy_ph1 = _profit_lock_policy(cfg, st["peak"], sym, _last_decision_intel(sym, max_age_sec=30))
         lk_trigger_ph1 = max(float(lock_policy_ph1.get("trigger", 0.0) or 0.0), fee_min_capture * 1.35)
         bk_floor_ph1 = max(0.03, float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08), notional * float(cfg.get("profitLockFeeBufferRate", 0.0015) or 0.0015), fee_min_capture)
         bk_trigger_ph1 = max(bk_floor_ph1 * 1.5, min(lk_trigger_ph1, float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)))
         payoff_guard_ph1 = _recent_payoff_loss_guard(cfg, sym)
-        st["peak"] = max(float(st.get("peak", upnl) or upnl), upnl)
+        _prev_peak_raw = st.get("peak")
+        _prev_peak_f = float(_prev_peak_raw) if _prev_peak_raw is not None else 0.0
+        st["peak"] = max(_prev_peak_f, upnl)
+        if _prev_peak_f == 0.0 and upnl > 0.0:
+            _autotrade_log(f"[Guardian] {sym} {side} peak initialized: {_prev_peak_f:.6f}→{upnl:.6f} (upnl={upnl:.6f})")
+        if upnl < 0:
+            prev_lowest = float(st.get("lowestLoss", 0.0) or 0.0)
+            if prev_lowest == 0.0 or upnl < prev_lowest:
+                st["lowestLoss"] = round(upnl, 6)
+        elif upnl > float(cfg.get("tryGreenExitMaxProfitUsdt", 0.20) or 0.20):
+            st["lowestLoss"] = 0.0
         st["updatedAt"] = now
         # Guardian stats for autotuner outcome tracking
         if "guardianStats" not in st:
@@ -648,10 +1204,11 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 locks.pop(k, None)
                 changed = True
     if _pending_closes:
-        async def _do_close(sym_: str, side_: str):
-            await _main()._close_position_one_side(sym_, side_, key, secret, base)
-        await asyncio.gather(*[_do_close(s, sd) for s, sd, _, _, _ in _pending_closes])
+        async def _do_close(sym_: str, side_: str, reason_: str):
+            await _main()._close_position_one_side(sym_, side_, key, secret, base, reason=reason_)
+        await asyncio.gather(*[_do_close(s, sd, r) for s, sd, r, _, _ in _pending_closes])
         for sym, side, reason, mark_str, mark_val in _pending_closes:
+            _delete_guardian_lock_file(_live_lock_key(sym, side), cfg)
             _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} {mark_str}")
             close_decisions.append(f"{sym}:{side}:{reason}:system=B")
         app_state._LIVE_POSITIONS_CACHE = (0, [])
@@ -699,8 +1256,11 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             async def _safe_tv(sym_: str, side_: str) -> tuple[str, str, dict | None]:
                 try:
                     guidance = await async_get_position_guidance(tv_client, sym_, side_)
+                    if guidance is None:
+                        _autotrade_log(f"[TradingView] guidance None for {sym_}:{side_}")
                     return (sym_, side_, guidance)
-                except Exception:
+                except Exception as _tv_exc:
+                    _autotrade_log(f"[TradingView] error for {sym_}:{side_}: {_tv_exc}")
                     return (sym_, side_, None)
             tv_tasks = []
             for p in active_rows:
@@ -716,6 +1276,13 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 for r in tv_raw:
                     if isinstance(r, tuple) and len(r) == 3:
                         _tv_results[f"{r[0]}:{r[1]}"] = r[2]
+                        # Persist TV signal to disk so restarts don't lose TV data
+                        try:
+                            _sym_u, _side_u, _guid = r[0], r[1], r[2]
+                            if _guid and _sym_u:
+                                _persist_tv_signal(_sym_u, _guid)
+                        except Exception as _tv_persist_err:
+                            _autotrade_log(f"[TradingView] persist error {_sym_u}: {_tv_persist_err}")
         except Exception:
             pass
 
@@ -738,6 +1305,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         sl = float(st.get("sl", 0.0) or 0.0)
         guard_entry = float(st.get("entryMark", 0.0) or 0.0)
 
+        # ── Minimum holding period guard: skip exit decisions for first 3 min ──
+        min_hold_sec = float(cfg.get("guardianMinHoldSec", 180) or 180)
+        opened_at = float(st.get("guardianStats", {}).get("openedAt", 0) or 0)
+        held_sec = now - opened_at if opened_at > 0 else 9999
+        too_new = held_sec < min_hold_sec
+
         intel = intel_results[idx] if idx < len(intel_results) else None
         # Per-symbol Guardian autotune: compute effective holdTrailPct/holdMinConfidence
         _per_sym_eff = None
@@ -752,6 +1325,10 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         follow_reason = ""
         reversal_exit = False
         reversal_reason = ""
+        mom_decel = False
+        mom_decel_reason = ""
+        preempt_exit = False
+        preempt_reason = ""
         tv_early_exit = False
         tv_early_exit_reason = ""
         hit_payoff_loss_guard = False
@@ -770,6 +1347,8 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             _effective_min_conf_for_weak = float(_per_sym_eff.get("holdMinConfidence", hold_min_conf)) if _per_sym_eff else hold_min_conf
             weak_now = (sig != side) or (conf < max(0.55, _effective_min_conf_for_weak - 0.08)) or against
             reversal_exit, reversal_reason = _strong_reversal_exit(side, intel, cfg)
+            mom_decel, mom_decel_reason = _momentum_deceleration_detected(side, intel, cfg, st)
+            preempt_exit, preempt_reason = _adaptive_preemptive_exit(side, intel, cfg, upnl, mark, guard_entry, sl, notional, st, mom_decel_reason)
             st["lastSignal"] = sig
             st["lastConfidence"] = round(conf, 4)
             st["lastMomentumPct"] = round(mom, 6)
@@ -783,11 +1362,60 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if cfg.get("tradingviewEnabled", False):
             tv_guidance = _tv_results.get(f"{sym}:{side}")
             try:
+                # Staleness gate: skip TV data older than tvStaleEntrySec
+                if tv_guidance and isinstance(tv_guidance, dict):
+                    _tv_ts = float(tv_guidance.get("timestamp", 0) or 0)
+                    _tv_age = now - _tv_ts if _tv_ts > 0 else 9999
+                    _tv_stale_limit = float(cfg.get("tvStaleEntrySec", 120) or 120)
+                    if _tv_age > _tv_stale_limit:
+                        tv_guidance = None
                 if tv_guidance and should_exit_early_with_tradingview(side, tv_guidance, cfg, sym):
                     tv_early_exit = True
                     tv_early_exit_reason = f"TradingView reversal: {tv_guidance.get('recommendation')}"
             except Exception as exc:
                 _autotrade_log(f"[TradingView] early exit guidance error {sym}: {exc}")
+
+        try_green, try_green_reason = _try_green_exit(side, upnl, st, fee_min_capture, cfg)
+
+        # ── Skip aggressive exit decisions if position is too new (< min_hold) ──
+        if too_new:
+            # Only allow SL hit and TP hit — skip all signal-based exits
+            if mark > 0 and tp > 0 and sl > 0:
+                hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
+                hit_tp = (side == "LONG" and mark >= tp) or (side == "SHORT" and mark <= tp)
+                if hit_sl or hit_tp:
+                    if f"{sym}:{side}" not in _closed_symbols:
+                        _close_reason = "LOCAL_TP_HIT" if hit_tp else "LOCAL_SL_HIT"
+                        _persist_single_lock_before_close(st, cfg)
+                        await _main()._close_position_one_side(sym, side, key, secret, base, reason=_close_reason)
+                        _closed_symbols.add(f"{sym}:{side}")
+                    reason = "LOCAL_TP_HIT" if hit_tp else "LOCAL_SL_HIT"
+                    _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} (held {held_sec:.0f}s < {min_hold_sec:.0f}s) mark={mark:.6f}")
+                    close_decisions.append(f"{sym}:{side}:{reason}:system=B")
+                    _delete_guardian_lock_file(k, cfg)
+                    locks.pop(k, None)
+                    app_state._LIVE_POSITIONS_CACHE = (0, [])
+                    changed = True
+                    continue
+                else:
+                    _autotrade_log(f"[Guardian] {sym} {side} held {held_sec:.0f}s < {min_hold_sec:.0f}s — skipping signal exits")
+            locks[k] = st
+            continue
+
+        # ── Dead zone exit: held too long in stagnant profit + weak signal ──
+        dead_zone_sec = float(cfg.get("deadZoneExitSec", 600) or 600)
+        if held_sec >= dead_zone_sec and upnl < lock_trigger and weak_now and upnl > -fee_min_capture:
+            if f"{sym}:{side}" not in _closed_symbols:
+                _persist_single_lock_before_close(st, cfg)
+                await _main()._close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT")
+                _closed_symbols.add(f"{sym}:{side}")
+            _autotrade_log(f"LIVE multi guard close: {sym} {side} DEAD_ZONE_TIMEOUT held={held_sec:.0f}s upnl={upnl:.4f} peak={float(st.get('peak',0.0)):.4f} lock_trigger={lock_trigger:.4f}")
+            close_decisions.append(f"{sym}:{side}:DEAD_ZONE_TIMEOUT:system=B")
+            _delete_guardian_lock_file(k, cfg)
+            locks.pop(k, None)
+            app_state._LIVE_POSITIONS_CACHE = (0, [])
+            changed = True
+            continue
 
         if mark > 0 and tp > 0 and sl > 0:
             hit_tp = (side == "LONG" and mark >= tp) or (side == "SHORT" and mark <= tp)
@@ -795,19 +1423,21 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             hit_be = bool(st.get("breakevenGuardArmed")) and 0 < upnl <= bk_floor
             if tv_early_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
-                    await _main()._close_position_one_side(sym, side, key, secret, base)
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRADINGVIEW_EARLY_EXIT")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} TRADINGVIEW_EARLY_EXIT {tv_early_exit_reason}")
                 close_decisions.append(f"{sym}:{side}:TRADINGVIEW_EARLY_EXIT:system=B")
-                _persist_single_lock_before_close(st, cfg)
+                _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
                 continue
             if hit_tp and (strong_follow or _should_hold_winner(side, intel, cfg, _per_sym_eff.get("holdMinConfidence") if _per_sym_eff else None)):
-                new_tp, new_sl, extended = await _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, sym, _per_sym_eff.get("holdTrailPct") if _per_sym_eff else None)
+                _tv_prefetched = _tv_results.get(f"{sym}:{side}")
+                new_tp, new_sl, extended = await _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, sym, _per_sym_eff.get("holdTrailPct") if _per_sym_eff else None, _tv_guidance=_tv_prefetched)
                 if not extended:
-                    new_sl, new_tp = await _trail_winner_levels(side, mark, sl, tp, float(_per_sym_eff.get("holdTrailPct", cfg.get("holdTrailPct", 0.25)) if _per_sym_eff else cfg.get("holdTrailPct", 0.25)), cfg, sym)
+                    new_sl, new_tp = await _trail_winner_levels(side, mark, sl, tp, float(_per_sym_eff.get("holdTrailPct", cfg.get("holdTrailPct", 0.25)) if _per_sym_eff else cfg.get("holdTrailPct", 0.25)), cfg, sym, _tv_guidance=_tv_prefetched)
                 st["tp"] = round(float(new_tp), 10)
                 st["sl"] = round(float(new_sl), 10)
                 st["tpExtendedAt"] = now
@@ -821,36 +1451,94 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 locks[k] = st
                 changed = True
                 continue
+            # ── Improvement 1: Proactive trail when in profit + strong signal ──
+            if not hit_tp and upnl > 0 and isinstance(intel, dict):
+                pt_changed, pt_tp, pt_sl, pt_reason = _proactive_trail_in_profit(
+                    side, mark, guard_entry, upnl, tp, sl, notional, cfg, intel, st,
+                )
+                if pt_changed:
+                    st["tp"] = round(float(pt_tp), 10)
+                    st["sl"] = round(float(pt_sl), 10)
+                    st["proactiveTrailCount"] = int(st.get("proactiveTrailCount", 0) or 0) + 1
+                    _autotrade_log(f"LIVE multi guard proactive trail: {sym} {side} TP={pt_tp:.6f} SL={pt_sl:.6f} · {pt_reason}")
+                    locks[k] = st
+                    changed = True
+                    # Don't continue — let other checks (reversal, swing) still evaluate
             if reversal_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
-                    await _main()._close_position_one_side(sym, side, key, secret, base)
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="STRONG_REVERSAL_EXIT")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} STRONG_REVERSAL_EXIT {reversal_reason}")
                 close_decisions.append(f"{sym}:{side}:STRONG_REVERSAL_EXIT:system=B")
-                _persist_single_lock_before_close(st, cfg)
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
+            if preempt_exit:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="PREEMPTIVE_LOSS_EXIT")
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} PREEMPTIVE_LOSS_EXIT {preempt_reason} pnl={upnl:.3f}")
+                close_decisions.append(f"{sym}:{side}:PREEMPTIVE_LOSS_EXIT:system=B")
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
+            if try_green:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRY_GREEN_EXIT")
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} TRY_GREEN_EXIT {try_green_reason} pnl={upnl:.3f}")
+                close_decisions.append(f"{sym}:{side}:TRY_GREEN_EXIT:system=B")
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
+            # ── Improvement 3: Swing peak detection — close at local tops ──
+            swing_peak, swing_reason = _swing_peak_detection(
+                side, upnl, float(st.get("peak", 0.0) or 0.0), mark, guard_entry,
+                notional, cfg, intel, st,
+            )
+            if swing_peak:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="SWING_PEAK_CLOSE")
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} SWING_PEAK_CLOSE {swing_reason}")
+                close_decisions.append(f"{sym}:{side}:SWING_PEAK_CLOSE:system=B")
+                _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
                 continue
             if hit_payoff_loss_guard:
                 if f"{sym}:{side}" not in _closed_symbols:
-                    await _main()._close_position_one_side(sym, side, key, secret, base)
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="PAYOFF_LOSS_GUARD")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} PAYOFF_LOSS_GUARD payoff={float(payoff_guard.get('payoffRatio', 0.0) or 0.0):.2f}")
                 close_decisions.append(f"{sym}:{side}:PAYOFF_LOSS_GUARD:system=B")
-                _persist_single_lock_before_close(st, cfg)
+                _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
                 continue
             if hit_tp or hit_be or hit_sl:
                 if f"{sym}:{side}" not in _closed_symbols:
-                    await _main()._close_position_one_side(sym, side, key, secret, base)
+                    _close_reason2 = "LOCAL_TP_HIT" if hit_tp else ("BREAKEVEN_GUARD" if hit_be else "LOCAL_SL_HIT")
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason=_close_reason2)
                     _closed_symbols.add(f"{sym}:{side}")
                 reason = "LOCAL_TP_HIT" if hit_tp else ("BREAKEVEN_GUARD" if hit_be else "LOCAL_SL_HIT")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} mark={mark:.6f} TP={tp:.6f} SL={sl:.6f}")
                 close_decisions.append(f"{sym}:{side}:{reason}:system=B")
-                _persist_single_lock_before_close(st, cfg)
+                _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
@@ -866,11 +1554,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             retrace_budget = max(fee_min_capture, float(st.get("lockUsdt",0.0) or 0.0) * 0.55, float(st["peak"]) * 0.55, float(st["peak"]) - max(retrace_abs_floor, 0.03))
             if upnl <= retrace_budget:
                 if f"{sym}:{side}" not in _closed_symbols:
-                    await _main()._close_position_one_side(sym, side, key, secret, base)
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="RETRACE_BUDGET")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE lock close: {sym} {side} RETRACE_BUDGET upnl={upnl:.3f} peak={float(st['peak']):.3f} budget={retrace_budget:.3f}")
                 close_decisions.append(f"{sym}:{side}:RETRACE_BUDGET:system=B")
-                _persist_single_lock_before_close(st, cfg)
+                _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
@@ -878,11 +1567,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
 
         if upnl >= tp_max:
             if f"{sym}:{side}" not in _closed_symbols:
-                await _main()._close_position_one_side(sym, side, key, secret, base)
+                _persist_single_lock_before_close(st, cfg)
+                await _main()._close_position_one_side(sym, side, key, secret, base, reason="TARGET_MAX")
                 _closed_symbols.add(f"{sym}:{side}")
             _autotrade_log(f"LIVE lock close: {sym} {side} TARGET_MAX {upnl:.3f} USDT")
             close_decisions.append(f"{sym}:{side}:TARGET_MAX:system=B")
-            _persist_single_lock_before_close(st, cfg)
+            _delete_guardian_lock_file(k, cfg)
             locks.pop(k, None)
             app_state._LIVE_POSITIONS_CACHE = (0, [])
             changed = True
@@ -893,11 +1583,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         min_profit_lock = max(fee_min_capture * 2.0, float(cfg.get("profitLockMinUsdt", 0.10) or 0.10), notional * weak_signal_rate / 100.0)
         if upnl >= min_profit_lock and weak_now and st["peak"] >= lock_trigger:
             if f"{sym}:{side}" not in _closed_symbols:
-                await _main()._close_position_one_side(sym, side, key, secret, base)
+                _persist_single_lock_before_close(st, cfg)
+                await _main()._close_position_one_side(sym, side, key, secret, base, reason="WEAK_SIGNAL")
                 _closed_symbols.add(f"{sym}:{side}")
             _autotrade_log(f"LIVE lock close: {sym} {side} WEAK_SIGNAL {upnl:.3f} USDT (min_lock={min_profit_lock:.4f} fee={fee_min_capture:.4f} notional={notional:.2f} rate={weak_signal_rate}%)")
             close_decisions.append(f"{sym}:{side}:WEAK_SIGNAL:system=B")
-            _persist_single_lock_before_close(st, cfg)
+            _delete_guardian_lock_file(k, cfg)
             locks.pop(k, None)
             app_state._LIVE_POSITIONS_CACHE = (0, [])
             changed = True
@@ -907,6 +1598,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
     # Cleanup stale lock states when position disappeared.
     for k in list(locks.keys()):
         if k not in live_keys:
+            _delete_guardian_lock_file(k, cfg)
             locks.pop(k, None)
     AUTO_TRADE["liveProfitLocks"] = locks
     _persist_per_symbol_guardian_locks(locks, AUTO_TRADE.get("config"))
@@ -975,5 +1667,22 @@ def _persist_single_lock_before_close(lock: dict, cfg: dict | None = None) -> No
         cache = get_shared_cache(VAULT_DIR)
         ctx = PerSymbolContext(sym, cache, cfg)
         ctx.save_guardian_lock(lock)
+    except Exception:
+        pass
+
+
+def _delete_guardian_lock_file(lock_key: str, cfg: dict | None = None) -> None:
+    """Delete the per-symbol guardian_lock.json file after position is closed."""
+    sym = str(lock_key).split(":")[0].upper().strip()
+    if not sym:
+        return
+    cfg = cfg if isinstance(cfg, dict) else {}
+    try:
+        from services.config_paths import VAULT_DIR
+        from trading.per_symbol_context import PerSymbolContext
+        from trading.shared_cache_layer import get_shared_cache
+        cache = get_shared_cache(VAULT_DIR)
+        ctx = PerSymbolContext(sym, cache, cfg)
+        ctx.delete_guardian_lock()
     except Exception:
         pass

@@ -231,6 +231,11 @@ class PerSymbolContext:
         self._storage.save_guardian_lock(lock)
         self._cache.set_guardian_lock(self.symbol, lock)
 
+    def delete_guardian_lock(self) -> None:
+        """Remove the per-symbol guardian lock file when position is closed."""
+        self._storage.delete_guardian_lock()
+        self._cache.set_guardian_lock(self.symbol, None)
+
     # ------------------------------------------------------------------
     # TradingView signal cache (per-symbol)
     # ------------------------------------------------------------------

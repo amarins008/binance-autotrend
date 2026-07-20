@@ -54,7 +54,7 @@ from trading.live_guardian import (
     _live_multi_profit_lock_manage,
 )
 from trading.trade_log import _live_closed_trades_from_log, _live_closed_trades_from_symbol
-from trading.per_symbol_storage import PerSymbolStorage
+from trading.per_symbol_storage import PerSymbolStorage, per_symbol_lock
 from trading.shared_storage import SharedStorage
 from trading.shared_cache_layer import SharedCacheLayer, get_shared_cache
 from trading.per_symbol_context import PerSymbolContext
@@ -78,15 +78,17 @@ import asyncio
 import datetime
 import copy
 import subprocess
+from functools import wraps
 import socket
 import ipaddress
 import threading
 import urllib.request
 from decimal import Decimal, ROUND_DOWN
 import httpx
-ENV_PATH = Path(__file__).with_name(".env")
-SNAPSHOT_PATH = Path(__file__).with_name("autotrade_snapshot.json")
-VAULT_DIR = Path(__file__).with_name("obsidian_vault")
+_DATA_ROOT = Path(os.getenv("HERMES_DATA_DIR", Path(__file__).parent)).resolve()
+ENV_PATH = Path(os.getenv("HERMES_ENV_PATH", Path(__file__).with_name(".env"))).resolve()
+SNAPSHOT_PATH = _DATA_ROOT / "autotrade_snapshot.json"
+VAULT_DIR = _DATA_ROOT / "obsidian_vault"
 TRADES_LOG_PATH = VAULT_DIR / "trades_log.jsonl"
 TRAIN_REPORT_PATH = VAULT_DIR / "learning_report.json"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -857,7 +859,7 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         min_loss_usdt = float(cfg.get("payoffLossGuardMinLossUsdt", 0.22) or 0.22)
         set_float("payoffLossGuardMinLossUsdt", max(0.12, min(min_loss_usdt, avg_win * 0.90)), 3)
         size_mult = float(cfg.get("supervisorSizeMultiplier", 1.0) or 1.0)
-        set_float("supervisorSizeMultiplier", max(0.65, min(size_mult, 0.85 - 0.10 * severity)), 3)
+        set_float("supervisorSizeMultiplier", max(0.70, min(size_mult, 0.85 - 0.10 * severity)), 3)
 
     if not changes:
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
@@ -1443,7 +1445,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     set_float("earlyEntryMaxVwapDistancePct", min(float(cfg.get("earlyEntryMaxVwapDistancePct", 0.24) or 0.24), 0.18), 3)
     set_float("riskCooldownResumeScoreGapMin", min(2.60, max(float(cfg.get("riskCooldownResumeScoreGapMin", 2.0) or 2.0), 2.20 + 0.40 * severity)), 3)
     max_spread = float(cfg.get("maxSpreadBps", 22.0) or 22.0)
-    set_float("maxSpreadBps", max(10.0, min(max_spread, max_spread * (0.90 - 0.05 * severity))), 2)
+    set_float("maxSpreadBps", max(12.0, min(max_spread, max_spread * (0.90 - 0.05 * severity))), 2)
     if not bool(cfg.get("scanFallbackNearEnabled", True)):
         changes["scanFallbackNearEnabled"] = {"old": False, "new": True}
         cfg["scanFallbackNearEnabled"] = True
@@ -2388,6 +2390,15 @@ def _walk_forward_from_trades(symbol: str, train_size: int, test_size: int, mode
     }
 
 
+def _serialize_per_symbol_update(fn):
+    @wraps(fn)
+    def wrapped(symbol: str, *args, **kwargs):
+        with per_symbol_lock(VAULT_DIR, symbol):
+            return fn(symbol, *args, **kwargs)
+    return wrapped
+
+
+@_serialize_per_symbol_update
 def _record_learning_trade(symbol: str, trade: dict, mode: str):
     global DAILY_REALIZED_PNL, _DAILY_PNL_DATE_KEY
     sym = str(symbol or "").upper()
@@ -2539,6 +2550,18 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             trade_log_entry["mode"] = "LIVE"
             trade_log_entry.setdefault("closedAt", int(trade.get("closedAt") or trade.get("ts") or time.time()))
             trade_log_entry.setdefault("reason", str(trade.get("reason", "LIVE_CLOSE") or "LIVE_CLOSE"))
+            # Attach TV data from disk (tv_signal.json) — snapshot at time of close
+            try:
+                _tv_path = VAULT_DIR / "symbols" / sym / "tv_signal.json"
+                if _tv_path.exists():
+                    _tv = json.loads(_tv_path.read_text(encoding="utf-8"))
+                    if isinstance(_tv, dict) and _tv:
+                        trade_log_entry["tvSignal"] = _tv.get("signal", "")
+                        trade_log_entry["tvConfidence"] = _tv.get("confidence", 0.0)
+                        trade_log_entry["tvStrength"] = _tv.get("strength", 0.0)
+                        trade_log_entry["tvAge"] = int(time.time()) - int(_tv.get("ts", 0) or 0)
+            except Exception:
+                pass
             # Attach params_at_entry and guardian_stats from per-symbol storage
             # (lock may already be popped from in-memory dict, so read from disk)
             try:
@@ -2547,8 +2570,13 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
                 _gl = _ps.load_guardian_lock()
                 if isinstance(_gl, dict) and _gl:
                     _snap = _gl.get("entrySnapshot", {})
-                    if isinstance(_snap, dict) and _snap.get("params_at_entry"):
-                        trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                    if isinstance(_snap, dict):
+                        if _snap.get("params_at_entry"):
+                            trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                        if _snap.get("tvSignal"):
+                            trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
+                        if _snap.get("tvConfidence") is not None:
+                            trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
                     _gs = _gl.get("guardianStats", {})
                     if isinstance(_gs, dict) and _gs:
                         trade_log_entry["guardian_stats"] = {
@@ -2591,6 +2619,7 @@ async def _record_learning_trade_async(symbol: str, trade: dict, mode: str):
     return await asyncio.to_thread(_record_learning_trade, symbol, trade, mode)
 
 
+@_serialize_per_symbol_update
 def _record_symbol_observation(symbol: str, intel: dict, chosen: bool, score: float):
     sym = str(symbol or "").upper()
     if not sym:
@@ -2662,25 +2691,26 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
     reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
     recent_score = float(weighted.get("score", 0.0) or 0.0)
     # Conservative adaptive rule: good symbol => slightly easier, weak symbol => stricter.
+    # Adjustments tightened to prevent adaptiveMinConf from exceeding 0.82.
     if wr >= 60:
-        out = max(0.43, base_min_conf - 0.06)
+        out = max(0.50, base_min_conf - 0.04)
     elif wr <= 45 or reward_score < -0.5 or recent_score < -0.10:
-        out = min(0.88, base_min_conf + 0.08)
+        out = base_min_conf + 0.02
     else:
         out = base_min_conf
     reward_delta = float(pr.get("rewardDelta", 0.0) or 0.0)
     reward_behavior = float(pr.get("rewardBehaviorDelta", 0.0) or 0.0)
     win_streak = int(pr.get("rewardWinStreak", 0) or 0)
     loss_streak = int(pr.get("rewardLossStreak", 0) or 0)
-    # Positive reward slightly loosens gate; negative reward tightens gate.
-    out -= max(-0.035, min(0.035, reward_score / 250.0))
-    out -= max(-0.04, min(0.04, recent_score * 0.045))
-    out -= max(-0.012, min(0.012, reward_delta / 30.0))
-    out -= max(-0.018, min(0.018, reward_behavior / 60.0))
+    # Smaller adjustments: each capped at ±0.02 to prevent runaway compounding.
+    out -= max(-0.02, min(0.02, reward_score / 400.0))
+    out -= max(-0.02, min(0.02, recent_score * 0.03))
+    out -= max(-0.01, min(0.01, reward_delta / 50.0))
+    out -= max(-0.01, min(0.01, reward_behavior / 100.0))
     if win_streak >= 3:
-        out -= min(0.05, 0.014 * (win_streak - 2))
+        out -= min(0.03, 0.01 * (win_streak - 2))
     if loss_streak >= 2:
-        out += min(0.08, 0.022 * (loss_streak - 1))
+        out += min(0.03, 0.01 * (loss_streak - 1))
     # Per-symbol exemption: if global tunes raised base_min_conf above default
     # (0.65) but this symbol has strong performance, dampen the global tightening.
     default_base = 0.65
@@ -2688,7 +2718,8 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
     if global_tightening > 0.03 and wr >= 58 and reward_score > 0:
         exemption = min(global_tightening * 0.6, 0.08)
         out -= exemption
-    return max(0.42, min(0.90, out))
+    # Hard cap: prevent adaptiveMinConf from exceeding 0.82
+    return max(0.65, min(0.82, out))
 
 
 def _symbol_quality_score(symbol: str) -> float:
@@ -2890,6 +2921,28 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
             return await _analyze_one(req)
 
     results = await asyncio.gather(*[_analyze_one_limited(r) for r in reqs], return_exceptions=False)
+    if bool(cfg.get("tradingviewEnabled", False)):
+        try:
+            from trading.tradingview_mcp import get_tv_mcp
+
+            tv_client = get_tv_mcp(cfg)
+
+            async def _refresh_tv(symbol: str, intel: dict) -> None:
+                signal = str(intel.get("signal", "WAIT") or "WAIT").upper()
+                confidence = float(intel.get("confidence", 0.0) or 0.0)
+                if signal in ("LONG", "SHORT"):
+                    await asyncio.to_thread(tv_client.get_signal, symbol, signal, confidence)
+
+            await asyncio.gather(
+                *[
+                    _refresh_tv(symbol, intel)
+                    for symbol, intel in zip(candidates, results)
+                    if isinstance(intel, dict)
+                ],
+                return_exceptions=True,
+            )
+        except Exception:
+            pass
     best_sym = None
     best_intel = None
     best_score = -999.0
@@ -3031,7 +3084,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # confidence; noisy groups (low-liquidity) need higher evidence.
         adaptive_min_conf = float(_learned_min_conf(sym, max(base_min_conf, group_conf_floor)))
         adaptive_min_conf += float(session_bias.get("confidenceShift", 0.0) or 0.0)
-        adaptive_min_conf = max(group_conf_floor, min(0.92, adaptive_min_conf))
+        adaptive_min_conf = max(group_conf_floor, min(0.82, adaptive_min_conf))
         score = score + float(session_bias.get("scoreShift", 0.0) or 0.0)
         # Per-group long-bias: shift score up when signal matches the
         # group's directional preference (e.g. trend-friendly groups
@@ -3517,6 +3570,9 @@ def _is_retryable_http_exc(err: Exception) -> bool:
     return ("getaddrinfo failed" in txt) or ("name or service not known" in txt) or ("temporary failure in name resolution" in txt)
 
 
+_DATA_GET_MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 50 MB guard
+
+
 async def _data_get(path: str) -> httpx.Response:
     """
     Fast GET for public market data on fapi.binance.com mainnet.
@@ -3532,19 +3588,30 @@ async def _data_get(path: str) -> httpx.Response:
             if _BINANCE_DATA_HTTP is not None:
                 try:
                     res = await asyncio.wait_for(_BINANCE_DATA_HTTP.get(path), timeout=DATA_GET_TIMEOUT_SEC)
+                    if hasattr(res, "content") and len(res.content) > _DATA_GET_MAX_RESPONSE_BYTES:
+                        raise httpx.ReadError(f"Response too large: {len(res.content)} bytes")
                     _record_data_provider_health(True)
                     return res
                 except (httpx.RemoteProtocolError, httpx.LocalProtocolError,
                         httpx.ReadError, httpx.ConnectError, httpx.PoolTimeout,
-                        httpx.ConnectTimeout, httpx.RequestError) as e:
+                        httpx.ConnectTimeout, httpx.RequestError,
+                        MemoryError) as e:
                     last_err = e
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(DATA_GET_TIMEOUT_SEC, connect=DATA_GET_CONNECT_TIMEOUT_SEC),
                 headers={"Accept-Encoding": "identity"},
             ) as c:
                 res = await c.get(full_url)
+                if hasattr(res, "content") and len(res.content) > _DATA_GET_MAX_RESPONSE_BYTES:
+                    raise httpx.ReadError(f"Response too large: {len(res.content)} bytes")
                 _record_data_provider_health(True)
                 return res
+        except httpx.ReadError as e:
+            last_err = e
+            _record_data_provider_health(False, e, path)
+            if attempt >= 2 or not _is_retryable_http_exc(e):
+                raise
+            await asyncio.sleep(0.35 * (attempt + 1))
         except Exception as e:
             last_err = e
             _record_data_provider_health(False, e, path)
@@ -3652,7 +3719,7 @@ async def _lifespan(app: FastAPI):
             AUTO_TRADE["sessionId"] = session_id
             AUTO_TRADE["startedAt"] = int(time.time())
             _sync_autotrade_leverage_cap_from_cfg(cfg)
-            AUTO_TRADE["config"] = copy.deepcopy(cfg)
+            AUTO_TRADE["config"] = apply_autotrade_defaults(copy.deepcopy(cfg))
             AUTO_TRADE["consecutiveErrors"] = 0
             AUTO_TRADE["lastSkip"] = None
             AUTO_TRADE["scanBoard"] = snap_data.get("scanBoard") if isinstance(snap_data.get("scanBoard"), list) else []
@@ -3783,6 +3850,16 @@ AUTO_TRADE = {
     "_snapshot_loaded_at": None,
     "_snapshot_recovered_log": None,
 }
+
+# Guardian, supervisor, and exchange helpers hold references to
+# services.app_state.AUTO_TRADE. Update that dict in-place so every module
+# observes the same runtime config, locks, and per-symbol state.
+try:
+    from services import app_state as _app_state_sync
+    _app_state_sync.AUTO_TRADE.update(AUTO_TRADE)
+    AUTO_TRADE = _app_state_sync.AUTO_TRADE
+except Exception:
+    pass
 
 
 def _autotrade_task_state() -> dict:
@@ -5368,7 +5445,7 @@ async def _market_momentum(symbol: str, interval: str = "1m", limit: int = 60, _
     }
 
 
-async def _precision_signal_pack(symbol: str, limit: int = 200, _rows_1m: list | None = None):
+async def _precision_signal_pack(symbol: str, limit: int = 200, _rows_1m: list | None = None, _rows_5m: list | None = None, _rows_15m: list | None = None):
     """
     Professional multi-timeframe signal pack.
     Indicators: EMA 9/21/50/200, RSI-14, StochRSI, MACD(12,26,9),
@@ -5704,7 +5781,7 @@ def _entry_snapshot_from_intel(symbol: str | None, side: str | None, intel: dict
         intel = {}
     candles = intel.get("candles") if isinstance(intel.get("candles"), dict) else {}
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
-    return {
+    snap = {
         "entrySymbol": str(symbol or intel.get("symbol") or "").upper().strip(),
         "entrySide": str(side or intel.get("signal") or "").upper().strip(),
         "patternTags": candles.get("tags", []),
@@ -5716,6 +5793,16 @@ def _entry_snapshot_from_intel(symbol: str | None, side: str | None, intel: dict
         "entryMomentumPct": float(ex.get("momentumPct", 0.0) or 0.0),
         "entryDecisionAt": int(time.time()),
     }
+    # Capture TV data at entry time for post-trade analysis
+    try:
+        _tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
+        if _tv:
+            snap["tvSignal"] = str(_tv.get("signal", "") or "")
+            snap["tvConfidence"] = float(_tv.get("confidence", 0.0) or 0.0)
+            snap["tvStrength"] = float(_tv.get("strength", 0.0) or 0.0)
+    except Exception:
+        pass
+    return snap
 
 
 def _entry_snapshot_for_position(symbol: str, side: str) -> dict:
@@ -5963,31 +6050,73 @@ async def _signed_request(method: str, base: str, endpoint: str, key: str, secre
 
 
 async def _exchange_filters(symbol: str):
+    sym_upper = str(symbol or "").upper().strip()
     now_ts = time.time()
-    cached = _EXCHANGE_FILTERS_CACHE.get(symbol)
+    cached = _EXCHANGE_FILTERS_CACHE.get(sym_upper)
     if cached and now_ts - cached[0] < _EXCHANGE_FILTERS_CACHE_TTL:
         return cached[1]
 
-    res = await _data_get(f"/fapi/v1/exchangeInfo?symbol={symbol}")
-    if res.status_code >= 400:
-        raise HTTPException(status_code=res.status_code, detail=res.text)
-    data = res.json()
-    symbols = data.get("symbols", [])
-    if not symbols:
-        raise HTTPException(status_code=400, detail=f"Symbol not found on futures: {symbol}")
-    s = symbols[0]
-    if s.get("status") != "TRADING":
-        raise HTTPException(status_code=400, detail=f"Symbol not tradable: {symbol}")
-    filters = {f["filterType"]: f for f in s.get("filters", [])}
-    payload = {
-        "stepSize": float(filters.get("LOT_SIZE", {}).get("stepSize", "0")),
-        "minQty": float(filters.get("LOT_SIZE", {}).get("minQty", "0")),
-        "tickSize": float(filters.get("PRICE_FILTER", {}).get("tickSize", "0")),
-        "minNotional": float(filters.get("MIN_NOTIONAL", {}).get("notional", filters.get("NOTIONAL", {}).get("minNotional", "0"))),
-        "maxLeverage": int(os.getenv("MAX_LEVERAGE_DEFAULT", "20")),
-        "maxQty": float(filters.get("LOT_SIZE", {}).get("maxQty", "0") or 0),
-    }
-    _EXCHANGE_FILTERS_CACHE[symbol] = (now_ts, payload)
+    def _build_payload(s: dict) -> dict:
+        filters_map = {f["filterType"]: f for f in s.get("filters", [])}
+        return {
+            "stepSize": float(filters_map.get("LOT_SIZE", {}).get("stepSize", "0")),
+            "minQty": float(filters_map.get("LOT_SIZE", {}).get("minQty", "0")),
+            "tickSize": float(filters_map.get("PRICE_FILTER", {}).get("tickSize", "0")),
+            "minNotional": float(filters_map.get("MIN_NOTIONAL", {}).get("notional", filters_map.get("NOTIONAL", {}).get("minNotional", "0"))),
+            "maxLeverage": int(os.getenv("MAX_LEVERAGE_DEFAULT", "20")),
+            "maxQty": float(filters_map.get("LOT_SIZE", {}).get("maxQty", "0") or 0),
+        }
+
+    # Fallback 1: single-symbol endpoint
+    payload = None
+    try:
+        res = await _data_get(f"/fapi/v1/exchangeInfo?symbol={sym_upper}")
+        if res.status_code < 400:
+            data = res.json()
+            symbols = data.get("symbols", []) if isinstance(data, dict) else []
+            if symbols:
+                s = symbols[0]
+                if s.get("status") != "TRADING":
+                    raise HTTPException(status_code=400, detail=f"Symbol not tradable: {sym_upper}")
+                payload = _build_payload(s)
+                _EXCHANGE_FILTERS_CACHE[sym_upper] = (now_ts, payload)
+        elif res.status_code == 400:
+            raise HTTPException(status_code=400, detail=f"Invalid Binance symbol: {sym_upper}")
+    except HTTPException:
+        raise
+    except (MemoryError, Exception) as e:
+        print(f"[Exchange Filters] single-symbol fetch failed for {sym_upper}: {type(e).__name__}: {e}")
+
+    # Fallback 2: full exchangeInfo list
+    if payload is None:
+        try:
+            res = await _data_get("/fapi/v1/exchangeInfo")
+            if res.status_code >= 400:
+                if cached:
+                    return cached[1]
+                raise HTTPException(status_code=res.status_code, detail=res.text)
+            data = res.json()
+            symbols = data.get("symbols", []) if isinstance(data, dict) else []
+            for s in symbols:
+                sym_name = str(s.get("symbol") or "").upper().strip() or sym_upper
+                try:
+                    entry = _build_payload(s)
+                    _EXCHANGE_FILTERS_CACHE[sym_name] = (now_ts, entry)
+                except Exception:
+                    continue
+            payload = _EXCHANGE_FILTERS_CACHE.get(sym_upper, (0, None))[1]
+        except HTTPException:
+            raise
+        except (MemoryError, Exception) as e:
+            print(f"[Exchange Filters] full-list fetch failed for {sym_upper}: {type(e).__name__}: {e}")
+
+    # Fallback 3: serve stale cache
+    if payload is None:
+        if cached:
+            print(f"[Exchange Filters] serving stale cache for {sym_upper} after fetch failure")
+            return cached[1]
+        raise HTTPException(status_code=503, detail=f"exchangeInfo unavailable for {sym_upper}")
+
     return payload
 
 
@@ -7578,6 +7707,19 @@ def _persist_autotrade_snapshot(force: bool = False):
         if (now - _SNAPSHOT_LAST_FLUSH) < 30.0:
             return
     try:
+        # Stale lock cleanup: remove locks whose updatedAt is > 2 hours old
+        # (position was likely closed externally without Guardian noticing).
+        _locks_data = AUTO_TRADE.get("liveProfitLocks")
+        if isinstance(_locks_data, dict) and _locks_data:
+            _now_ts = int(time.time())
+            _stale_keys = [
+                k for k, v in _locks_data.items()
+                if isinstance(v, dict) and (_now_ts - int(v.get("updatedAt", 0) or 0)) > 7200
+            ]
+            if _stale_keys:
+                for _sk in _stale_keys:
+                    _locks_data.pop(_sk, None)
+                _autotrade_log(f"[Snapshot] Cleaned {len(_stale_keys)} stale lock(s): {', '.join(_stale_keys)}")
         payload = {
             "savedAt": int(time.time()),
             "paper": dict(AUTO_TRADE["paper"]),
@@ -7599,7 +7741,14 @@ def _persist_autotrade_snapshot(force: bool = False):
             "dailyRealizedPnlUSDT": DAILY_REALIZED_PNL,
             "dailyPnlDateKey": _DAILY_PNL_DATE_KEY,
         }
-        SNAPSHOT_PATH.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+        raw = json.dumps(payload, ensure_ascii=False, default=str)
+        if len(raw.encode("utf-8")) > 2 * 1024 * 1024:
+            print("[Snapshot] WARN: payload > 2MB, trimming trades further")
+            payload["trades"] = list(AUTO_TRADE.get("trades", []))[-20:]
+            raw = json.dumps(payload, ensure_ascii=False, default=str)
+        tmp_path = SNAPSHOT_PATH.with_suffix(".tmp")
+        tmp_path.write_text(raw, encoding="utf-8")
+        tmp_path.replace(SNAPSHOT_PATH)
         AUTO_TRADE["_snapshot_saved_at"] = payload["savedAt"]
         _SNAPSHOT_LAST_FLUSH = time.time()
         # Per-symbol runtime split: each symbol's cooldown state lives on its
@@ -7786,15 +7935,55 @@ def _load_autotrade_snapshot():
                     if not (bkey and bsecret):
                         return
                     live_pos = await asyncio.wait_for(_pick_live_orphan_positions(bkey, bsecret, bbase), timeout=8.0)
-                    live_keys = {_live_lock_key(str(p.get("symbol", "")), str(p.get("side", ""))) for p in live_pos}
+                    live_by_key = {}
+                    for p in live_pos:
+                        k = _live_lock_key(str(p.get("symbol", "")), str(p.get("side", "")))
+                        live_by_key[k] = p
+                    live_keys = set(live_by_key.keys())
                     lk = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
                     stale = [k for k in list(lk.keys()) if k not in live_keys]
+                    price_mismatch = []
+                    for k in list(lk.keys()):
+                        if k in live_keys:
+                            lp = live_by_key[k]
+                            lock_entry = float((lk[k] or {}).get("entryMark", 0) or 0)
+                            live_entry = float((lp or {}).get("entryPrice", 0) or (lp or {}).get("entryMark", 0) or 0)
+                            if lock_entry > 0 and live_entry > 0 and abs(lock_entry - live_entry) / max(lock_entry, live_entry) > 0.05:
+                                stale.append(k)
+                                price_mismatch.append(k)
                     for k in stale:
                         lk.pop(k, None)
                     if stale:
                         AUTO_TRADE["liveProfitLocks"] = lk
                         _persist_autotrade_snapshot(force=True)
-                        _autotrade_log(f"[Startup] Cleaned {len(stale)} phantom lock(s): {', '.join(stale)}")
+                        msg_parts = [f"{len(stale)} phantom lock(s)"]
+                        if price_mismatch:
+                            msg_parts.append(f"{len(price_mismatch)} entry-price mismatch")
+                        _autotrade_log(f"[Startup] Cleaned {', '.join(msg_parts)}: {', '.join(stale)}")
+                    # Also clean stale per-symbol guardian_lock.json files
+                    _live_symbols = {str(p.get("symbol", "")).upper() for p in live_pos if p.get("symbol")}
+                    _cleaned_sym = 0
+                    try:
+                        import os as _os
+                        _sym_dir = VAULT_DIR / "symbols"
+                        if _sym_dir.is_dir():
+                            for _sd in _sym_dir.iterdir():
+                                if not _sd.is_dir():
+                                    continue
+                                _lock_file = _sd / "guardian_lock.json"
+                                if not _lock_file.exists():
+                                    continue
+                                _sym_name = _sd.name.upper()
+                                if _sym_name not in _live_symbols:
+                                    try:
+                                        _lock_file.unlink()
+                                        _cleaned_sym += 1
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                    if _cleaned_sym:
+                        _autotrade_log(f"[Startup] Cleaned {_cleaned_sym} stale per-symbol lock file(s)")
                 except Exception as exc:
                     _autotrade_log(f"[Startup] Reconcile skipped: {exc}")
             try:
@@ -8150,7 +8339,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
     return {"closed": close_results}
 
 
-async def _close_position_one_side(symbol: str, side_to_close: str, key: str, secret: str, base: str):
+async def _close_position_one_side(symbol: str, side_to_close: str, key: str, secret: str, base: str, reason: str = "LIVE_CUT_LOSING_SIDE"):
     target = side_to_close.upper()
     if target not in ("LONG", "SHORT"):
         raise HTTPException(status_code=400, detail="side_to_close must be LONG or SHORT")
@@ -8196,7 +8385,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "exit": exit_px,
                 "qty": qty,
                 "pnl": round(float(pnl), 6),
-                "reason": "LIVE_CUT_LOSING_SIDE",
+                "reason": reason,
                 "closedAt": int(time.time()),
                 "patternTags": entry_snapshot.get("patternTags", []),
                 "patternBias": entry_snapshot.get("patternBias", 0.0),
@@ -8316,10 +8505,14 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         tp_price, sl_price = _calc_tp_sl_prices(side, mark, tp_pct, sl_pct)
         lock_key = f"{symbol}:{side}"
         locks = AUTO_TRADE.get("liveProfitLocks") if isinstance(AUTO_TRADE.get("liveProfitLocks"), dict) else {}
+        # Preserve existing Guardian-updated fields (peak, lockUsdt, guardianStats, etc.)
+        # instead of overwriting with defaults.  See: peak-0.0 root-cause fix.
+        _existing_lock = locks.get(lock_key, {})
         locks[lock_key] = {
-            "armed": False,
-            "peak": 0.0,
-            "lockUsdt": 0.0,
+            **_existing_lock,
+            "armed": _existing_lock.get("armed", False),
+            "peak": _existing_lock.get("peak", 0.0),
+            "lockUsdt": _existing_lock.get("lockUsdt", 0.0),
             "symbol": symbol,
             "side": side,
             "qty": round(float(qty), 10),
@@ -8531,13 +8724,14 @@ async def _autotrade_loop():
                     AUTO_TRADE["riskCooldownLossSignature"] = ""
             pause_until = int(AUTO_TRADE.get("pauseUntil", 0) or 0)
             live_position_managed = False
-            if (cfg.get("executionMode") or "PAPER").upper() == "LIVE":
-                live_position_managed = True
-                closed_by_guardian = await _manage_live_open_positions_once(cfg, now)
-                AUTO_TRADE["_guardianMonitorTs"] = now
-                if closed_by_guardian:
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
+            # Always run Guardian for existing live positions — even in PAPER mode.
+            # PAPER mode only prevents new entries; existing positions must still be managed.
+            closed_by_guardian = await _manage_live_open_positions_once(cfg, now)
+            AUTO_TRADE["_guardianMonitorTs"] = now
+            live_position_managed = True
+            if closed_by_guardian:
+                await asyncio.sleep(cfg["intervalSec"])
+                continue
             if risk_cooldown_enabled and running_entries and pause_until > now and not str(AUTO_TRADE.get("riskCooldownLossSignature", "") or ""):
                 remain = max(1, pause_until - now)
                 check_sec = max(10, int(cfg.get("riskCooldownAdaptiveCheckSec", max(20, int(cfg.get("intervalSec", 20) or 20))) or 20))
@@ -8596,12 +8790,6 @@ async def _autotrade_loop():
                     _agent_mark("risk_manager", "blocked", "risk cooldown active", f"{remain}s remaining")
                     _autotrade_skip("risk_cooldown", f"Skip: risk cooldown {remain}s")
                     await asyncio.sleep(min(10, max(2, int(cfg.get("intervalSec", 20)))))
-                    continue
-            if (cfg.get("executionMode") or "PAPER").upper() == "LIVE" and not live_position_managed:
-                closed_by_guardian = await _manage_live_open_positions_once(cfg, now)
-                AUTO_TRADE["_guardianMonitorTs"] = now
-                if closed_by_guardian:
-                    await asyncio.sleep(cfg["intervalSec"])
                     continue
             # Stop requested: keep managing existing LIVE positions only, no new scans/entries.
             if not running_entries:
@@ -9618,7 +9806,7 @@ async def autotrade_start(req: AutoTradeStartRequest):
     AUTO_TRADE["perfLocks"] = preserved_fapi_locks
     AUTO_TRADE["sessionId"] = session_id
     AUTO_TRADE["startedAt"] = int(time.time())
-    AUTO_TRADE["config"] = copy.deepcopy(cfg)
+    AUTO_TRADE["config"] = apply_autotrade_defaults(copy.deepcopy(cfg))
     AUTO_TRADE["lastDecision"] = None
     AUTO_TRADE["lastSkip"] = None
     AUTO_TRADE["consecutiveErrors"] = 0
@@ -9878,6 +10066,12 @@ async def autotrade_status(symbol: str | None = None):
         public_cfg["symbol"] = "AUTO"
         public_cfg["marketScan"] = True
 
+    try:
+        from trading.tradingview_mcp import get_tv_mcp
+        tv_health = get_tv_mcp(cfg).get_health_status()
+    except Exception:
+        tv_health = {}
+
     return {
         "running": AUTO_TRADE["running"],
         "manageOpenOnly": bool(AUTO_TRADE.get("manageOpenOnly")),
@@ -9889,6 +10083,7 @@ async def autotrade_status(symbol: str | None = None):
         "startedAt": AUTO_TRADE.get("startedAt", 0),
         "autotradeTask": _autotrade_task_state(),
         "config": public_cfg,
+        "tradingviewHealth": tv_health,
         "lastDecision": AUTO_TRADE["lastDecision"],
         "lastSkip": AUTO_TRADE.get("lastSkip"),
         "consecutiveErrors": AUTO_TRADE.get("consecutiveErrors", 0),

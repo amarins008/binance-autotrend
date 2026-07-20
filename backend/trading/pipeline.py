@@ -34,6 +34,17 @@ class EntryInputs:
     taker_fee_bps: float = 4.0
     extra_cost_bps: float = 2.0
     default_min_net: float = 0.05
+    pre_reversal_score: float = 0.0
+    pre_reversal_side_at_risk: str = ""
+    bb_pct_b: float = 0.5
+    vwap_distance_pct: float = 0.0
+    long_score: float = 0.0
+    short_score: float = 0.0
+    near_resistance: bool = False
+    near_support: bool = False
+    wait_override_imbalance: float = 0.0
+    scan_chase_speed: str = "normal"
+    scan_long_bias: float = 0.5
 
 
 @dataclass

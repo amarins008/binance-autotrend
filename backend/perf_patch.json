@@ -1,0 +1,1 @@
+{"scanTopLiquid":45,"scanAnalyzeTop":7,"scanPerSymbolTimeoutSec":5.0,"scanGuardedFallbackAnalyzeTop":7,"riskCooldownAdaptiveCheckSec":18,"riskCooldownLightScanSec":25,"riskCooldownLightScanAnalyzeTop":5,"intervalSec":15}

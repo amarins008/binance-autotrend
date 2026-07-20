@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import time
+from functools import wraps
 from pathlib import Path
 
 from obsidian_memory import ensure_trading_vault
 from services.config_paths import TRADES_LOG_PATH, VAULT_DIR
+from trading.per_symbol_storage import per_symbol_lock
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,15 @@ def _scan_health_state(symbol: str) -> dict[str, int]:
     }
 
 
+def _serialize_per_symbol_update(fn):
+    @wraps(fn)
+    def wrapped(symbol: str, *args, **kwargs):
+        with per_symbol_lock(VAULT_DIR, symbol):
+            return fn(symbol, *args, **kwargs)
+    return wrapped
+
+
+@_serialize_per_symbol_update
 def _record_scan_health(symbol: str, ok: bool, reason: str | None = None) -> None:
     sym = str(symbol or "").upper().strip()
     if not sym:
@@ -155,6 +166,7 @@ def _record_scan_health(symbol: str, ok: bool, reason: str | None = None) -> Non
     _save_single_profile(sym, pr)
 
 
+@_serialize_per_symbol_update
 def _cooldown_scan_symbol(symbol: str, seconds: int, reason: str) -> None:
     sym = str(symbol or "").upper().strip()
     if not sym:

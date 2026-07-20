@@ -33,15 +33,105 @@ def evaluate_confluence(
     long_score = 0
     short_score = 0
     
-    # TradingView secondary confirmation
+    # TradingView secondary confirmation + exhaustion protection
     tv_boost = 0.0
     if cfg and symbol and bool(cfg.get("tradingviewEnabled", False)):
         try:
             tv_client = get_tv_mcp(cfg)
             tv_result = tv_client.get_signal(symbol, pre_signal, pre_confidence)
             if tv_result:
-                tv_boost = tv_client.confirm_signal(tv_result, pre_signal)
-                notes.append(f"TradingView confirmation: {tv_result.signal.value} (+{tv_boost:.3f})")
+                # --- Protection 1: Signal Age Gate ---
+                # If TV signal is stale (> 120s old), zero the boost entirely
+                tv_age_sec = time.time() - tv_result.timestamp
+                stale_limit = float(cfg.get("tvStaleEntrySec", 120) or 120)
+                if tv_age_sec > stale_limit:
+                    tv_boost = 0.0
+                    notes.append(f"TV stale ({tv_age_sec:.0f}s > {stale_limit:.0f}s) — boost zeroed")
+                else:
+                    tv_boost = tv_client.confirm_signal(tv_result, pre_signal)
+                    
+                    # --- Protection 2: Oscillator Exhaustion Detection ---
+                    # If TV says LONG but oscillators show SELL > BUY, signal is likely exhausted
+                    tv_sig_val = tv_result.signal.value.upper()
+                    osc = tv_result.metadata.get("oscillators", {})
+                    osc_buy = int(osc.get("BUY", 0))
+                    osc_sell = int(osc.get("SELL", 0))
+                    rsi_val = osc.get("RSI", "NEUTRAL")
+                    stoch_val = osc.get("STOCH.K", "NEUTRAL")
+                    cci_val = osc.get("CCI", "NEUTRAL")
+                    
+                    ep_base = float(cfg.get("tvExhaustionPenalty", 0.03) or 0.03)
+                    exhaustion_penalty = 0.0
+                    exhaustion_reasons = []
+                    
+                    if tv_sig_val == "LONG":
+                        if rsi_val == "SELL":
+                            exhaustion_penalty += ep_base
+                            exhaustion_reasons.append(f"RSI={rsi_val}")
+                        if stoch_val == "SELL":
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"STOCH={stoch_val}")
+                        if cci_val == "SELL":
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"CCI={cci_val}")
+                        if osc_sell > osc_buy:
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"osc_sell({osc_sell})>osc_buy({osc_buy})")
+                    elif tv_sig_val == "SHORT":
+                        if rsi_val == "BUY":
+                            exhaustion_penalty += ep_base
+                            exhaustion_reasons.append(f"RSI={rsi_val}")
+                        if stoch_val == "BUY":
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"STOCH={stoch_val}")
+                        if cci_val == "BUY":
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"CCI={cci_val}")
+                        if osc_buy > osc_sell:
+                            exhaustion_penalty += ep_base * 0.67
+                            exhaustion_reasons.append(f"osc_buy({osc_buy})>osc_sell({osc_sell})")
+                    
+                    if exhaustion_penalty > 0:
+                        tv_boost -= exhaustion_penalty
+                        notes.append(f"TV exhaustion: {', '.join(exhaustion_reasons)} -{exhaustion_penalty:.3f}")
+                    
+                    # --- Protection 3: Signal Strength Weakening ---
+                    # Check MA confirmation vs oscillators — weak alignment = weaker signal
+                    ma = tv_result.metadata.get("moving_averages", {})
+                    ma_buy = int(ma.get("BUY", 0))
+                    ma_sell = int(ma.get("SELL", 0))
+                    total_ma = ma_buy + ma_sell
+                    if total_ma > 0:
+                        if tv_sig_val == "LONG" and ma_buy < total_ma * 0.6:
+                            weakness = 0.02
+                            tv_boost -= weakness
+                            notes.append(f"TV weak MA confirm LONG {ma_buy}/{total_ma} -{weakness:.3f}")
+                        elif tv_sig_val == "SHORT" and ma_sell < total_ma * 0.6:
+                            weakness = 0.02
+                            tv_boost -= weakness
+                            notes.append(f"TV weak MA confirm SHORT {ma_sell}/{total_ma} -{weakness:.3f}")
+                    
+                    # --- Protection 4: Momentum Weakening Detection ---
+                    # Compare current signal strength vs previous — if weakening, apply penalty
+                    current_strength = tv_result.metadata.get("strength", 0.5)
+                    momentum = tv_client.get_signal_momentum(symbol, current_strength)
+                    if momentum.get("weakening"):
+                        weaken_penalty = min(0.04, abs(momentum["delta"]) * 0.5)
+                        tv_boost -= weaken_penalty
+                        notes.append(
+                            f"TV momentum weakening: {momentum['prev_strength']:.2f}->{current_strength:.2f} "
+                            f"(delta={momentum['delta']:.3f}) -{weaken_penalty:.3f}"
+                        )
+                    elif momentum.get("delta", 0) > 0.05:
+                        # Signal strengthened — small bonus
+                        boost_bonus = min(0.02, momentum["delta"] * 0.3)
+                        tv_boost += boost_bonus
+                        notes.append(f"TV momentum strengthened +{boost_bonus:.3f}")
+                    
+                    # Store current signal for future comparison
+                    tv_client._track_signal_history(symbol, tv_result)
+                    
+                    notes.append(f"TradingView confirmation: {tv_result.signal.value} (+{tv_boost:.3f})")
         except Exception:
             # Fallback to internal only on any error
             pass
@@ -262,17 +352,22 @@ def evaluate_confluence(
 
     # Time-based candle patterns (avoid entries during uncertain candle formations)
     candle_pattern = str(pk.get("candlePattern", "NONE")).upper()
-    if candle_pattern in ("DOJI", "HAMMER", "INVERTED_HAMMER", "HANGING_MAN"):
+    if candle_pattern in ("DOJI", "INVERTED_HAMMER", "HANGING_MAN"):
         # Indecisive candles - reduce confidence
         long_score -= 1
         short_score -= 1
         notes.append(f"Indecisive candle {candle_pattern}")
+    elif candle_pattern == "HAMMER":
+        # Hammer: 33.3% WR historically — strong penalty
+        long_score -= 2
+        short_score -= 2
+        notes.append(f"Weak hammer pattern (33% WR)")
     elif candle_pattern == "ENGULFING_BULLISH" and check_sig == "LONG":
         long_score += 2  # Bullish engulfing supports LONG
         notes.append("Bullish engulfing pattern")
     elif candle_pattern == "ENGULFING_BEARISH" and check_sig == "SHORT":
-        short_score += 2  # Bearish engulfing supports SHORT
-        notes.append("Bearish engulfing pattern")
+        short_score += 1  # Bearish engulfing: 29% WR — reduced from +2
+        notes.append("Bearish engulfing pattern (weak 29% WR)")
 
     if long_score >= strong_threshold and long_score >= short_score + 2:
         final_signal = "LONG"
@@ -316,10 +411,13 @@ def evaluate_confluence(
         f"BB%B={float(pk.get('bbPctB', 0.5)):.2f} | VWAP={'↑' if pk.get('priceAboveVwap') else '↓'}"
     )
 
-    # Apply TradingView confidence boost if available
+    # Apply TradingView confidence boost/penalty if available
     if tv_boost > 0:
         confidence = min(0.95, confidence + tv_boost)
-        notes.append(f"TV boost applied: +{tv_boost:.3f}")
+        notes.append(f"TV confirm boost: +{tv_boost:.3f}")
+    elif tv_boost < 0:
+        confidence = max(0.40, confidence + tv_boost)
+        notes.append(f"TV conflict penalty: {tv_boost:.3f}")
 
     return ConfluenceResult(
         signal=final_signal,
