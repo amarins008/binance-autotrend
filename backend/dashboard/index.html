@@ -3672,7 +3672,7 @@
 
           <div id="pipelineSkip" style="font-size:10px;color:var(--warn);margin-top:6px"></div>
 
-          <div id="symbolProfileSummary" class="vo-profile-summary"></div>
+
 
         </div>
 
@@ -5313,120 +5313,7 @@ function renderOpenPositions(opens, liveCtx) {
 
 
 
-function renderSymbolProfileSummary(bot) {
 
-  const wrap = $("symbolProfileSummary");
-
-  if (!wrap) return;
-
-  const symbols = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions : [];
-
-  const fallback = Array.isArray(bot?.symbolProfiles) ? bot.symbolProfiles : [];
-
-  if (!symbols.length && !fallback.length) {
-
-    wrap.innerHTML = `<div class="metric-sub">ยังไม่มี symbol profile — เริ่ม trade เพื่อสะสม samples หรือตั้ง override ผ่าน /api/symbol/profile</div>`;
-
-    return;
-
-  }
-
-  const rows = symbols.length ? symbols.map((p) => ({
-
-    symbol: p.symbol || "—",
-
-    group: p.group || (p.state?.entryVolatilityTier) || "—",
-
-    source: p.source || "—",
-
-    samples: p.sampleTrades ?? p.learnedTrades ?? "—",
-
-    winRate: p.perf?.winRatePct ?? p.learnedWinRatePct ?? null,
-
-    pnl: p.perf?.pnl ?? p.learnedPnl ?? null,
-
-    pf: p.learnedProfitFactor ?? null,
-
-    recent: p.learnedRecentScore ?? null,
-
-    minConf: p.minConfidence ?? null,
-
-    tpPct: p.tpPct ?? null,
-
-    slPct: p.slPct ?? null,
-
-    lock: p.profitLockTriggerUsdt ?? null,
-
-  })) : fallback.slice(0, 8);
-
-  rows.sort((a, b) => (Number(b.samples) || 0) - (Number(a.samples) || 0));
-
-  wrap.innerHTML = `
-
-    <div class="vo-profile-head">
-
-      <span>Symbol Profile (3-tier)</span>
-
-      <span class="vo-profile-hint">low-vol → tight TP, high-vol → wide TP, low-liq → tiny cap</span>
-      <span class="vo-profile-hint" style="margin-left:8px;color:var(--accent)">PF = profit factor · Rec = recent score</span>
-
-    </div>
-
-    <div class="vo-profile-list">
-
-      ${rows.slice(0, 8).map((r) => {
-
-        const pf = r.pf !== null && r.pf !== undefined ? Number(r.pf) : null;
-
-        const pfTone = pf === null ? '' : (pf >= 1.2 ? 'good' : pf <= 0.9 ? 'bad' : '');
-
-        const minConf = r.minConf !== null && r.minConf !== undefined ? Number(r.minConf) : null;
-
-        const tpPct = r.tpPct !== null && r.tpPct !== undefined ? Number(r.tpPct) : null;
-
-        const slPct = r.slPct !== null && r.slPct !== undefined ? Number(r.slPct) : null;
-
-        const lock = r.lock !== null && r.lock !== undefined ? Number(r.lock) : null;
-
-        const recent = r.recent !== null && r.recent !== undefined ? Number(r.recent) : null;
-
-        return `
-
-        <div class="vo-profile-row">
-
-          <span class="vo-profile-sym">${esc(r.symbol)}</span>
-
-          <span class="vo-profile-grp">${esc(r.group)}</span>
-
-          <span class="vo-profile-src">${esc(r.source)}</span>
-
-          <span class="vo-profile-n" title="samples learned">${r.samples}</span>
-
-          ${r.winRate !== null ? `<span class="vo-profile-wr">WR ${(r.winRate || 0).toFixed(1)}%</span>` : ''}
-
-          ${r.pnl !== null ? `<span class="vo-profile-pnl ${(r.pnl||0) >= 0 ? 'pos' : 'neg'}">${(r.pnl||0).toFixed(2)}</span>` : ''}
-
-          <span class="vo-profile-meta ${pfTone}" title="profit factor (learned)">PF ${pf === null ? '—' : (pf >= 999 ? '∞' : pf.toFixed(2))}</span>
-
-          <span class="vo-profile-meta" title="min confidence (learned)">Conf ${minConf === null ? '—' : (minConf * 100).toFixed(0)}%</span>
-
-          <span class="vo-profile-meta" title="TP / SL % (learned)">TP/SL ${tpPct === null ? '—' : tpPct.toFixed(2)}% / ${slPct === null ? '—' : slPct.toFixed(2)}%</span>
-
-          <span class="vo-profile-meta" title="profit-lock trigger (learned)">Lock ${lock === null ? '—' : lock.toFixed(2)}$</span>
-
-          <span class="vo-profile-meta" title="recent score (learned)">Rec ${recent === null ? '—' : recent.toFixed(2)}</span>
-
-        </div>
-
-      `;
-
-      }).join("")}
-
-    </div>
-
-  `;
-
-}
 
 
 
@@ -5714,8 +5601,6 @@ function paintStatus(data) {
 
 
   renderKpiCards(bot);
-
-  renderSymbolProfileSummary(bot);
 
   renderHermesKanban(bot);
 

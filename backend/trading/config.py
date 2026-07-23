@@ -200,7 +200,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("sessionUSOverlapMultiplier", 1.2)  # US overlap size multiplier
     out.setdefault("sessionUSAfternoonMultiplier", 1.05)  # US afternoon size multiplier
     out.setdefault("sessionAsianEveningMultiplier", 0.9)  # Asian evening size multiplier
-    out.setdefault("minMomentumStrength", 0.08)  # Minimum momentum strength required for entries
+    out.setdefault("minMomentumStrength", 0.065)  # Minimum momentum strength required for entries
     out.setdefault("momentumDirectionConfirmation", True)  # Require momentum direction to match signal
     out.setdefault("divergenceFilterEnabled", True)  # Enable divergence detection filter
     out.setdefault("volumeSpikeThreshold", 3.0)  # Volume spike threshold (multiple of average)
