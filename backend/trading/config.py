@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -50,6 +50,13 @@ _FORCE_DEFAULTS_V4: dict = {
     "perfGateMinPnlUsdt": -0.40,
     "perfGateEarlyMinWinRatePct": 35.0,
     "perfGateEarlyMinPnlUsdt": -0.30,
+}
+_FORCE_DEFAULTS_V5: dict = {
+    # Guardian: widen SL + slower preemptive exit + longer dead zone
+    "stopLossPct": 0.65,
+    "deadZoneExitSec": 720,
+    "preemptiveLossExitMinEntryPct": 0.55,
+    "preemptiveLossExitMinConfirmations": 3,
 }
 
 
@@ -418,6 +425,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 4:
             for _fk, _fv in _FORCE_DEFAULTS_V4.items():
+                out[_fk] = _fv
+        if _stored_ver < 5:
+            for _fk, _fv in _FORCE_DEFAULTS_V5.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out
