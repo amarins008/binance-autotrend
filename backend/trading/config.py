@@ -405,7 +405,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         out["strongFlipUltraScoreGap"] = min(3.5, max(out["strongFlipMinScoreGap"] + 0.2, float(out.get("strongFlipUltraScoreGap", 2.2) or 2.2)))
     except Exception:
         out["strongFlipUltraScoreGap"] = 2.2
-    out["engineVersion"] = "pro-2.1"  # Updated version for adaptive improvements
+    out["engineVersion"] = "pro-5.1"  # Guardian V5.1: wider SL/TP, slower preemptive exit
     # ── Force-override stale snapshot config on version bump ───────────────
     # When CONFIG_VERSION increases, keys in _FORCE_DEFAULTS_VN are
     # overwritten to their new defaults — regardless of what the snapshot

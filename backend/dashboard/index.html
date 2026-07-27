@@ -3637,6 +3637,7 @@
           <span id="publishIpHeader">IP —</span>
 
           <span class="badge" id="engineBadge">pro</span>
+          <span class="badge" id="configVersionBadge" style="margin-left:4px;background:#1a1a2e;color:#e94560;border:1px solid #e94560">V—</span>
 
         </div>
 
@@ -3824,7 +3825,7 @@ const ui = {
 
   winRateSub: $("winRateSub"), pnlSub: $("pnlSub"),
 
-  levCapHint: $("levCapHint"), engineVer: $("engineVer"), engineBadge: $("engineBadge"),
+  levCapHint: $("levCapHint"), engineVer: $("engineVer"), engineBadge: $("engineBadge"), configVersionBadge: $("configVersionBadge"),
 
   backendBanner: $("backendBanner"),
 
@@ -5829,6 +5830,9 @@ function paintStatus(data) {
   if (ui.engineVer) ui.engineVer.textContent = ev;
 
   if (ui.engineBadge) ui.engineBadge.textContent = String(ev).replace("pro-", "") || "desk";
+
+  const cv = bot.config?._configVersion || "—";
+  if (ui.configVersionBadge) ui.configVersionBadge.textContent = "V" + cv;
 
 
 
