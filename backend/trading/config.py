@@ -52,8 +52,9 @@ _FORCE_DEFAULTS_V4: dict = {
     "perfGateEarlyMinPnlUsdt": -0.30,
 }
 _FORCE_DEFAULTS_V5: dict = {
-    # Guardian: widen SL + slower preemptive exit + longer dead zone
-    "stopLossPct": 0.65,
+    # Guardian: widen SL + slower preemptive exit + extend dead zone
+    "stopLossPct": 0.85,
+    "takeProfitPct": 2.2,
     "deadZoneExitSec": 720,
     "preemptiveLossExitMinEntryPct": 0.55,
     "preemptiveLossExitMinConfirmations": 3,
