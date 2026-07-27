@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 5
+CONFIG_VERSION = 6
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -59,6 +59,20 @@ _FORCE_DEFAULTS_V5: dict = {
     "preemptiveLossExitMinEntryPct": 0.70,
     "preemptiveLossExitMinConfirmations": 4,
 }
+_FORCE_DEFAULTS_V6: dict = {
+    # Revert to Jun 3 baseline — current config too restrictive
+    "minConfidence": 0.74,
+    "stopLossPct": 1.0,
+    "takeProfitPct": 2.5,
+    "leverage": 15,
+    "marginType": "CROSSED",
+    "maxTradesPerHour": 8,
+    "earlyEntryScoreGapMin": 1.7,
+    "earlyEntryMinConfidence": 0.68,
+    "profitLockTriggerUsdt": 0.30,
+    "profitLockMaxGivebackUsdt": 0.18,
+    "holdMinConfidence": 0.72,
+}
 
 
 def _normalize_config_symbol(symbol: str) -> str:
@@ -80,7 +94,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out = merge_preset(cfg, preset or "pro")
     out.setdefault("intervalSec", 25)
     out.setdefault("cooldownSec", 20)
-    out.setdefault("maxTradesPerHour", 5)
+    out.setdefault("maxTradesPerHour", 8)
     out.setdefault("allowFlip", False)
     out.setdefault("strongFlipEnabled", True)
     out.setdefault("strongFlipMinConfidence", 0.90)
@@ -96,13 +110,13 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("maxSlippageBps", 18.0)
     out.setdefault("noTradeWindows", [])
     out.setdefault("trailingStopPct", 0.0)
-    out.setdefault("takeProfitPct", 1.8)
-    out.setdefault("stopLossPct", 0.9)
+    out.setdefault("takeProfitPct", 2.5)
+    out.setdefault("stopLossPct", 1.0)
     out.setdefault("minRiskRewardRatio", 1.5)
     out.setdefault("atrTpSlEnabled", True)
     out.setdefault("ema200StrictEnabled", True)
     out.setdefault("usdtAmount", 25.0)
-    out.setdefault("leverage", 5)
+    out.setdefault("leverage", 15)
     out.setdefault("leverageMin", 3)
     out.setdefault("leverageMax", 25)
     out.setdefault("leverageAutoEnabled", True)
@@ -119,8 +133,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("aggressiveScalp", False)
     out.setdefault("waitOverrideImbalance", 0.08)
     out.setdefault("earlyEntryEnabled", True)
-    out.setdefault("earlyEntryScoreGapMin", 1.4)
-    out.setdefault("earlyEntryMinConfidence", 0.60)
+    out.setdefault("earlyEntryScoreGapMin", 1.7)
+    out.setdefault("earlyEntryMinConfidence", 0.68)
     out.setdefault("staleWaitSymbolSkipEnabled", True)
     out.setdefault("staleWaitSymbolSkipCycles", 6)
     out.setdefault("staleWaitSymbolLockMinutes", 20)
@@ -130,7 +144,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("preReversalScoreBlock", 0.45)
     out.setdefault("preReversalScoreSoftener", 0.20)
     out.setdefault("holdWinners", True)
-    out.setdefault("holdMinConfidence", 0.78)
+    out.setdefault("holdMinConfidence", 0.72)
     out.setdefault("holdTrailPct", 0.32)
     out.setdefault("profitLockTriggerUsdt", 0.25)
     out.setdefault("profitLockKeepUsdt", 0.10)
@@ -429,6 +443,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 5:
             for _fk, _fv in _FORCE_DEFAULTS_V5.items():
+                out[_fk] = _fv
+        if _stored_ver < 6:
+            for _fk, _fv in _FORCE_DEFAULTS_V6.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out
