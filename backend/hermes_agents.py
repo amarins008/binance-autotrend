@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -105,6 +106,11 @@ def ensure_agent_state(state: dict[str, Any] | None) -> dict[str, Any]:
         return new_agent_state()
     template = _agent_state_template()
     agents = state.setdefault("agents", {})
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    last_reset = state.get("_dailyResetDate")
+    need_daily_reset = last_reset != today_str
+
     for agent_id, agent in template["agents"].items():
         if not isinstance(agents.get(agent_id), dict):
             agents[agent_id] = dict(agent)
@@ -125,6 +131,17 @@ def ensure_agent_state(state: dict[str, Any] | None) -> dict[str, Any]:
             existing.setdefault("completedAt", 0)
             existing.setdefault("blockedAt", 0)
             existing.setdefault("lastCompletedAction", "")
+
+            if need_daily_reset:
+                existing["runs"] = 0
+                existing["starts"] = 0
+                existing["completions"] = 0
+                existing["lastStartedCycle"] = -1
+                existing["lastCompletedCycle"] = -1
+
+    if need_daily_reset:
+        state["_dailyResetDate"] = today_str
+
     state["version"] = state.get("version") or template["version"]
     state.setdefault("cycle", 0)
     state.setdefault("cycleStartedAt", int(time.time()))
