@@ -22,7 +22,7 @@ _FORCE_DEFAULTS_V1: dict = {
     "preemptiveLossExitMinConfirmations": 2,
     "strongFlipMinConfidence": 0.90,
     # TV signal freshness
-    "tvStaleEntrySec": 120,
+    "tvStaleEntrySec": 300,
     "tvExhaustionPenalty": 0.03,
     "tradingviewConfidenceBoost": 0.08,
     # Hold window
@@ -72,6 +72,12 @@ _FORCE_DEFAULTS_V6: dict = {
     "profitLockTriggerUsdt": 0.30,
     "profitLockMaxGivebackUsdt": 0.18,
     "holdMinConfidence": 0.72,
+    # TV aggressive caching to avoid 429
+    "tradingviewCacheTtl": 300,
+    "tradingviewRateLimit": 6,
+    "tradingviewTimeout": 10.0,
+    "tradingviewMaxFailures": 10,
+    "tvStaleEntrySec": 300,
 }
 
 
@@ -241,12 +247,12 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewApiKey", "")  # TradingView API key
     out.setdefault("tradingviewApiSecret", "")  # TradingView API secret
     out.setdefault("tradingviewWebhookUrl", "")  # TradingView webhook URL
-    out.setdefault("tradingviewCacheTtl", 60)  # Cache TTL in seconds
-    out.setdefault("tradingviewRateLimit", 30)  # Rate limit per minute
-    out.setdefault("tradingviewTimeout", 5.0)  # API timeout in seconds
+    out.setdefault("tradingviewCacheTtl", 300)  # Cache TTL in seconds
+    out.setdefault("tradingviewRateLimit", 6)  # Rate limit per minute
+    out.setdefault("tradingviewTimeout", 10.0)  # API timeout in seconds
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
-    out.setdefault("tradingviewMaxFailures", 5)  # Max failures before auto-disable
-    out.setdefault("tvStaleEntrySec", 120)  # TV signal age limit for entry boost (seconds)
+    out.setdefault("tradingviewMaxFailures", 10)  # Max failures before auto-disable
+    out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
     out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)
     # TradingView position management (global defaults)
     out.setdefault("tradingviewTpExtensionEnabled", False)  # Enable TP extension based on TradingView

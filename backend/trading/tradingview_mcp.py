@@ -2,6 +2,7 @@
 
 import time
 import threading
+import random
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -35,72 +36,79 @@ class TVSignalResult:
 
 
 class TradingViewClient:
-    """
-    TradingView client using tradingview-ta library for maximum stability.
-    Designed as secondary confirmation layer only.
-    """
-    
     def __init__(self, config: Dict[str, Any]):
-        # Internal state
         self._cache: Dict[str, TVSignalResult] = {}
-        self._signal_history: Dict[str, Dict[str, Any]] = {}  # {symbol: {strength, signal, ts}}
+        self._signal_history: Dict[str, Dict[str, Any]] = {}
         self._rate_limit_tracker: Dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
         self._health_status = {"healthy": True, "last_check": 0, "fail_count": 0, "last_error": ""}
         self._disabled_until = 0
+        self._symbol_cooldown: Dict[str, float] = {}
+        self._consecutive_fails: Dict[str, int] = {}
+        self._global_consecutive_fails = 0
         self.update_config(config)
 
     def update_config(self, config: Dict[str, Any]) -> None:
-        """Apply current runtime settings without discarding cached signals."""
         self.enabled = bool(config.get("tradingviewEnabled", False))
-        self.cache_ttl = int(config.get("tradingviewCacheTtl", 60))
-        self.rate_limit_per_minute = int(config.get("tradingviewRateLimit", 30))
-        self.timeout = float(config.get("tradingviewTimeout", 5.0))
+        self.cache_ttl = int(config.get("tradingviewCacheTtl", 300))
+        self.rate_limit_per_minute = int(config.get("tradingviewRateLimit", 6))
+        self.timeout = float(config.get("tradingviewTimeout", 10.0))
         self.confidence_boost = float(config.get("tradingviewConfidenceBoost", 0.08))
-        self.staleness_threshold = int(config.get("tradingviewStalenessThreshold", 300))
-        self._max_failures_before_disable = int(config.get("tradingviewMaxFailures", 5))
-        
+        self.staleness_threshold = int(config.get("tradingviewStalenessThreshold", 900))
+        self._max_failures_before_disable = int(config.get("tradingviewMaxFailures", 10))
+
     def is_enabled(self) -> bool:
-        """Check if TradingView integration is currently enabled."""
         if not self.enabled:
             return False
         if not TRADINGVIEW_TA_AVAILABLE:
             return False
-        if time.time() < self._disabled_until:
+        now = time.time()
+        if now < self._disabled_until:
             return False
-        if not self._health_status["healthy"]:
+        if not self._health_status["healthy"] and now < self._disabled_until:
             return False
         return True
-    
+
+    def _symbol_on_cooldown(self, symbol: str) -> bool:
+        until = self._symbol_cooldown.get(symbol, 0.0)
+        if time.time() < until:
+            return True
+        self._symbol_cooldown.pop(symbol, None)
+        return False
+
+    def _compute_symbol_cooldown(self, symbol: str):
+        fails = self._consecutive_fails.get(symbol, 0)
+        base = 30.0
+        backoff = base * (2 ** min(fails, 5))
+        jitter = random.uniform(0.5, 1.5)
+        self._symbol_cooldown[symbol] = time.time() + backoff * jitter
+
     def _check_rate_limit(self, symbol: str) -> bool:
-        """Check if we're within rate limits (per-symbol + global)."""
+        if self._symbol_on_cooldown(symbol):
+            return False
         with self._rate_limit_lock:
             now = time.time()
             minute_key = f"{symbol}_{int(now // 60)}"
             global_key = f"_global_{int(now // 60)}"
 
-            # Global rate limit: 100 calls/min across all symbols
-            global_max = 100
+            global_max = 20
             if self._rate_limit_tracker.get(global_key, 0) >= global_max:
                 return False
 
-            # Per-symbol rate limit
             if self._rate_limit_tracker.get(minute_key, 0) >= self.rate_limit_per_minute:
                 return False
 
             self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
             self._rate_limit_tracker[global_key] = self._rate_limit_tracker.get(global_key, 0) + 1
 
-            # Clean old entries
             current_minute = str(int(now // 60))
             old_keys = [k for k in self._rate_limit_tracker if k.split("_")[-1] != current_minute]
             for k in old_keys:
                 del self._rate_limit_tracker[k]
 
             return True
-    
+
     def _tv_result_to_dict(self, result: TVSignalResult) -> dict:
-        """Serialize a TVSignalResult to a plain dict for per-symbol storage."""
         if result is None:
             return {}
         try:
@@ -119,7 +127,6 @@ class TradingViewClient:
             return {}
 
     def _tv_dict_to_result(self, d: dict) -> Optional[TVSignalResult]:
-        """Rebuild a TVSignalResult from a persisted per-symbol dict."""
         try:
             _sig = d.get("signal")
             try:
@@ -137,24 +144,17 @@ class TradingViewClient:
             return None
 
     def _get_from_cache(self, symbol: str, force_refresh: bool = False, skip_stale_disk: bool = False, require_fresh: bool = False) -> Optional[TVSignalResult]:
-        """Get signal from cache if available and not expired.
-        If force_refresh=True, skip cache and always fetch fresh data.
-        If skip_stale_disk=True, skip persisted disk fallback if older than cache_ttl.
-        If require_fresh=True, reject in-memory results older than cache_ttl too.
-        If data is stale (>cache_ttl), return it but trigger background refresh."""
+        now = time.time()
         if not force_refresh and symbol in self._cache:
             cached = self._cache[symbol]
-            age = time.time() - cached.timestamp
+            age = now - cached.timestamp
             if age < self.cache_ttl:
                 return cached
             elif not require_fresh and age < self.staleness_threshold:
-                # Data is stale but still usable — return it
-                # Don't mark as stale — just use it as-is
                 return cached
             else:
                 del self._cache[symbol]
-        # Fallback: load persisted per-symbol TV signal from disk so a restart
-        # or a fresh process does not immediately re-hit the TradingView API.
+
         if not force_refresh:
             try:
                 from trading.per_symbol_context import PerSymbolContext
@@ -163,7 +163,7 @@ class TradingViewClient:
                 ctx = PerSymbolContext(str(symbol).upper().strip(), SharedCacheLayer(VAULT_DIR), None)
                 d = ctx.get_tv_signal()
                 if isinstance(d, dict) and d.get("ts"):
-                    age = time.time() - float(d["ts"])
+                    age = now - float(d["ts"])
                     if age < self.cache_ttl:
                         res = self._tv_dict_to_result(d)
                         if res is not None:
@@ -179,10 +179,7 @@ class TradingViewClient:
         return None
 
     def _store_in_cache(self, symbol: str, result: TVSignalResult):
-        """Store signal in cache."""
         self._cache[symbol] = result
-        # Persist to per-symbol storage so the signal survives a restart and is
-        # shared per-symbol rather than only living in this process cache.
         try:
             from trading.per_symbol_context import PerSymbolContext
             from trading.shared_cache_layer import SharedCacheLayer
@@ -192,17 +189,15 @@ class TradingViewClient:
         except Exception:
             pass
 
-        # Clean old cache entries
         now = time.time()
-        old_symbols = [k for k, v in self._cache.items() if now - v.timestamp > self.cache_ttl * 2]
+        old_symbols = [k for k, v in self._cache.items() if now - v.timestamp > self.staleness_threshold]
         for s in old_symbols:
             del self._cache[s]
-    
+
     def _update_health(self, success: bool):
-        """Update health status based on API call results."""
         now = time.time()
         self._health_status["last_check"] = now
-        
+
         if success:
             self._health_status["fail_count"] = max(0, self._health_status["fail_count"] - 1)
             self._health_status["last_error"] = ""
@@ -212,48 +207,45 @@ class TradingViewClient:
             self._health_status["fail_count"] += 1
             if self._health_status["fail_count"] >= self._max_failures_before_disable:
                 self._health_status["healthy"] = False
-                # Disable for 5 minutes
                 self._disabled_until = now + 300
 
     def get_signal(self, symbol: str, internal_signal: str, internal_confidence: float, force_refresh: bool = False) -> Optional[TVSignalResult]:
-        """
-        Get TradingView signal for a symbol using tradingview-ta library.
-        Returns None if disabled, rate limited, or on error (fallback to internal only).
-        If force_refresh=True, bypass cache and fetch fresh data.
-        """
         if not self.is_enabled():
             return None
-        
-        # Check cache first (skip if force_refresh)
+
         cached = self._get_from_cache(symbol, force_refresh=force_refresh)
         if cached and not force_refresh:
+            self._consecutive_fails.pop(symbol, None)
             return cached
 
         if not self._check_rate_limit(symbol):
             return None
-        
+
         try:
             result = self._fetch_from_tradingview(symbol, internal_signal, internal_confidence)
-            
+
             if result:
                 self._store_in_cache(symbol, result)
+                self._consecutive_fails.pop(symbol, None)
+                self._global_consecutive_fails = max(0, self._global_consecutive_fails - 1)
                 self._update_health(True)
                 return result
             else:
+                self._consecutive_fails[symbol] = self._consecutive_fails.get(symbol, 0) + 1
+                self._global_consecutive_fails += 1
+                self._compute_symbol_cooldown(symbol)
                 self._update_health(False)
                 return None
-                
+
         except Exception:
+            self._consecutive_fails[symbol] = self._consecutive_fails.get(symbol, 0) + 1
+            self._global_consecutive_fails += 1
+            self._compute_symbol_cooldown(symbol)
             self._update_health(False)
             return None
-    
+
     def _fetch_from_tradingview(self, symbol: str, internal_signal: str, internal_confidence: float) -> Optional[TVSignalResult]:
-        """
-        Fetch signal from TradingView using tradingview-ta library.
-        This provides maximum stability by using a well-tested library.
-        """
         try:
-            # Use tradingview-ta library for technical analysis
             handler = TA_Handler(
                 symbol=symbol,
                 screener="CRYPTO",
@@ -261,19 +253,17 @@ class TradingViewClient:
                 interval=Interval.INTERVAL_1_HOUR,
                 timeout=self.timeout
             )
-            
+
             analysis = handler.get_analysis()
-            
+
             if not analysis:
                 return None
-                
+
             if not hasattr(analysis, 'summary'):
                 return None
-            
-            # Extract signals from TradingView analysis
+
             recommend = analysis.summary.get("RECOMMENDATION", "NEUTRAL")
-            
-            # Convert recommendation to signal
+
             if recommend in ("STRONG_BUY", "BUY"):
                 tv_signal = TVSignal.LONG
                 confidence = 0.8 if recommend == "STRONG_BUY" else 0.6
@@ -283,17 +273,15 @@ class TradingViewClient:
             else:
                 tv_signal = TVSignal.WAIT
                 confidence = 0.3
-            
-            # Get additional indicators for confidence
+
             oscillators = analysis.oscillators if hasattr(analysis, 'oscillators') else {}
             moving_averages = analysis.moving_averages if hasattr(analysis, 'moving_averages') else {}
-            
-            # Calculate overall confidence based on multiple indicators
+
             osc_buy = oscillators.get("BUY", 0)
             osc_sell = oscillators.get("SELL", 0)
             ma_buy = moving_averages.get("BUY", 0)
             ma_sell = moving_averages.get("SELL", 0)
-            
+
             total_indicators = osc_buy + osc_sell + ma_buy + ma_sell
             if total_indicators > 0:
                 buy_ratio = (osc_buy + ma_buy) / total_indicators
@@ -301,7 +289,7 @@ class TradingViewClient:
                 strength = max(buy_ratio, sell_ratio)
             else:
                 strength = 0.5
-            
+
             return TVSignalResult(
                 signal=tv_signal,
                 confidence=confidence,
@@ -313,44 +301,30 @@ class TradingViewClient:
                     "strength": strength
                 }
             )
-            
+
         except Exception as exc:
             self._health_status["last_error"] = f"{type(exc).__name__}: {exc}"[:240]
             return None
-    
+
     def confirm_signal(self, tv_result: TVSignalResult, internal_signal: str) -> float:
-        """
-        Calculate confidence boost/penalty based on TradingView confirmation.
-        Returns boost amount (positive for confirm, negative for conflict).
-        """
         if not tv_result or tv_result.signal == TVSignal.ERROR:
             return 0.0
-        
+
         internal_signal_upper = internal_signal.upper()
         boost = self.confidence_boost
-        
-        # Full confirmation — uses tradingviewConfidenceBoost from config
+
         if tv_result.signal.value == internal_signal_upper:
             return boost * tv_result.confidence
-        
-        # Conflict — TV actively disagrees with internal signal
+
         if tv_result.signal != TVSignal.WAIT and tv_result.signal.value != internal_signal_upper:
             return -0.5 * boost * tv_result.confidence
-        
-        # Neutral signal (WAIT) — small boost
+
         return boost * 0.3
 
     def get_position_guidance(self, symbol: str, side: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-        """
-        Get TradingView guidance for position management (TP/SL).
-        Returns guidance dict with recommendation, oscillators, moving_averages, strength, signal.
-        Uses the same cache as get_signal() to avoid redundant network calls.
-        If force_refresh=True, bypass cache and fetch fresh data.
-        """
         if not self.is_enabled():
             return None
-        
-        # Check cache first — skip stale disk fallback so Guardian never acts on old TV data
+
         cached = self._get_from_cache(symbol, force_refresh=force_refresh, skip_stale_disk=True, require_fresh=True)
         if cached and not force_refresh:
             return {
@@ -362,18 +336,17 @@ class TradingViewClient:
                 "signal": cached.signal.value,
                 "timestamp": cached.timestamp
             }
-        
+
+        if not self._check_rate_limit(symbol):
+            return None
+
         try:
-            if not self._check_rate_limit(symbol):
-                return None
-            # Fetch current TradingView analysis
             result = self._fetch_from_tradingview(symbol, side, 0.0)
             if not result:
                 return None
-            
-            # Store in cache for other callers
+
             self._store_in_cache(symbol, result)
-            
+
             return {
                 "recommendation": result.metadata.get("recommendation"),
                 "oscillators": result.metadata.get("oscillators", {}),
@@ -385,9 +358,8 @@ class TradingViewClient:
             }
         except Exception:
             return None
-    
+
     def _track_signal_history(self, symbol: str, tv_result: TVSignalResult) -> None:
-        """Track signal strength history for momentum weakening detection."""
         if not tv_result or not symbol:
             return
         strength = tv_result.metadata.get("strength", 0.5)
@@ -397,36 +369,29 @@ class TradingViewClient:
             "ts": time.time(),
             "confidence": tv_result.confidence,
         }
-        # Keep only last 10 symbols to avoid memory bloat
         if len(self._signal_history) > 10:
             oldest = min(self._signal_history, key=lambda k: self._signal_history[k]["ts"])
             del self._signal_history[oldest]
-    
+
     def get_signal_momentum(self, symbol: str, current_strength: float) -> Dict[str, Any]:
-        """
-        Compare current signal strength vs previous.
-        Returns momentum info: {weakening: bool, delta: float, prev_strength: float}
-        """
         prev = self._signal_history.get(symbol)
         if not prev:
             return {"weakening": False, "delta": 0.0, "prev_strength": 0.0, "age_sec": 0}
-        
+
         age_sec = time.time() - prev["ts"]
-        # Only compare if previous signal is recent (< 10 min)
         if age_sec > 600:
             return {"weakening": False, "delta": 0.0, "prev_strength": prev["strength"], "age_sec": age_sec}
-        
+
         delta = current_strength - prev["strength"]
-        weakening = delta < -0.05  # Signal weakened by more than 5%
+        weakening = delta < -0.05
         return {
             "weakening": weakening,
             "delta": delta,
             "prev_strength": prev["strength"],
             "age_sec": age_sec,
         }
-    
+
     def get_health_status(self) -> Dict[str, Any]:
-        """Get current health status."""
         return {
             "enabled": self.enabled,
             "healthy": self._health_status["healthy"],
@@ -435,19 +400,21 @@ class TradingViewClient:
             "cache_size": len(self._cache),
             "last_check": self._health_status["last_check"],
             "last_error": self._health_status.get("last_error", ""),
-            "tradingview_ta_available": TRADINGVIEW_TA_AVAILABLE
+            "tradingview_ta_available": TRADINGVIEW_TA_AVAILABLE,
+            "symbol_cooldowns": len(self._symbol_cooldown),
         }
-    
+
     def force_disable(self, duration_seconds: int = 300):
-        """Force disable TradingView integration for specified duration."""
         self._disabled_until = time.time() + duration_seconds
         self._health_status["healthy"] = False
-    
+
     def force_enable(self):
-        """Force enable TradingView integration."""
         self._disabled_until = 0
         self._health_status["healthy"] = True
         self._health_status["fail_count"] = 0
+        self._symbol_cooldown.clear()
+        self._consecutive_fails.clear()
+        self._global_consecutive_fails = 0
 
 
 # Global instance
@@ -455,7 +422,6 @@ _tv_client_instance: Optional[TradingViewClient] = None
 
 
 def get_tv_client(config: Dict[str, Any]) -> TradingViewClient:
-    """Get or create TradingView client instance."""
     global _tv_client_instance
     if _tv_client_instance is None:
         _tv_client_instance = TradingViewClient(config)
@@ -465,7 +431,6 @@ def get_tv_client(config: Dict[str, Any]) -> TradingViewClient:
 
 
 def reset_tv_client():
-    """Reset global TradingView client instance."""
     global _tv_client_instance
     _tv_client_instance = None
 
