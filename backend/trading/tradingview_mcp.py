@@ -392,6 +392,23 @@ class TradingViewClient:
         }
 
     def get_health_status(self) -> Dict[str, Any]:
+        last_error = self._health_status.get("last_error", "")
+        if "429" in last_error:
+            error_type = "rate_limited"
+        elif last_error and ("timeout" in last_error.lower() or "connection" in last_error.lower()):
+            error_type = "connection"
+        elif last_error:
+            error_type = "unknown"
+        else:
+            error_type = ""
+        # Read recovery_count from supervisor state
+        try:
+            from services.app_state import AUTO_TRADE
+            _s = (AUTO_TRADE.get("supervisorAutoTune") or {}).get("delegations") or {}
+            _r = _s.get("tradingview_health") or {}
+            recovery_count = int(_r.get("recovery_count", 0))
+        except Exception:
+            recovery_count = 0
         return {
             "enabled": self.enabled,
             "healthy": self._health_status["healthy"],
@@ -399,7 +416,9 @@ class TradingViewClient:
             "fail_count": self._health_status["fail_count"],
             "cache_size": len(self._cache),
             "last_check": self._health_status["last_check"],
-            "last_error": self._health_status.get("last_error", ""),
+            "last_error": last_error,
+            "error_type": error_type,
+            "recovery_count": recovery_count,
             "tradingview_ta_available": TRADINGVIEW_TA_AVAILABLE,
             "symbol_cooldowns": len(self._symbol_cooldown),
         }

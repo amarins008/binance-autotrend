@@ -2550,46 +2550,68 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             trade_log_entry["mode"] = "LIVE"
             trade_log_entry.setdefault("closedAt", int(trade.get("closedAt") or trade.get("ts") or time.time()))
             trade_log_entry.setdefault("reason", str(trade.get("reason", "LIVE_CLOSE") or "LIVE_CLOSE"))
-            # Attach TV data from disk (tv_signal.json) — snapshot at time of close
-            try:
-                _tv_path = VAULT_DIR / "symbols" / sym / "tv_signal.json"
-                if _tv_path.exists():
-                    _tv = json.loads(_tv_path.read_text(encoding="utf-8"))
-                    if isinstance(_tv, dict) and _tv:
-                        trade_log_entry["tvSignal"] = _tv.get("signal", "")
-                        trade_log_entry["tvConfidence"] = _tv.get("confidence", 0.0)
-                        trade_log_entry["tvStrength"] = _tv.get("strength", 0.0)
-                        trade_log_entry["tvAge"] = int(time.time()) - int(_tv.get("ts", 0) or 0)
-            except Exception:
-                pass
-            # Attach params_at_entry and guardian_stats from per-symbol storage
-            # (lock may already be popped from in-memory dict, so read from disk)
-            try:
-                from trading.per_symbol_storage import PerSymbolStorage
-                _ps = PerSymbolStorage(VAULT_DIR, sym)
-                _gl = _ps.load_guardian_lock()
-                if isinstance(_gl, dict) and _gl:
-                    _snap = _gl.get("entrySnapshot", {})
-                    if isinstance(_snap, dict):
-                        if _snap.get("params_at_entry"):
-                            trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
-                        if _snap.get("tvSignal"):
-                            trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
-                        if _snap.get("tvConfidence") is not None:
-                            trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
-                    _gs = _gl.get("guardianStats", {})
-                    if isinstance(_gs, dict) and _gs:
-                        trade_log_entry["guardian_stats"] = {
-                            "peakProfitUsdt": _gs.get("peakProfitUsdt", 0.0),
-                            "holdWinnerActivated": _gs.get("holdWinnerActivated", 0),
-                            "tpExtensionCount": _gs.get("tpExtensionCount", 0),
-                            "notionalUsdt": _gs.get("notionalUsdt", 0.0),
-                            "timeInPositionSec": int(time.time()) - int(_gs.get("openedAt", time.time())),
-                        }
-            except Exception:
-                pass
-            _append_trade_log(trade_log_entry)
-            ctx.record_trade(trade_log_entry)
+        else:
+            trade_log_entry["mode"] = str(mode).upper()
+        
+        # Attach TV data from disk (tv_signal.json) — snapshot at time of close (both LIVE and PAPER)
+        try:
+            _tv_path = VAULT_DIR / "symbols" / sym / "tv_signal.json"
+            if _tv_path.exists():
+                _tv = json.loads(_tv_path.read_text(encoding="utf-8"))
+                if isinstance(_tv, dict) and _tv:
+                    trade_log_entry["tvSignal"] = _tv.get("signal", "")
+                    trade_log_entry["tvConfidence"] = _tv.get("confidence", 0.0)
+                    trade_log_entry["tvStrength"] = _tv.get("strength", 0.0)
+                    trade_log_entry["tvAge"] = int(time.time()) - int(_tv.get("ts", 0) or 0)
+                    print(f"[Record Trade] {sym}: TV data from disk - signal={_tv.get('signal')}, conf={_tv.get('confidence')}, age={trade_log_entry['tvAge']}s")
+                else:
+                    print(f"[Record Trade] {sym}: TV file exists but data is invalid")
+            else:
+                print(f"[Record Trade] {sym}: TV signal file not found at {_tv_path}")
+        except Exception as e:
+            print(f"[Record Trade] {sym}: Error reading TV signal file: {e}")
+        
+        # Attach params_at_entry and guardian_stats from per-symbol storage
+        # (lock may already be popped from in-memory dict, so read from disk)
+        try:
+            from trading.per_symbol_storage import PerSymbolStorage
+            _ps = PerSymbolStorage(VAULT_DIR, sym)
+            _gl = _ps.load_guardian_lock()
+            if isinstance(_gl, dict) and _gl:
+                _snap = _gl.get("entrySnapshot", {})
+                if isinstance(_snap, dict):
+                    if _snap.get("params_at_entry"):
+                        trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                        print(f"[Record Trade] {sym}: Found params_at_entry: {_snap['params_at_entry']}")
+                    else:
+                        print(f"[Record Trade] {sym}: No params_at_entry in entrySnapshot")
+                    if _snap.get("tvSignal"):
+                        trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
+                        print(f"[Record Trade] {sym}: TV at entry - signal={_snap['tvSignal']}")
+                    else:
+                        print(f"[Record Trade] {sym}: No tvSignal in entrySnapshot")
+                    if _snap.get("tvConfidence") is not None:
+                        trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
+                        print(f"[Record Trade] {sym}: TV at entry confidence={_snap['tvConfidence']}")
+                _gs = _gl.get("guardianStats", {})
+                if isinstance(_gs, dict) and _gs:
+                    trade_log_entry["guardian_stats"] = {
+                        "peakProfitUsdt": _gs.get("peakProfitUsdt", 0.0),
+                        "holdWinnerActivated": _gs.get("holdWinnerActivated", 0),
+                        "tpExtensionCount": _gs.get("tpExtensionCount", 0),
+                        "notionalUsdt": _gs.get("notionalUsdt", 0.0),
+                        "timeInPositionSec": int(time.time()) - int(_gs.get("openedAt", time.time())),
+                    }
+                    print(f"[Record Trade] {sym}: Found guardian_stats: {trade_log_entry['guardian_stats']}")
+                else:
+                    print(f"[Record Trade] {sym}: No guardian_stats in guardian lock")
+            else:
+                print(f"[Record Trade] {sym}: No guardian lock found")
+        except Exception as e:
+            print(f"[Record Trade] {sym}: Error reading guardian lock: {e}")
+        
+        _append_trade_log(trade_log_entry)
+        ctx.record_trade(trade_log_entry)
         append_trade_memory(VAULT_DIR, trade_log_entry, mode)
     except Exception:
         pass
@@ -2604,14 +2626,17 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             import time as _t; _t.sleep(1.0)
             try:
                 from trading.symbol_autotuner import record_trade_outcome
+                print(f"[Autotune] Triggering record_trade_outcome for {sym}")
                 record_trade_outcome(sym, trade)
-            except Exception:
-                pass
+                print(f"[Autotune] Completed record_trade_outcome for {sym}")
+            except Exception as e:
+                print(f"[Autotune] Error in record_trade_outcome for {sym}: {e}")
         try:
             import threading as _th
+            print(f"[Autotune] Starting deferred autotune thread for {sym}")
             _th.Thread(target=_deferred_autotune, daemon=True).start()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Autotune] Failed to start autotune thread for {sym}: {e}")
 
 
 async def _record_learning_trade_async(symbol: str, trade: dict, mode: str):
@@ -10581,6 +10606,41 @@ def _hermes_supervisor_review(bot_state: dict | None = None) -> dict:
             f"consecutiveErrors={consecutive_errors}",
             "ตรวจ log ล่าสุดและเพิ่ม recovery เฉพาะ error type",
         )
+
+    # TradingView health monitoring
+    tradingview_health_tune = {}
+    if bot is AUTO_TRADE and running and execution_mode == "LIVE":
+        try:
+            from trading.supervisor_tuning import maybe_tune_tradingview_health
+            tradingview_health_tune = maybe_tune_tradingview_health(cfg)
+            if tradingview_health_tune.get("applied"):
+                changed_keys = ", ".join(str(k) for k in tradingview_health_tune.get("changes", {}).keys())
+                rec_count = tradingview_health_tune.get("recovery_count", 1)
+                if tradingview_health_tune.get("tv_disabled"):
+                    _autotrade_log(f"[TradingView] CRITICAL: MCP disabled after {rec_count} recovery attempts")
+                add_auto_action(
+                    "market_analyst",
+                    "auto-tuned TradingView health",
+                    f"{changed_keys} (recovery #{rec_count})",
+                    "applied",
+                    issue_type="tradingview_health",
+                    changes=tradingview_health_tune.get("changes"),
+                )
+                _agent_mark("market_analyst", "done", "auto-tuned TradingView health", changed_keys, tradingview_health_tune.get("changes"))
+            elif tradingview_health_tune.get("alreadyTuned"):
+                rec_count = tradingview_health_tune.get("recovery_count", 0)
+                extra = f" (recovery #{rec_count})" if rec_count else ""
+                add_auto_action("market_analyst", "TradingView health tune cooldown active", f"{tradingview_health_tune.get('reason', '')}{extra}", "applied", issue_type="tradingview_health")
+            elif tradingview_health_tune.get("reason") == "tv_healthy":
+                pass  # No action needed if healthy
+            elif tradingview_health_tune.get("reason") == "tv_rate_limited":
+                cd_count = tradingview_health_tune.get("symbol_cooldowns", 0)
+                _autotrade_log(f"[TradingView] Rate limited ({cd_count} symbols in cooldown), backoff active")
+                add_auto_action("market_analyst", "TradingView rate limited - waiting for backoff", f"{cd_count} symbols in cooldown", "applied", issue_type="tradingview_health")
+            elif tradingview_health_tune.get("reason"):
+                add_auto_action("market_analyst", f"TradingView health check: {tradingview_health_tune.get('reason', '')}", "", "applied", issue_type="tradingview_health")
+        except Exception as e:
+            _autotrade_log(f"[TradingView] Health monitoring error: {e}")
 
     is_scan_timeout_skip = (
         ("timeout" in skip_msg_lower or "timeout" in skip_code.lower())

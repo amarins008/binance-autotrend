@@ -257,6 +257,160 @@ maybe_tune_external_signal_guard = _maybe_tune_external_signal_guard
 maybe_tune_low_entry_activity = _maybe_tune_low_entry_activity
 maybe_tune_scan_timeout_from_skip = _maybe_tune_scan_timeout_from_skip
 
+
+def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
+    """Monitor TradingView health and attempt auto-recovery.
+
+    Always checks health (no cooldown). Recovery actions have independent 120s
+    cooldown with progressive escalation: force_enable -> reset -> disable + report.
+    """
+    if not isinstance(cfg, dict):
+        return {}
+
+    from trading.tradingview_mcp import get_tv_client, reset_tv_client
+
+    tv_client = get_tv_client(cfg)
+    health = tv_client.get_health_status()
+    is_healthy = health.get("healthy", True)
+    fail_count = health.get("fail_count", 0)
+    last_error = health.get("last_error", "")
+    error_type = health.get("error_type", "")
+
+    # If healthy, no action needed
+    if is_healthy and fail_count < 3:
+        return {"applied": False, "reason": "tv_healthy", "health": health}
+
+    # Classify: rate limit vs real failure
+    is_rate_limited = error_type == "rate_limited"
+
+    if is_rate_limited:
+        return {
+            "applied": False,
+            "reason": "tv_rate_limited",
+            "health": health,
+            "symbol_cooldowns": health.get("symbol_cooldowns", 0),
+        }
+
+    # Real failure — check recovery cooldown (bypass _supervisor_delegation_cooldown
+    # because its min 300s is too slow for immediate recovery)
+    state: dict = AUTO_TRADE.get("supervisorAutoTune") or {}
+    delegations: dict = state.get("delegations") or {}
+    tv_rec: dict = delegations.get("tradingview_health") or {}
+    last_at = int(tv_rec.get("at", 0) or 0)
+    _TV_RECOVERY_COOLDOWN = 120  # 2 min between recovery attempts
+    in_cooldown = time.time() - last_at < _TV_RECOVERY_COOLDOWN
+
+    recovery_count = int(tv_rec.get("recovery_count", 0))
+
+    if in_cooldown:
+        return {
+            "applied": False,
+            "alreadyTuned": True,
+            "cooldownSec": _TV_RECOVERY_COOLDOWN,
+            "health": health,
+            "tv_unhealthy": True,
+            "recovery_count": recovery_count,
+        }
+
+    # --- Progressive recovery ---
+    changes: dict = {}
+    reason = ""
+    tv_disabled = False
+
+    try:
+        if recovery_count < 2:
+            # Attempt 1-2: force_enable (reset client health state)
+            tv_client.force_enable()
+            reason = f"force_enabled_tv: {last_error}"
+            changes["tradingviewEnabled"] = {"set": True, "was": cfg.get("tradingviewEnabled", False)}
+            cfg["tradingviewEnabled"] = True
+
+        elif recovery_count < 4:
+            # Attempt 3-4: full client reset (fresh singleton)
+            reset_tv_client()
+            get_tv_client(cfg)  # recreates instance
+            reason = f"reset_tv_client: {last_error}"
+            changes["tradingview_reset"] = {"set": True, "was": False}
+
+        else:
+            # Attempt 5+: unrecoverable, disable TV for 10 min + flag
+            tv_client.force_disable(600)
+            cfg["tradingviewEnabled"] = False
+            tv_disabled = True
+            reason = f"tv_unrecoverable_after_{recovery_count}_attempts: {last_error}"
+            changes["tradingviewEnabled"] = {"set": False, "was": True}
+            changes["tradingview_disabled_reason"] = {"set": reason, "was": ""}
+
+    except Exception as e:
+        reason = f"tv_recovery_error: {str(e)}"
+
+    # Update recovery count
+    tv_rec["recovery_count"] = recovery_count + 1
+    tv_rec["at"] = int(time.time())
+    tv_rec["last_error"] = last_error
+    tv_rec["recovery_action"] = reason
+    delegations["tradingview_health"] = tv_rec
+    state["delegations"] = delegations
+    AUTO_TRADE["supervisorAutoTune"] = state
+
+    if not changes:
+        return {"applied": False, "reason": "no_safe_delta", "health": health}
+
+    signature = _tuning_signature(
+        "tradingview_health",
+        fail_count=fail_count,
+        healthy=is_healthy,
+        error_type=error_type,
+        recovery_count=recovery_count + 1,
+    )
+
+    # Log always
+    try:
+        from main import _autotrade_log
+        _autotrade_log(f"[TradingView] {reason} (recovery #{recovery_count + 1}, fail_count={fail_count})")
+    except Exception:
+        pass
+
+    if tv_disabled:
+        try:
+            from main import _autotrade_log as al
+            al(f"[TradingView] CRITICAL: auto-recovery failed after {recovery_count + 1} attempts. "
+               f"TradingView MCP disabled for 10 min. Last error: {last_error}")
+        except Exception:
+            pass
+
+    out = _commit_supervisor_config_tune(
+        state,
+        delegations,
+        "tradingview_health",
+        cfg,
+        changes,
+        reason,
+    )
+    # Preserve recovery tracking (commit overwrites delegations[key] with 3 fields)
+    tv_rec_extra = {
+        "recovery_count": recovery_count + 1,
+        "last_error": last_error,
+        "recovery_action": reason,
+    }
+    state = AUTO_TRADE.setdefault("supervisorAutoTune", {})
+    delegations = state.setdefault("delegations", {})
+    if isinstance(delegations.get("tradingview_health"), dict):
+        delegations["tradingview_health"].update(tv_rec_extra)
+    else:
+        delegations["tradingview_health"] = {"at": int(time.time()), **tv_rec_extra}
+    AUTO_TRADE["supervisorAutoTune"] = state
+
+    out["severity"] = min(1.0, fail_count / 10.0)
+    out["signature"] = signature
+    out["health"] = health
+    out["recovery_count"] = recovery_count + 1
+    out["tv_disabled"] = tv_disabled
+    return out
+
+
+maybe_tune_tradingview_health = _maybe_tune_tradingview_health
+
 def _supervisor_trade_period_reviews(trades: list[dict], *, now_ts: int | None = None) -> list[dict]:
     cleaned: list[dict] = []
     for trade in trades or []:
