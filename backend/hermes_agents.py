@@ -169,6 +169,21 @@ def rebuild_kanban(state: dict[str, Any]) -> dict[str, Any]:
     state["updatedAt"] = int(time.time())
     return state
 
+def move_agent_in_kanban(state: dict[str, Any], agent_id: str, from_bucket: str, to_bucket: str) -> dict[str, Any]:
+    """Move agent between buckets without full rebuild (O(1) vs O(n))."""
+    kanban = state.setdefault("kanban", {"todo": [], "doing": [], "done": [], "blocked": []})
+    
+    # Remove from old bucket
+    if from_bucket in kanban and agent_id in kanban[from_bucket]:
+        kanban[from_bucket].remove(agent_id)
+    
+    # Add to new bucket
+    if to_bucket in kanban:
+        kanban[to_bucket].append(agent_id)
+    
+    state["updatedAt"] = int(time.time())
+    return state
+
 
 def mark_agent(
     state: dict[str, Any] | None,
@@ -196,6 +211,10 @@ def mark_agent(
     last_update = int(agent.get("updatedAt", 0) or 0)
     if same_event and last_update > 0 and now - last_update < AGENT_MARK_DEDUPE_SEC:
         return state
+    # Track if state actually changed for lazy rebuild
+    old_state = str(agent.get("state", "todo") or "todo")
+    old_action = str(agent.get("lastAction", "") or "")
+    state_changed = (old_state != bucket or old_action != next_action)
     agent["state"] = bucket
     agent["lastAction"] = next_action
     agent["lastReason"] = next_reason
@@ -217,6 +236,63 @@ def mark_agent(
         agent["blockedAt"] = now
     if isinstance(data, dict):
         agent["data"] = data
+    # Only rebuild kanban if state actually changed
+    if state_changed:
+        return rebuild_kanban(state)
+    return state
+
+def batch_mark_agents(state: dict[str, Any], updates: list[tuple[str, str, str, str, dict[str, Any] | None]]) -> dict[str, Any]:
+    """Update multiple agents at once and rebuild kanban once (reduces rebuild frequency)."""
+    state = ensure_agent_state(state)
+    agents = state["agents"]
+    now = int(time.time())
+    cycle = int(state.get("cycle", 0) or 0)
+    
+    for agent_id, stage, action, reason, data in updates:
+        if agent_id not in agents:
+            continue
+        
+        bucket = stage if stage in ("todo", "doing", "done", "blocked") else "todo"
+        agent = agents[agent_id]
+        next_action = str(action)[:180]
+        next_reason = str(reason)[:240]
+        
+        # Check dedupe
+        same_event = (
+            str(agent.get("state", "todo") or "todo") == bucket
+            and str(agent.get("lastAction", "") or "") == next_action
+            and str(agent.get("lastReason", "") or "") == next_reason
+            and _same_agent_data(agent.get("data"), data)
+        )
+        last_update = int(agent.get("updatedAt", 0) or 0)
+        if same_event and last_update > 0 and now - last_update < AGENT_MARK_DEDUPE_SEC:
+            continue
+        
+        # Update agent state
+        agent["state"] = bucket
+        agent["lastAction"] = next_action
+        agent["lastReason"] = next_reason
+        agent["updatedAt"] = now
+        agent["runs"] = int(agent.get("runs", 0) or 0) + (1 if bucket == "done" else 0)
+        
+        if bucket == "doing":
+            agent["startedAt"] = now
+            if int(agent.get("lastStartedCycle", -1) or -1) != cycle:
+                agent["starts"] = int(agent.get("starts", 0) or 0) + 1
+                agent["lastStartedCycle"] = cycle
+        elif bucket == "done":
+            agent["completedAt"] = now
+            agent["lastCompletedAction"] = next_action
+            if int(agent.get("lastCompletedCycle", -1) or -1) != cycle:
+                agent["completions"] = int(agent.get("completions", 0) or 0) + 1
+                agent["lastCompletedCycle"] = cycle
+        elif bucket == "blocked":
+            agent["blockedAt"] = now
+        
+        if isinstance(data, dict):
+            agent["data"] = data
+    
+    # Rebuild kanban once after all updates
     return rebuild_kanban(state)
 
 

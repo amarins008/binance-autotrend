@@ -673,10 +673,10 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
 
     weak_loss_pressure = avg_loss > 0 and avg_win > 0 and avg_loss > avg_win * 1.35
     if weak_loss_pressure:
-        sl_pct = max(0.20, float(cfg.get("stopLossPct", 0.9) or 0.9))
+        sl_pct = max(0.70, float(cfg.get("stopLossPct", 0.9) or 0.9))
         loss_pressure = avg_loss / max(avg_win, 0.01)
         sl_factor = max(0.70, 0.88 if loss_pressure >= 2.4 else 0.94 - 0.06 * severity)
-        set_float("stopLossPct", max(0.48, sl_pct * sl_factor), 3)
+        set_float("stopLossPct", max(0.70, sl_pct * sl_factor), 3)
         cap = float(cfg.get("payoffLossGuardLossToWinCap", 1.05) or 1.05)
         set_float("payoffLossGuardLossToWinCap", max(0.85, min(cap, 0.95 - 0.05 * severity)), 3)
         max_loss_usdt = float(cfg.get("payoffLossGuardMaxLossUsdt", 0.9) or 0.9)

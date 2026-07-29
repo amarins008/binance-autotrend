@@ -139,23 +139,27 @@ def _save_symbol_profile(symbol: str, profile: dict) -> bool:
 # ── Snapshot & Record ─────────────────────────────────────────────────────────
 
 def snapshot_active_params(symbol: str, eff: dict) -> dict:
-    return {
+    params = {
         "holdTrailPct": round(float(eff.get("holdTrailPct", 0.25) or 0.25), 4),
         "holdMinConfidence": round(float(eff.get("holdMinConfidence", 0.72) or 0.72), 4),
         "tpPct": round(float(eff.get("tpPct", 1.8) or 1.8), 4),
         "slPct": round(float(eff.get("slPct", 0.75) or 0.75), 4),
         "snapshotAt": int(time.time()),
     }
+    _log(f"{symbol}: Snapshot params_at_entry: {params}")
+    return params
 
 def record_guardian_stats(lock: dict, stats: dict) -> None:
     if not isinstance(lock, dict):
         return
+    sym = str(lock.get("symbol", "unknown")).upper()
     gs = lock.get("guardianStats")
     if not isinstance(gs, dict):
         gs = {}
     gs.update(stats)
     gs["updatedAt"] = int(time.time())
     lock["guardianStats"] = gs
+    _log(f"{sym}: Updated guardian_stats: {stats}")
 
 def record_trade_outcome(symbol: str, trade: dict) -> None:
     sym = str(symbol or "").upper().strip()

@@ -92,7 +92,7 @@ class AutoTradeStartRequest(BaseModel):
     takeProfitPct: float = Field(default=1.8, gt=0)
     stopLossPct: float = Field(default=0.8, gt=0)
     intervalSec: int = Field(default=20, ge=5, le=120)
-    minConfidence: float = Field(default=0.66, ge=0.0, le=1.0)
+    minConfidence: float = Field(default=0.72, ge=0.0, le=1.0)
     htfStrictEnabled: bool = True
     htfMinStrength: float = Field(default=0.22, ge=0.0, le=1.0)
     requireVisionConsensus: bool = False
@@ -139,7 +139,7 @@ class AutoTradeStartRequest(BaseModel):
     scanSidePreference: Literal["score", "long", "short"] = "score"
     whitelistSymbols: list[str] = Field(default_factory=list)
     scanDenySymbols: list[str] = Field(
-        default_factory=lambda: ["XAUUSDT", "XAGUSDT", "SPCXUSDT", "CLUSDT", "MRVLUSDT", "INTCUSDT"]
+        default_factory=lambda: ["XAUUSDT", "XAGUSDT", "SPCXUSDT", "CLUSDT", "MRVLUSDT", "INTCUSDT", "HYPEUSDT", "LABUSDT", "XRPUSDT", "DOGEUSDT", "NEARUSDT", "AKEUSDT", "BANKUSDT"]
     )
     adaptiveSizing: bool = True
     adaptiveSizeBoostMaxPct: float = Field(default=18.0, ge=0.0, le=150.0)
@@ -218,8 +218,8 @@ class AutoTradeStartRequest(BaseModel):
     memoryArchiveWeightPct: float = Field(default=0.0, ge=0.0, le=5.0)
     riskCooldownEnabled: bool = True
     riskCooldownLookback: int = Field(default=8, ge=2, le=100)
-    riskCooldownLossStreak: int = Field(default=3, ge=2, le=20)
-    riskCooldownMinutes: int = Field(default=30, ge=1, le=1440)
+    riskCooldownLossStreak: int = Field(default=2, ge=2, le=20)
+    riskCooldownMinutes: int = Field(default=60, ge=1, le=1440)
     riskCooldownAdaptiveMarket: bool = True
     riskCooldownAdaptiveCheckSec: int = Field(default=30, ge=10, le=600)
     riskCooldownLightScanEnabled: bool = True
@@ -271,6 +271,14 @@ class AutoTradeStartRequest(BaseModel):
     learningPenaltyLoss: float = Field(default=0.8, ge=0.0, le=20.0)
     learningRewardDecay: float = Field(default=0.985, ge=0.9, le=1.0)
     learningRewardCap: float = Field(default=50.0, ge=1.0, le=500.0)
+    tradingviewEnabled: bool = True
+    tradingviewCacheTtl: int = Field(default=60, ge=10, le=600)
+    tradingviewRateLimit: int = Field(default=30, ge=5, le=120)
+    tradingviewTimeout: float = Field(default=5.0, ge=1.0, le=30.0)
+    tradingviewConfidenceBoost: float = Field(default=0.08, ge=0.0, le=0.3)
+    tradingviewStalenessThreshold: int = Field(default=300, ge=60, le=1800)
+    tradingviewMaxFailures: int = Field(default=5, ge=1, le=20)
+    supervisorTradingViewHealthCooldownMinutes: int = Field(default=15, ge=5, le=120)
 
 
 class AutoTradeControlRequest(BaseModel):

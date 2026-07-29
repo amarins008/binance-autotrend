@@ -539,10 +539,19 @@ function renderHermesKanban(bot) {
 
   const agents = state.agents && typeof state.agents === "object" ? state.agents : {};
 
-  const _fp = Object.keys(agents).sort().map((id) => {
-    const a = agents[id];
-    return `${id}:${a.state || "todo"}:${a.runs || 0}:${a.updatedAt || 0}:${a.lastAction || ""}:${a.lastReason || ""}`;
-  }).join("|");
+  const _fp = (() => {
+    const keys = Object.keys(agents).sort();
+    let hash = 0;
+    for (const id of keys) {
+      const a = agents[id];
+      const str = `${id}:${a.state || "todo"}:${a.runs || 0}:${a.updatedAt || 0}:${a.lastAction || ""}:${a.lastReason || ""}`;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0;
+      }
+    }
+    return hash.toString(36);
+  })();
 
   if (_fp === ui._kanbanFingerprint && ui.hermesKanban.querySelector(".office-room")) return;
 

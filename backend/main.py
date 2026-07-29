@@ -2743,8 +2743,12 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
     if global_tightening > 0.03 and wr >= 58 and reward_score > 0:
         exemption = min(global_tightening * 0.6, 0.08)
         out -= exemption
-    # Hard cap: prevent adaptiveMinConf from exceeding 0.82
-    return max(0.65, min(0.82, out))
+    # Dynamic clamp: respect supervisor tuning while preventing runaway.
+    # Upper bound follows supervisor base_min_conf so per-symbol learning
+    # doesn't get overridden by global tuning (was hardcoded 0.82).
+    lower_limit = max(0.65, base_min_conf - 0.10)
+    upper_limit = max(0.82, base_min_conf + 0.04)
+    return max(lower_limit, min(upper_limit, out))
 
 
 def _symbol_quality_score(symbol: str) -> float:

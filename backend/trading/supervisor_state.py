@@ -117,6 +117,7 @@ _COOLDOWN_CFG_KEYS: dict[str, str] = {
     "weak_payoff": "supervisorPayoffTuneCooldownMinutes",
     "size_streak": "supervisorSizeStreakCooldownMinutes",
     "scan_timeout": "supervisorScanTimeoutCooldownMinutes",
+    "tradingview_health": "supervisorTradingViewHealthCooldownMinutes",
 }
 
 
