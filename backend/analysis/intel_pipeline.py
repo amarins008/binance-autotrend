@@ -942,6 +942,9 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # filters, loss-streak adaptive thresholds, and volume-profile analysis
     # all take effect — previously this inline path used STRONG_THRESHOLD=6
     # which was weaker than the confluence.py implementation.
+    _tv_signal = ""
+    _tv_confidence = 0.0
+    _tv_strength = 0.0
     try:
         from trading.confluence import evaluate_confluence
         _loss_streak = 0
@@ -973,6 +976,10 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         long_score = cr.long_score
         short_score = cr.short_score
         notes.extend([n for n in cr.notes if n and n not in notes][:3])
+        # Capture TV data for entry-time snapshot
+        _tv_signal = cr.tv_signal
+        _tv_confidence = cr.tv_confidence
+        _tv_strength = cr.tv_strength
     except Exception:
         # Fallback to inline scoring when confluence import fails
         long_score = 0
@@ -1129,6 +1136,13 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         "execution": execution,
         "candles": candle_ctx,
     }
+    # Capture TV data at entry time for post-trade analysis
+    if _tv_signal:
+        result["tv"] = {
+            "signal": _tv_signal,
+            "confidence": _tv_confidence,
+            "strength": _tv_strength,
+        }
     result["decisionData"] = _decision_data_layers(
         symbol=symbol,
         signal=final_signal,

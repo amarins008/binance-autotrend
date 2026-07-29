@@ -35,11 +35,17 @@ def evaluate_confluence(
     
     # TradingView secondary confirmation + exhaustion protection
     tv_boost = 0.0
+    tv_signal_val = ""
+    tv_conf_val = 0.0
+    tv_strength_val = 0.0
     if cfg and symbol and bool(cfg.get("tradingviewEnabled", False)):
         try:
             tv_client = get_tv_mcp(cfg)
             tv_result = tv_client.get_signal(symbol, pre_signal, pre_confidence)
             if tv_result:
+                tv_signal_val = tv_result.signal.value if tv_result.signal else ""
+                tv_conf_val = tv_result.confidence
+                tv_strength_val = float(tv_result.metadata.get("strength", 0.0) or 0.0)
                 # --- Protection 1: Signal Age Gate ---
                 # If TV signal is stale (> 120s old), zero the boost entirely
                 tv_age_sec = time.time() - tv_result.timestamp
@@ -425,4 +431,7 @@ def evaluate_confluence(
         long_score=long_score,
         short_score=short_score,
         notes=notes,
+        tv_signal=tv_signal_val,
+        tv_confidence=tv_conf_val,
+        tv_strength=tv_strength_val,
     )

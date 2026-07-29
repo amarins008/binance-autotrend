@@ -18,6 +18,9 @@ class ConfluenceResult:
     long_score: int
     short_score: int
     notes: list[str] = field(default_factory=list)
+    tv_signal: str = ""
+    tv_confidence: float = 0.0
+    tv_strength: float = 0.0
 
 
 @dataclass
