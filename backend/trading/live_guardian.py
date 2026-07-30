@@ -25,13 +25,12 @@ AUTO_TRADE = app_state.AUTO_TRADE
 
 def _persist_tv_signal(symbol: str, guidance: dict) -> None:
     """Persist TradingView signal to per-symbol disk so restarts don't lose TV data."""
+    sym = str(symbol).upper().strip()
+    if not sym:
+        return
     try:
         from services.config_paths import VAULT_DIR
-        sym = str(symbol).upper().strip()
-        if not sym:
-            return
         storage = PerSymbolStorage(str(VAULT_DIR), sym)
-        # Convert guidance dict to signal format
         signal = {
             "signal": guidance.get("signal", "WAIT"),
             "confidence": guidance.get("confidence", 0.0),
@@ -46,8 +45,8 @@ def _persist_tv_signal(symbol: str, guidance: dict) -> None:
             "timestamp": guidance.get("timestamp", time.time()),
         }
         storage.save_tv_signal(signal)
-    except Exception:
-        pass
+    except Exception as exc:
+        _autotrade_log(f"[TradingView] persist error {sym}: {exc}")
 
 
 def _main():
@@ -254,6 +253,7 @@ async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: fl
             if tv_guidance and should_trail_sl_with_tradingview(side, tv_guidance, cfg, symbol):
                 tv_trail_pct = get_tradingview_sl_trailing_pct(side, tv_guidance, cfg)
                 t = max(t, tv_trail_pct)  # Use the larger trail percentage
+                _autotrade_log(f"[TradingView] SL trail {symbol}: side={side} trail_pct={tv_trail_pct:.4f} strength={tv_guidance.get('strength', 0)}")
         except Exception as exc:
             _autotrade_log(f"[TradingView] trail SL guidance error {symbol}: {exc}")
 
@@ -959,6 +959,7 @@ async def _extend_tp_sl_levels(side: str, mark: float, entry: float, old_tp: flo
     # Apply TradingView TP extension if enabled
     if tv_extend:
         tp_step_pct += tv_extension_pct
+        _autotrade_log(f"[TradingView] TP extend {symbol}: side={current_side} extension={tv_extension_pct:.4f} strength={tv_guidance.get('strength', 0) if tv_guidance else 0}")
     
     if current_side == "LONG":
         cap_tp = entry * (1 + max_tp_pct / 100.0)
@@ -1253,12 +1254,19 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
     if cfg.get("tradingviewEnabled", False):
         try:
             tv_client = get_tv_mcp(cfg)
+            _tv_timeout_per = min(10.0, max(3.0, float(len(active_rows) * 2.0)))
             async def _safe_tv(sym_: str, side_: str) -> tuple[str, str, dict | None]:
                 try:
-                    guidance = await async_get_position_guidance(tv_client, sym_, side_)
+                    guidance = await asyncio.wait_for(
+                        async_get_position_guidance(tv_client, sym_, side_),
+                        timeout=_tv_timeout_per,
+                    )
                     if guidance is None:
                         _autotrade_log(f"[TradingView] guidance None for {sym_}:{side_}")
                     return (sym_, side_, guidance)
+                except asyncio.TimeoutError:
+                    _autotrade_log(f"[TradingView] timeout for {sym_}:{side_} after {_tv_timeout_per}s")
+                    return (sym_, side_, None)
                 except Exception as _tv_exc:
                     _autotrade_log(f"[TradingView] error for {sym_}:{side_}: {_tv_exc}")
                     return (sym_, side_, None)
@@ -1268,11 +1276,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 _td = str(p.get("side", "")).upper()
                 tv_tasks.append(_safe_tv(_ts, _td))
             if tv_tasks:
-                tv_timeout = min(10.0, max(3.0, float(len(tv_tasks) * 2.0)))
-                tv_raw = await asyncio.wait_for(
-                    asyncio.gather(*tv_tasks, return_exceptions=True),
-                    timeout=tv_timeout,
-                )
+                tv_raw = await asyncio.gather(*tv_tasks, return_exceptions=True)
                 for r in tv_raw:
                     if isinstance(r, tuple) and len(r) == 3:
                         _tv_results[f"{r[0]}:{r[1]}"] = r[2]
@@ -1366,7 +1370,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 if tv_guidance and isinstance(tv_guidance, dict):
                     _tv_ts = float(tv_guidance.get("timestamp", 0) or 0)
                     _tv_age = now - _tv_ts if _tv_ts > 0 else 9999
-                    _tv_stale_limit = float(cfg.get("tvStaleEntrySec", 120) or 120)
+                    _tv_stale_limit = float(cfg.get("tvStaleEntrySec", 300) or 300)
                     if _tv_age > _tv_stale_limit:
                         tv_guidance = None
                 if tv_guidance and should_exit_early_with_tradingview(side, tv_guidance, cfg, sym):
