@@ -143,26 +143,31 @@ def should_exit_early_with_tradingview(side: str, tv_guidance: Optional[Dict[str
     if not tv_guidance:
         return False
     
-    rec = tv_guidance.get("recommendation")
+    rec = tv_guidance.get("recommendation", "")
     strength = tv_guidance.get("strength", 0.0)
     min_strength = float(cfg.get("tradingviewEarlyExitMinStrength", 0.45))
-    opp = "SHORT" if side == "LONG" else "LONG"
+
+    # TV library returns BUY/SELL/NEUTRAL — map SHORT→SELL, LONG→BUY
+    tv_opp = "SELL" if side == "LONG" else "BUY"
 
     # Exit early if TradingView reverses (lowered threshold — TV rarely >0.7)
-    if rec in (opp, f"STRONG_{opp}") and strength >= min_strength:
+    if rec in (tv_opp, f"STRONG_{tv_opp}") and strength >= min_strength:
         return True
 
     # Also exit if TV confidence is high enough and signal is opposite
-    if strength >= 0.6 and rec == opp:
+    if strength >= 0.6 and rec == tv_opp:
         return True
 
     # Check for divergence in oscillators
     oscillators = tv_guidance.get("oscillators", {})
-    if oscillators:
-        rsi = oscillators.get("RSI", 50)
-        if side == "LONG" and rsi > 65 and strength >= min_strength:
+    if oscillators and isinstance(oscillators, dict):
+        compute = oscillators.get("COMPUTE", {})
+        rsi_str = str(compute.get("RSI", "NEUTRAL")).upper()
+        rsi_sell = rsi_str in ("SELL", "STRONG_SELL")
+        rsi_buy = rsi_str in ("BUY", "STRONG_BUY")
+        if side == "LONG" and rsi_sell and strength >= min_strength:
             return True
-        if side == "SHORT" and rsi < 35 and strength >= min_strength:
+        if side == "SHORT" and rsi_buy and strength >= min_strength:
             return True
     
     return False
