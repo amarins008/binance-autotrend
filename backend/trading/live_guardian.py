@@ -1468,6 +1468,35 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     locks[k] = st
                     changed = True
                     # Don't continue — let other checks (reversal, swing) still evaluate
+            # ── Green exits first: try profit before loss ──
+            if try_green:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRY_GREEN_EXIT")
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} TRY_GREEN_EXIT {try_green_reason} pnl={upnl:.3f}")
+                close_decisions.append(f"{sym}:{side}:TRY_GREEN_EXIT:system=B")
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
+            swing_peak, swing_reason = _swing_peak_detection(
+                side, upnl, float(st.get("peak", 0.0) or 0.0), mark, guard_entry,
+                notional, cfg, intel, st,
+            )
+            if swing_peak:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="SWING_PEAK_CLOSE")
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} SWING_PEAK_CLOSE {swing_reason}")
+                close_decisions.append(f"{sym}:{side}:SWING_PEAK_CLOSE:system=B")
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
             if reversal_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
@@ -1487,35 +1516,6 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} PREEMPTIVE_LOSS_EXIT {preempt_reason} pnl={upnl:.3f}")
                 close_decisions.append(f"{sym}:{side}:PREEMPTIVE_LOSS_EXIT:system=B")
-                _delete_guardian_lock_file(k, cfg)
-                locks.pop(k, None)
-                app_state._LIVE_POSITIONS_CACHE = (0, [])
-                changed = True
-                continue
-            if try_green:
-                if f"{sym}:{side}" not in _closed_symbols:
-                    _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRY_GREEN_EXIT")
-                    _closed_symbols.add(f"{sym}:{side}")
-                _autotrade_log(f"LIVE multi guard close: {sym} {side} TRY_GREEN_EXIT {try_green_reason} pnl={upnl:.3f}")
-                close_decisions.append(f"{sym}:{side}:TRY_GREEN_EXIT:system=B")
-                _delete_guardian_lock_file(k, cfg)
-                locks.pop(k, None)
-                app_state._LIVE_POSITIONS_CACHE = (0, [])
-                changed = True
-                continue
-            # ── Improvement 3: Swing peak detection — close at local tops ──
-            swing_peak, swing_reason = _swing_peak_detection(
-                side, upnl, float(st.get("peak", 0.0) or 0.0), mark, guard_entry,
-                notional, cfg, intel, st,
-            )
-            if swing_peak:
-                if f"{sym}:{side}" not in _closed_symbols:
-                    _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="SWING_PEAK_CLOSE")
-                    _closed_symbols.add(f"{sym}:{side}")
-                _autotrade_log(f"LIVE multi guard close: {sym} {side} SWING_PEAK_CLOSE {swing_reason}")
-                close_decisions.append(f"{sym}:{side}:SWING_PEAK_CLOSE:system=B")
                 _delete_guardian_lock_file(k, cfg)
                 locks.pop(k, None)
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
