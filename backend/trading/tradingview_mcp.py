@@ -438,6 +438,7 @@ class TradingViewClient:
         self._symbol_cooldown.clear()
         self._consecutive_fails.clear()
         self._global_consecutive_fails = 0
+        self.enabled = True
 
 
 # Global instance

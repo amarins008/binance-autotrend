@@ -340,6 +340,8 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
             reason = f"force_enabled_tv: {last_error}"
             changes["tradingviewEnabled"] = {"set": True, "was": cfg.get("tradingviewEnabled", False)}
             cfg["tradingviewEnabled"] = True
+            # Sync config back to TV client so self.enabled matches
+            tv_client.update_config(cfg)
 
         elif recovery_count < 4:
             # Attempt 3-4: full client reset (fresh singleton)
