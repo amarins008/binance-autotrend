@@ -392,6 +392,10 @@ class TradingViewClient:
         }
 
     def get_health_status(self) -> Dict[str, Any]:
+        # Auto-recover if disable window has expired
+        if not self._health_status["healthy"] and time.time() >= self._disabled_until:
+            self._health_status["healthy"] = True
+            self._health_status["fail_count"] = 0
         last_error = self._health_status.get("last_error", "")
         if "429" in last_error:
             error_type = "rate_limited"

@@ -276,8 +276,24 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     last_error = health.get("last_error", "")
     error_type = health.get("error_type", "")
 
-    # If healthy, no action needed
+    # If healthy, no action needed (unless disabled — auto-recover)
     if is_healthy and fail_count < 3:
+        if not cfg.get("tradingviewEnabled", True):
+            try:
+                from main import _autotrade_log as alog
+            except ImportError:
+                def alog(*a, **kw): pass
+            tv_client.force_enable()
+            cfg["tradingviewEnabled"] = True
+            # Reset recovery count since TV recovered
+            tv_rec = delegations.get("tradingview_health") or {}
+            tv_rec["recovery_count"] = 0
+            tv_rec["at"] = int(time.time())
+            delegations["tradingview_health"] = tv_rec
+            state["delegations"] = delegations
+            AUTO_TRADE["supervisorAutoTune"] = state
+            alog("[TradingView] Auto-recovered: re-enabled after health restored")
+            return {"applied": True, "reason": "tv_recovered_auto_enable", "health": health, "changes": {"tradingviewEnabled": {"set": True, "was": False}}}
         return {"applied": False, "reason": "tv_healthy", "health": health}
 
     # Classify: rate limit vs real failure

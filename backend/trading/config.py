@@ -236,7 +236,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("keyLevelBuffer", 0.08)  # Buffer around key levels (BB extremes)
     out.setdefault("orderFlowConfirmation", False)  # Require order flow confirmation (disabled: too aggressive)
     out.setdefault("minOrderFlowImbalance", 0.03)  # Minimum order flow imbalance for confirmation
-    out.setdefault("tradingviewEnabled", False)  # TradingView MCP integration
+    out.setdefault("tradingviewEnabled", True)  # TradingView MCP integration
     # Allow enabling TradingView MCP via env var (set by Start Binance AutoTrade.bat).
     # Only applies when the user has not explicitly set tradingviewEnabled in config.
     if (
