@@ -9719,7 +9719,7 @@ async def _autotrade_loop():
                     old_amt = float(cfg.get("usdtAmount", 0.0) or 0.0)
                     m_min = float(cfg.get("usdtTooSmallMultiplierMin", 5.0) or 5.0)
                     m_max = float(cfg.get("usdtTooSmallMultiplierMax", 10.0) or 10.0)
-                    mult = max(1.0, min(m_max, max(m_min, 5.0)))
+                    mult = max(1.0, min(m_max, m_min))
                     new_amt = round(max(old_amt * mult, 20.0), 2)
                     max_notional = float(RISK.get("max_notional", 0.0) or 0.0)
                     if max_notional > 0:
