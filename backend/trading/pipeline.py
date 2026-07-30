@@ -134,27 +134,28 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
-    # Momentum direction confirmation
-    if signal == "LONG" and mom_pct < 0:
-        if not _step(pipeline, "momentum_direction", False, f"LONG signal but momentum {mom_pct:.3f} is negative"):
-            return EntryPlan(
-                False,
-                "momentum_mismatch",
-                f"Skip: LONG signal vs negative momentum {mom_pct:.3f}",
-                signal,
-                conf,
-                pipeline=pipeline,
-            )
-    elif signal == "SHORT" and mom_pct > 0:
-        if not _step(pipeline, "momentum_direction", False, f"SHORT signal but momentum {mom_pct:.3f} is positive"):
-            return EntryPlan(
-                False,
-                "momentum_mismatch",
-                f"Skip: SHORT signal vs positive momentum {mom_pct:.3f}",
-                signal,
-                conf,
-                pipeline=pipeline,
-            )
+    # Momentum direction confirmation (skipped when config disables it)
+    if bool(cfg.get("momentumDirectionConfirmation", True)):
+        if signal == "LONG" and mom_pct < 0:
+            if not _step(pipeline, "momentum_direction", False, f"LONG signal but momentum {mom_pct:.3f} is negative"):
+                return EntryPlan(
+                    False,
+                    "momentum_mismatch",
+                    f"Skip: LONG signal vs negative momentum {mom_pct:.3f}",
+                    signal,
+                    conf,
+                    pipeline=pipeline,
+                )
+        elif signal == "SHORT" and mom_pct > 0:
+            if not _step(pipeline, "momentum_direction", False, f"SHORT signal but momentum {mom_pct:.3f} is positive"):
+                return EntryPlan(
+                    False,
+                    "momentum_mismatch",
+                    f"Skip: SHORT signal vs positive momentum {mom_pct:.3f}",
+                    signal,
+                    conf,
+                    pipeline=pipeline,
+                )
 
     if bool(cfg.get("requireVisionConsensus", False)):
         if not _step(pipeline, "vision", inp.vision_ok, "required"):
