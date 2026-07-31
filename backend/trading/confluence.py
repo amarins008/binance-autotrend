@@ -1,5 +1,7 @@
 """Multi-factor confluence engine — professional signal synthesis."""
 
+import time
+
 from trading.types import ConfluenceResult
 from trading.tradingview_mcp import get_tv_mcp
 
