@@ -992,6 +992,15 @@ def _swing_peak_detection(
     factors = [mom_decel, rsi_extreme, bb_extreme, conf_dropping, mom_against]
     score = sum(1 for f in factors if f)
 
+    # Req 10 (SWING_PEAK conservative): momentum deceleration alone is not a
+    # swing top — it is usually a mid-trend pause and the price continues.
+    # Require the momentum to actually turn AGAINST the position (swing broke),
+    # or an extreme RSI/BB reading on top of a strong confidence drop. This
+    # stops the guardian selling the exact pause before the next leg.
+    require_against = bool(cfg.get("swingPeakRequireMomentumAgainst", True))
+    if require_against and not mom_against:
+        return False, ""
+
     # Require more factors if profit is small
     min_score = 2
     if upnl < float(cfg.get("swingPeakMinProfitUsdt", 0.08) or 0.08) * 2:
@@ -1711,12 +1720,20 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         # Req 8: notional-scaled min_profit_lock (replaces hard 0.08 floor).
         weak_signal_rate = max(0.0, float(cfg.get("profitLockWeakSignalRatePct", 0.04) or 0.04))
         min_profit_lock = max(fee_min_capture * 2.0, float(cfg.get("profitLockMinUsdt", 0.10) or 0.10), notional * weak_signal_rate / 100.0)
-        if upnl >= min_profit_lock and weak_now and st["peak"] >= lock_trigger:
+        # Req 9 (WEAK_SIGNAL conservative): don't close winners the instant the
+        # signal softens — the price often just paused and continues. Require
+        # (a) the position held past weakSignalMinHoldSec (default = guardian
+        # min-hold, so a fresh winner isn't stopped out on noise), and
+        # (b) peak well above the lock trigger (weakSignalPeakMultiplier x),
+        # so only a position that actually had a real run gets taken early.
+        weak_min_hold = max(min_hold_sec, float(cfg.get("weakSignalMinHoldSec", min_hold_sec) or min_hold_sec))
+        weak_peak_floor = lock_trigger * max(1.0, float(cfg.get("weakSignalPeakMultiplier", 2.0) or 2.0))
+        if upnl >= min_profit_lock and weak_now and st["peak"] >= weak_peak_floor and held_sec >= weak_min_hold:
             if f"{sym}:{side}" not in _closed_symbols:
                 _persist_single_lock_before_close(st, cfg)
                 await _main()._close_position_one_side(sym, side, key, secret, base, reason="WEAK_SIGNAL")
                 _closed_symbols.add(f"{sym}:{side}")
-            _autotrade_log(f"LIVE lock close: {sym} {side} WEAK_SIGNAL {upnl:.3f} USDT (min_lock={min_profit_lock:.4f} fee={fee_min_capture:.4f} notional={notional:.2f} rate={weak_signal_rate}%)")
+            _autotrade_log(f"LIVE lock close: {sym} {side} WEAK_SIGNAL {upnl:.3f} USDT (min_lock={min_profit_lock:.4f} peak_floor={weak_peak_floor:.4f} held={held_sec:.0f}s>={weak_min_hold:.0f}s)")
             close_decisions.append(f"{sym}:{side}:WEAK_SIGNAL:system=B")
             _delete_guardian_lock_file(k, cfg)
             locks.pop(k, None)

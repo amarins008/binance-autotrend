@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -89,6 +89,16 @@ _FORCE_DEFAULTS_V7: dict = {
     "tvEarlyExitStructureConfirm": True,
     "tvConflictConfirmationsRequired": 2,
     "tvPullbackTrailPct": 0.12,
+}
+
+_FORCE_DEFAULTS_V8: dict = {
+    # Anti-early-exit round 2: guardian closed winners too fast (75% of green
+    # exits kept running >0.3% within 20 min). Hard-override the trade rate and
+    # require real swing breaks / held winners before taking profit early.
+    "maxTradesPerHour": 5,
+    "weakSignalMinHoldSec": 180,
+    "weakSignalPeakMultiplier": 2.0,
+    "swingPeakRequireMomentumAgainst": True,
 }
 
 
@@ -468,5 +478,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
             for _fk, _fv in _FORCE_DEFAULTS_V7.items():
                 if _fk not in out or out[_fk] is None:
                     out[_fk] = _fv
+        if _stored_ver < 8:
+            for _fk, _fv in _FORCE_DEFAULTS_V8.items():
+                out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out
