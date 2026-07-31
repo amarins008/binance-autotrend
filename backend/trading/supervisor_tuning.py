@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 
@@ -17,6 +18,57 @@ from trading.supervisor_state import (
 )
 
 AUTO_TRADE = app_state.AUTO_TRADE
+
+# ── TV alert webhook ──────────────────────────────────────────────────────────
+# Sends a JSON POST to cfg["tradingviewWebhookUrl"] (Discord / Telegram bot /
+# generic endpoint) when TradingView health degrades or recovers. Fire-and-forget
+# with a per-level cooldown so a flapping client cannot spam the webhook.
+_TV_ALERT_COOLDOWN_SEC = 600  # 10 min between alerts of the same level
+_TV_ALERT_LAST: dict[str, float] = {}
+
+
+def _tv_alert_send(cfg: dict | None, level: str, title: str, message: str) -> dict:
+    """Send one TV health alert to the configured webhook (if any).
+
+    level ∈ {"info", "warning", "critical"}. Rate-limited per level:
+    only the first alert of a level within _TV_ALERT_COOLDOWN_SEC goes out.
+    Returns {"sent": bool, "reason": str}.
+    """
+    global _TV_ALERT_LAST
+    url = ""
+    if isinstance(cfg, dict):
+        url = str(cfg.get("tradingviewWebhookUrl") or "").strip()
+    if not url:
+        return {"sent": False, "reason": "no_webhook_configured"}
+
+    level = str(level or "info").lower()
+    now = time.time()
+    if now - _TV_ALERT_LAST.get(level, 0.0) < _TV_ALERT_COOLDOWN_SEC:
+        return {"sent": False, "reason": "cooldown"}
+    _TV_ALERT_LAST[level] = now
+
+    try:
+        import urllib.request
+
+        payload = {
+            "source": "binance-autotrend",
+            "topic": "tradingview",
+            "level": level,
+            "title": str(title or "TradingView alert"),
+            "message": str(message or "")[:2000],
+            "ts": int(now),
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            status = getattr(resp, "status", 200)
+        # Discord/Telegram webhooks expect a 2xx; anything else = failure.
+        if not (200 <= int(status) < 300):
+            return {"sent": False, "reason": f"http_{status}"}
+        return {"sent": True, "reason": "ok"}
+    except Exception as exc:
+        return {"sent": False, "reason": f"{type(exc).__name__}: {str(exc)[:80]}"}
 
 
 def _main():
@@ -293,6 +345,8 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
             state["delegations"] = delegations
             AUTO_TRADE["supervisorAutoTune"] = state
             alog("[TradingView] Auto-recovered: re-enabled after health restored")
+            _tv_alert_send(cfg, "info", "TradingView กลับมาแล้ว",
+                           f"TV auto-recovered: re-enabled หลัง health กลับมา (fail_count={fail_count})")
             return {"applied": True, "reason": "tv_recovered_auto_enable", "health": health, "changes": {"tradingviewEnabled": {"set": True, "was": False}}}
         return {"applied": False, "reason": "tv_healthy", "health": health}
 
@@ -300,6 +354,11 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     is_rate_limited = error_type == "rate_limited"
 
     if is_rate_limited:
+        # Warn once when the rate-limit streak climbs (not per cycle — the
+        # per-level cooldown in _tv_alert_send handles that).
+        if fail_count >= 8:
+            _tv_alert_send(cfg, "warning", "TradingView rate-limited ต่อเนื่อง",
+                           f"fail_count={fail_count} (rate_limited) — TV signal อาจขาด coverage")
         return {
             "applied": False,
             "reason": "tv_rate_limited",
@@ -396,6 +455,10 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
                f"TradingView MCP disabled for 10 min. Last error: {last_error}")
         except Exception:
             pass
+        _tv_alert_send(cfg, "critical", "TradingView ถูกปิดอัตโนมัติ",
+                       f"Auto-recovery ล้มเหลวหลัง {recovery_count + 1} ครั้ง — TV ถูก disable 10 นาที\n"
+                       f"last_error: {last_error}\n"
+                       f"fail_count: {fail_count}")
 
     out = _commit_supervisor_config_tune(
         state,
