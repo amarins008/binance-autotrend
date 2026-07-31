@@ -62,9 +62,11 @@ def evaluate_confluence(
                     osc = tv_result.metadata.get("oscillators", {})
                     osc_buy = int(osc.get("BUY", 0))
                     osc_sell = int(osc.get("SELL", 0))
-                    rsi_val = osc.get("RSI", "NEUTRAL")
-                    stoch_val = osc.get("STOCH.K", "NEUTRAL")
-                    cci_val = osc.get("CCI", "NEUTRAL")
+                    # RSI/STOCH/CCI live under oscillators["COMPUTE"] as string signals (BUY/SELL/NEUTRAL)
+                    osc_compute = osc.get("COMPUTE", {}) if isinstance(osc, dict) else {}
+                    rsi_val = str(osc_compute.get("RSI", "NEUTRAL")).upper()
+                    stoch_val = str(osc_compute.get("STOCH.K", "NEUTRAL")).upper()
+                    cci_val = str(osc_compute.get("CCI", "NEUTRAL")).upper()
                     
                     ep_base = float(cfg.get("tvExhaustionPenalty", 0.03) or 0.03)
                     exhaustion_penalty = 0.0
