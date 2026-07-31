@@ -377,6 +377,96 @@ def _strong_reversal_structure_confirmed(current_side: str, opposite: str, preci
         return False, f"structure={len(confirms)}/{min(required, observed)}"
     return True, f"structure={','.join(confirms[:4])}"
 
+
+def _tv_conflict_structure_reversal(side: str, intel: dict | None, cfg: dict) -> tuple[bool, str]:
+    """Distinguish a true reversal from a pullback when TV conflicts with the
+    open position.
+
+    TV early-exit used to fire on any opposing TV signal (strength >= 0.45)
+    with no structural check — so a normal pullback inside a still-valid trend
+    was closed at the worst moment, right before the bounce. This gate only
+    approves the early exit when the *internal* structure also confirms the
+    flip (>= tvConflictConfirmationsRequired of trend/MACD/VWAP/BB/RSI agree
+    with the opposite side). Otherwise the position is a pullback hold: keep it
+    and tighten the stop instead.
+    """
+    if not isinstance(intel, dict):
+        return False, "no-intel"
+    if isinstance(intel.get("intel"), dict):
+        intel = intel.get("intel")
+    current_side = str(side or "").upper()
+    if current_side not in ("LONG", "SHORT"):
+        return False, "bad-side"
+    opposite = "SHORT" if current_side == "LONG" else "LONG"
+    px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
+    if not px:
+        return False, "no-precision"
+    required = max(1, int(cfg.get("tvConflictConfirmationsRequired", 2) or 2))
+    vwap_min = max(0.0, float(cfg.get("strongFlipVwapConfirmPct", 0.06) or 0.06))
+    bb_band = max(0.05, min(0.49, float(cfg.get("strongFlipBbConfirmPctB", 0.42) or 0.42)))
+    confirms: list[str] = []
+
+    if opposite == "SHORT":  # reversal down
+        if bool(px.get("trendDown")) or bool(px.get("trendDnPartial")):
+            confirms.append("trend")
+        if bool(px.get("macdBearish")) or bool(px.get("macdCrossDn")):
+            confirms.append("macd")
+        if "vwapDistancePct" in px:
+            try:
+                vwap = float(px.get("vwapDistancePct", 0.0) or 0.0)
+                if vwap >= vwap_min:
+                    confirms.append("vwap")
+            except Exception:
+                pass
+        if "bbPctB" in px:
+            try:
+                bb = float(px.get("bbPctB", 0.5) or 0.5)
+                if bb >= (1.0 - bb_band):
+                    confirms.append("bb")
+            except Exception:
+                pass
+        if "rsi14" in px or "rsi14_5m" in px:
+            try:
+                rsi = float(px.get("rsi14", 50.0) or 50.0)
+                rsi5 = float(px.get("rsi14_5m", rsi) or rsi)
+                if rsi <= 48.0 or rsi5 <= 48.0:
+                    confirms.append("rsi")
+            except Exception:
+                pass
+    else:  # opposite == LONG → reversal up
+        if bool(px.get("trendUp")) or bool(px.get("trendUpPartial")):
+            confirms.append("trend")
+        if bool(px.get("macdBullish")) or bool(px.get("macdCrossUp")):
+            confirms.append("macd")
+        if "vwapDistancePct" in px:
+            try:
+                vwap = float(px.get("vwapDistancePct", 0.0) or 0.0)
+                if vwap <= -vwap_min:
+                    confirms.append("vwap")
+            except Exception:
+                pass
+        if "bbPctB" in px:
+            try:
+                bb = float(px.get("bbPctB", 0.5) or 0.5)
+                if bb <= bb_band:
+                    confirms.append("bb")
+            except Exception:
+                pass
+        if "rsi14" in px or "rsi14_5m" in px:
+            try:
+                rsi = float(px.get("rsi14", 50.0) or 50.0)
+                rsi5 = float(px.get("rsi14_5m", rsi) or rsi)
+                if rsi >= 52.0 or rsi5 >= 52.0:
+                    confirms.append("rsi")
+            except Exception:
+                pass
+
+    ok = len(confirms) >= required
+    if ok:
+        return True, f"reversal={','.join(confirms[:4])}"
+    return False, (f"pullback-intact({','.join(confirms[:3]) or 'no-confirm'})" if confirms else "pullback-intact(none)")
+
+
 def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_min_conf: float | None = None) -> tuple[bool, str]:
     if not bool(cfg.get("holdWinners", True)):
         return False, ""
@@ -1335,6 +1425,8 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         preempt_reason = ""
         tv_early_exit = False
         tv_early_exit_reason = ""
+        tv_pullback_hold = False
+        tv_pullback_reason = ""
         hit_payoff_loss_guard = False
         if isinstance(intel, dict):
             sig = str(intel.get("signal", "WAIT")).upper()
@@ -1374,8 +1466,20 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     if _tv_age > _tv_stale_limit:
                         tv_guidance = None
                 if tv_guidance and should_exit_early_with_tradingview(side, tv_guidance, cfg, sym):
-                    tv_early_exit = True
-                    tv_early_exit_reason = f"TradingView reversal: {tv_guidance.get('recommendation')}"
+                    # Strong-signal conflict: only close when the internal
+                    # structure confirms a TRUE reversal. A pullback inside a
+                    # still-valid trend (structure intact) must NOT be closed
+                    # at the bottom right before the bounce — hold and tighten
+                    # the stop instead.
+                    tv_conflict_reversal, tv_conflict_reason = False, "no-check"
+                    if bool(cfg.get("tvEarlyExitStructureConfirm", True)):
+                        tv_conflict_reversal, tv_conflict_reason = _tv_conflict_structure_reversal(side, intel, cfg)
+                    if tv_conflict_reversal or not bool(cfg.get("tvEarlyExitStructureConfirm", True)):
+                        tv_early_exit = True
+                        tv_early_exit_reason = f"TradingView reversal: {tv_guidance.get('recommendation')} · {tv_conflict_reason}"
+                    else:
+                        tv_pullback_hold = True
+                        tv_pullback_reason = f"TV conflict but structure intact ({tv_conflict_reason}) — pullback hold, tightening SL"
             except Exception as exc:
                 _autotrade_log(f"[TradingView] early exit guidance error {sym}: {exc}")
 
@@ -1468,6 +1572,28 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     locks[k] = st
                     changed = True
                     # Don't continue — let other checks (reversal, swing) still evaluate
+            # ── Improvement 2: TV pullback hold — tighten SL, do NOT close ──
+            # TV is against us but internal structure is still intact (a normal
+            # pullback inside the trend). Closing here would sell the exact low
+            # before the bounce. Instead lock in what we have by pulling the
+            # stop up (LONG) / down (SHORT) to a tight trail off the mark.
+            if tv_pullback_hold and not hit_tp and upnl > 0 and mark > 0 and sl > 0:
+                pb_trail_pct = max(0.05, float(cfg.get("tvPullbackTrailPct", 0.12) or 0.12))
+                if side == "LONG":
+                    pb_sl = max(sl, mark * (1 - pb_trail_pct / 100.0), guard_entry if guard_entry > 0 else 0.0)
+                    moved = pb_sl > sl + 1e-12
+                else:
+                    pb_sl = min(sl, mark * (1 + pb_trail_pct / 100.0), guard_entry if guard_entry > 0 else 1e18)
+                    moved = pb_sl < sl - 1e-12
+                if moved:
+                    st["sl"] = round(float(pb_sl), 10)
+                    st["tvPullbackTrailCount"] = int(st.get("tvPullbackTrailCount", 0) or 0) + 1
+                    _autotrade_log(f"LIVE multi guard pullback tighten: {sym} {side} SL={pb_sl:.6f} · {tv_pullback_reason}")
+                    locks[k] = st
+                    changed = True
+                else:
+                    _autotrade_log(f"LIVE multi guard pullback hold: {sym} {side} SL already tight · {tv_pullback_reason}")
+                    locks[k] = st
             # ── Green exits first: try profit before loss ──
             if try_green:
                 if f"{sym}:{side}" not in _closed_symbols:

@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -78,6 +78,17 @@ _FORCE_DEFAULTS_V6: dict = {
     "tradingviewTimeout": 10.0,
     "tradingviewMaxFailures": 10,
     "tvStaleEntrySec": 300,
+}
+
+_FORCE_DEFAULTS_V7: dict = {
+    # Strong-signal guardian: TV conflict must confirm internal structure
+    # before closing. A pullback inside a still-valid trend is held with a
+    # tightened stop instead of being closed at the bottom right before the
+    # bounce. (Feature: "strong signal wrong side → close only on real
+    # reversal; strong signal right side → extend TP + trail SL".)
+    "tvEarlyExitStructureConfirm": True,
+    "tvConflictConfirmationsRequired": 2,
+    "tvPullbackTrailPct": 0.12,
 }
 
 
@@ -453,5 +464,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         if _stored_ver < 6:
             for _fk, _fv in _FORCE_DEFAULTS_V6.items():
                 out[_fk] = _fv
+        if _stored_ver < 7:
+            for _fk, _fv in _FORCE_DEFAULTS_V7.items():
+                if _fk not in out or out[_fk] is None:
+                    out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out
