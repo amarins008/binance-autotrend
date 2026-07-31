@@ -112,6 +112,35 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
+    # every scan cycle and flags bars that look like imminent mean-reversion
+    # (RSI extremes, divergence, wick rejection). The score used to be computed
+    # and carried into EntryInputs but never gated — entries could open at the
+    # exact moment the market was about to reverse. Wire it up here.
+    pre_rev_score = float(inp.pre_reversal_score or 0.0)
+    pre_rev_risk = str(inp.pre_reversal_side_at_risk or "").upper().strip()
+    if pre_rev_score > 0.0 and pre_rev_risk == signal:
+        pre_rev_block_thr = float(cfg.get("preReversalScoreBlock", 0.45) or 0.45)
+        pre_rev_soften = float(cfg.get("preReversalScoreSoftener", 0.20) or 0.20)
+        if pre_rev_score >= pre_rev_block_thr:
+            return EntryPlan(
+                False,
+                "pre_reversal",
+                f"Skip: pre-reversal score {pre_rev_score:.2f} >= {pre_rev_block_thr:.2f} "
+                f"(side at risk: {pre_rev_risk})",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+        # Soft zone: score below the hard block but above block-softener →
+        # shave confidence so borderline entries fail the confidence gate.
+        soft_thr = max(0.0, pre_rev_block_thr - pre_rev_soften)
+        if pre_rev_score >= soft_thr:
+            shave = 0.05 + (pre_rev_score - soft_thr) * 0.20
+            conf = max(0.0, conf - shave)
+            _step(pipeline, "pre_reversal", True,
+                  f"soft pre-reversal {pre_rev_score:.2f} (>= {soft_thr:.2f}): conf {conf:.3f}")
+
     # Momentum confirmation for timing accuracy
     momentum = inp.intel.get("momentum") if isinstance(inp.intel.get("momentum"), dict) else {}
     mom_pct = float(momentum.get("momentumPct", 0.0) or 0.0)
