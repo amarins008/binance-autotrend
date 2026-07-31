@@ -2956,14 +2956,21 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
 
             tv_client = get_tv_mcp(cfg)
 
-            # Batch prefetch: all candidates in ONE scanner request (avoids the
-            # per-symbol 429 rate limit that the per-symbol gather used to hit).
-            batch_symbols = [
-                symbol
-                for symbol, intel in zip(candidates, results)
-                if isinstance(intel, dict)
-                and str(intel.get("signal", "WAIT") or "WAIT").upper() in ("LONG", "SHORT")
-            ]
+            # Batch prefetch: all analyzed candidates in ONE scanner request
+            # (avoids the per-symbol 429 rate limit that the per-symbol gather
+            # used to hit). Coverage includes WAIT candidates too — a symbol
+            # near the entry gate can flip LONG/SHORT next cycle and the
+            # guardian also reads TV for open positions, so fetching only
+            # current LONG/SHORT signals leaves the rest blind (this is why
+            # overnight trades had 2-13h-old TV data).
+            batch_symbols = [symbol for symbol, _ in zip(candidates, results)]
+            try:
+                open_rows = AUTO_TRADE.get("openLivePositions") or []
+                open_syms = _open_symbols_from_positions(open_rows)
+                if open_syms:
+                    batch_symbols = list(dict.fromkeys(batch_symbols + sorted(open_syms)))
+            except Exception:
+                pass
             if batch_symbols:
                 await asyncio.to_thread(tv_client.batch_fetch_signals, batch_symbols)
         except Exception:
@@ -3109,7 +3116,10 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # confidence; noisy groups (low-liquidity) need higher evidence.
         adaptive_min_conf = float(_learned_min_conf(sym, max(base_min_conf, group_conf_floor)))
         adaptive_min_conf += float(session_bias.get("confidenceShift", 0.0) or 0.0)
-        adaptive_min_conf = max(group_conf_floor, min(0.82, adaptive_min_conf))
+        # Hard per-symbol floor: never allow entries below 0.60 even if the
+        # group profile or learned window loosens the gate (ESPUSDT-style
+        # 0.47 profiles opened too easily and ate oversized SLs).
+        adaptive_min_conf = max(0.60, max(group_conf_floor, min(0.82, adaptive_min_conf)))
         score = score + float(session_bias.get("scoreShift", 0.0) or 0.0)
         # Per-group long-bias: shift score up when signal matches the
         # group's directional preference (e.g. trend-friendly groups
@@ -3251,7 +3261,8 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 score = _intel_score(sym, out) + float(session_bias.get("scoreShift", 0.0) or 0.0)
                 spread_bps = float(ex.get("spreadBps", 0.0) or 0.0)
                 adaptive_min_conf = float(_learned_min_conf(sym, base_min_conf)) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
-                adaptive_min_conf = max(0.45, min(0.90, adaptive_min_conf))
+                # Hard per-symbol floor: same 0.60 floor as the main scan board.
+                adaptive_min_conf = max(0.60, min(0.90, adaptive_min_conf))
                 qualified = True
                 reject_reason = ""
                 if sig not in ("LONG", "SHORT"):
@@ -7097,6 +7108,10 @@ def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
         sm = min(1.30, pos_mult + 0.05)
     elif wr <= 45.0 or pnl < -0.5:
         sm = max(0.40, pos_mult - 0.08)
+    # Loss-streak guard: a bleeding symbol never gets an oversized learned
+    # size multiplier (ESPUSDT learned positionSizeMult 1.3 while losing).
+    if pnl < 0.0:
+        sm = min(sm, 1.10)
     out["positionSizeMult"] = round(sm, 4)
     out["position_size_mult"] = round(sm, 4)
 
@@ -7521,6 +7536,11 @@ def _adaptive_trade_usdt(base_usdt: float, symbol: str, intel: dict, cfg: dict) 
             mult *= max(0.45, min(1.30, float(tune.get("sizeMult", 1.0) or 1.0)))
     # Hard clamps so sizing remains stable.
     mult = max(0.35, min(1.40, mult))
+    # Loss-streak cap: when the symbol's rolling window is bleeding, never
+    # let per-symbol/risk-tune multipliers push size above 1.1x (ESPUSDT's
+    # positionSizeMult 1.3 + SL hit produced the -1.16 USDT single trade).
+    if int(perf.get("trades", 0)) >= 4 and (float(perf.get("winRatePct", 0.0) or 0.0) < 38.0 or float(perf.get("pnl", 0.0) or 0.0) < -0.25):
+        mult = min(mult, 1.10)
     return round(float(base_usdt) * mult, 2)
 
 
@@ -9314,6 +9334,18 @@ async def _autotrade_loop():
                 )
             eff_prof = _symbol_effective_profile(cfg["symbol"], cfg)
             symbol_size_mult = float(eff_prof.get("positionSizeMult") or eff_prof.get("position_size_mult", 1.0) or 1.0)
+            # Loss-streak guard at the apply point too: a bleeding symbol's
+            # learned size multiplier (ESPUSDT 1.3) is capped at 1.10 so an
+            # oversized position can't turn a normal SL into a -1.16 USDT hit.
+            try:
+                _sym_perf = _rolling_symbol_perf(cfg["symbol"], 30) or {}
+                if int(_sym_perf.get("trades", 0) or 0) >= 4 and (
+                    float(_sym_perf.get("winRatePct", 0.0) or 0.0) < 38.0
+                    or float(_sym_perf.get("pnl", 0.0) or 0.0) < -0.25
+                ):
+                    symbol_size_mult = min(symbol_size_mult, 1.10)
+            except Exception:
+                pass
             if abs(symbol_size_mult - 1.0) >= 0.001:
                 old_trade_usdt = trade_usdt
                 trade_usdt = round(float(trade_usdt) * symbol_size_mult, 2)

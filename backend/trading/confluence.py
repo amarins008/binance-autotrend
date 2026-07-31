@@ -57,6 +57,28 @@ def evaluate_confluence(
                     notes.append(f"TV stale ({tv_age_sec:.0f}s > {stale_limit:.0f}s) — boost zeroed")
                 else:
                     tv_boost = tv_client.confirm_signal(tv_result, pre_signal)
+                    # Hard conflict sentinel from confirm_signal: TV strongly
+                    # disagrees (strength >= 0.75) — block the entry entirely
+                    # instead of just shaving confidence.
+                    if tv_boost <= -900.0:
+                        notes.append(
+                            f"TV hard conflict BLOCK: TV={tv_result.signal.value} "
+                            f"vs {pre_signal} strength={tv_strength_val:.2f}"
+                        )
+                        tv_signal_val = tv_result.signal.value if tv_result.signal else ""
+                        # Treat as a block: force WAIT so scan/entry gates reject.
+                        final_signal = "WAIT"
+                        confidence = min(confidence, 0.40)
+                        return ConfluenceResult(
+                            signal="WAIT",
+                            confidence=round(confidence, 3),
+                            long_score=0,
+                            short_score=0,
+                            notes=notes,
+                            tv_signal=tv_signal_val,
+                            tv_confidence=tv_conf_val,
+                            tv_strength=tv_strength_val,
+                        )
                     
                     # --- Protection 2: Oscillator Exhaustion Detection ---
                     # If TV says LONG but oscillators show SELL > BUY, signal is likely exhausted

@@ -562,11 +562,20 @@ class TradingViewClient:
 
         internal_signal_upper = internal_signal.upper()
         boost = self.confidence_boost
+        strength = float(getattr(tv_result.metadata, "get", lambda *a, **k: 0.0)("strength", 0.0) or 0.0)
 
         if tv_result.signal.value == internal_signal_upper:
             return boost * tv_result.confidence
 
         if tv_result.signal != TVSignal.WAIT and tv_result.signal.value != internal_signal_upper:
+            # Strong disagreement escalates the penalty. TV is a secondary
+            # signal, so a hard conflict (strength >= 0.75) returns a sentinel
+            # that confluence interprets as a block — entries against TV are
+            # the #1 loser (DEXEUSDT/KAITOUSDT opened LONG vs TV SHORT 0.69+).
+            if strength >= 0.75:
+                return -999.0  # hard block sentinel
+            if strength >= 0.60:
+                return -1.5 * boost * tv_result.confidence  # ~-0.072 @ conf 0.6
             return -0.5 * boost * tv_result.confidence
 
         return boost * 0.3
