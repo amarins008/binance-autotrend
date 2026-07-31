@@ -3,9 +3,16 @@
 import time
 import threading
 import random
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
+
+try:
+    import requests as _requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    _requests = None
+    REQUESTS_AVAILABLE = False
 
 try:
     from tradingview_ta import TA_Handler, Interval, Exchange
@@ -305,6 +312,249 @@ class TradingViewClient:
         except Exception as exc:
             self._health_status["last_error"] = f"{type(exc).__name__}: {exc}"[:240]
             return None
+
+    # ── Batch fetch: N symbols in ONE request (TV scanner API) ──────────────
+    # tradingview_ta's get_analysis() issues 1 HTTP request per symbol, which
+    # trips the free API's rate limit (429) when scanning many symbols. The
+    # underlying scanner endpoint accepts many tickers per request, so we call
+    # it directly and rebuild the same Analysis-shaped dict tradingview_ta
+    # would have produced. Results are cached per-symbol exactly like the
+    # single-symbol path, so all downstream consumers (confluence, position
+    # guidance) work unchanged.
+    _SCAN_URL = "https://scanner.tradingview.com/crypto/scan"
+    _SCAN_COLUMNS = [
+        "name", "close",
+        "Recommend.All", "Recommend.MA", "Recommend.Other",
+        "RSI", "RSI|1",
+        "Stoch.K", "Stoch.D", "Stoch.K|1", "Stoch.D|1",
+        "CCI20", "CCI20|1",
+        "MACD.macd", "MACD.signal",
+        "EMA10", "SMA10", "EMA20", "SMA20", "EMA30", "SMA30",
+        "EMA50", "SMA50", "EMA100", "SMA100", "EMA200", "SMA200",
+    ]
+
+    @staticmethod
+    def _tv_rec_from_score(score) -> str:
+        """Map scanner score (-1..1) to tradingview_ta RECOMMENDATION string.
+
+        Mirrors Compute.Recommend() exactly (>= -1..<-0.5 STRONG_SELL,
+        >= -0.5..<-0.1 SELL, >= -0.1..<=0.1 NEUTRAL, >0.1..<=0.5 BUY,
+        >0.5..<=1 STRONG_BUY).
+        """
+        if score is None:
+            return "NEUTRAL"
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            return "NEUTRAL"
+        if -1 <= score < -0.5:
+            return "STRONG_SELL"
+        if -0.5 <= score < -0.1:
+            return "SELL"
+        if -0.1 <= score <= 0.1:
+            return "NEUTRAL"
+        if 0.1 < score <= 0.5:
+            return "BUY"
+        if 0.5 < score <= 1:
+            return "STRONG_BUY"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _tv_osc_signal(name: str, v: dict) -> str:
+        """Recompute oscillator BUY/SELL/NEUTRAL using tradingview_ta thresholds."""
+        if name == "RSI":
+            rsi, rsi1 = v.get("RSI"), v.get("RSI|1")
+            if rsi is None or rsi1 is None:
+                return "NEUTRAL"
+            if rsi < 30 and rsi1 < rsi:
+                return "BUY"
+            if rsi > 70 and rsi1 > rsi:
+                return "SELL"
+            return "NEUTRAL"
+        if name == "STOCH.K":
+            k, d, k1, d1 = v.get("Stoch.K"), v.get("Stoch.D"), v.get("Stoch.K|1"), v.get("Stoch.D|1")
+            if None in (k, d, k1, d1):
+                return "NEUTRAL"
+            if k < 20 and d < 20 and k > d and k1 < d1:
+                return "BUY"
+            if k > 80 and d > 80 and k < d and k1 > d1:
+                return "SELL"
+            return "NEUTRAL"
+        if name == "CCI":
+            cci, cci1 = v.get("CCI20"), v.get("CCI20|1")
+            if cci is None or cci1 is None:
+                return "NEUTRAL"
+            if cci < -100 and cci > cci1:
+                return "BUY"
+            if cci > 100 and cci < cci1:
+                return "SELL"
+            return "NEUTRAL"
+        if name == "MACD":
+            macd, sig = v.get("MACD.macd"), v.get("MACD.signal")
+            if macd is None or sig is None:
+                return "NEUTRAL"
+            return "BUY" if macd > sig else ("SELL" if macd < sig else "NEUTRAL")
+        return "NEUTRAL"
+
+    @staticmethod
+    def _tv_ma_signal(close, ma) -> str:
+        if close is None or ma is None:
+            return "NEUTRAL"
+        return "BUY" if ma < close else ("SELL" if ma > close else "NEUTRAL")
+
+    def _build_batch_result(self, symbol: str, v: dict) -> Optional[TVSignalResult]:
+        """Rebuild a TVSignalResult from one scanner row (same shape as _fetch_from_tradingview)."""
+        try:
+            recommend = self._tv_rec_from_score(v.get("Recommend.All"))
+            if recommend in ("STRONG_BUY", "BUY"):
+                tv_signal = TVSignal.LONG
+                confidence = 0.8 if recommend == "STRONG_BUY" else 0.6
+            elif recommend in ("STRONG_SELL", "SELL"):
+                tv_signal = TVSignal.SHORT
+                confidence = 0.8 if recommend == "STRONG_SELL" else 0.6
+            else:
+                tv_signal = TVSignal.WAIT
+                confidence = 0.3
+
+            # Oscillators — same structure tradingview_ta emits (incl. COMPUTE sub-dict)
+            osc_compute = {
+                "RSI": self._tv_osc_signal("RSI", v),
+                "STOCH.K": self._tv_osc_signal("STOCH.K", v),
+                "CCI": self._tv_osc_signal("CCI", v),
+                "MACD": self._tv_osc_signal("MACD", v),
+            }
+            osc_counter = {"BUY": 0, "SELL": 0, "NEUTRAL": 0}
+            for s in osc_compute.values():
+                osc_counter[s] = osc_counter.get(s, 0) + 1
+            osc_rec = self._tv_rec_from_score(v.get("Recommend.Other"))
+            oscillators = {
+                "RECOMMENDATION": osc_rec,
+                "BUY": osc_counter.get("BUY", 0),
+                "SELL": osc_counter.get("SELL", 0),
+                "NEUTRAL": osc_counter.get("NEUTRAL", 0),
+                "COMPUTE": osc_compute,
+            }
+
+            # Moving averages — same structure
+            close = v.get("close")
+            ma_compute = {}
+            ma_counter = {"BUY": 0, "SELL": 0, "NEUTRAL": 0}
+            for col in ("EMA10", "SMA10", "EMA20", "SMA20", "EMA30", "SMA30",
+                        "EMA50", "SMA50", "EMA100", "SMA100", "EMA200", "SMA200"):
+                sig = self._tv_ma_signal(close, v.get(col))
+                ma_compute[col] = sig
+                ma_counter[sig] = ma_counter.get(sig, 0) + 1
+            ma_rec = self._tv_rec_from_score(v.get("Recommend.MA"))
+            moving_averages = {
+                "RECOMMENDATION": ma_rec,
+                "BUY": ma_counter.get("BUY", 0),
+                "SELL": ma_counter.get("SELL", 0),
+                "NEUTRAL": ma_counter.get("NEUTRAL", 0),
+                "COMPUTE": ma_compute,
+            }
+
+            osc_buy = int(oscillators.get("BUY", 0))
+            osc_sell = int(oscillators.get("SELL", 0))
+            ma_buy = int(moving_averages.get("BUY", 0))
+            ma_sell = int(moving_averages.get("SELL", 0))
+            total_indicators = osc_buy + osc_sell + ma_buy + ma_sell
+            if total_indicators > 0:
+                buy_ratio = (osc_buy + ma_buy) / total_indicators
+                sell_ratio = (osc_sell + ma_sell) / total_indicators
+                strength = max(buy_ratio, sell_ratio)
+            else:
+                strength = 0.5
+
+            return TVSignalResult(
+                signal=tv_signal,
+                confidence=confidence,
+                timestamp=time.time(),
+                source="tradingview-scan-batch",
+                metadata={
+                    "recommendation": recommend,
+                    "oscillators": oscillators,
+                    "moving_averages": moving_averages,
+                    "strength": strength
+                }
+            )
+        except Exception:
+            return None
+
+    def batch_fetch_signals(self, symbols: List[str], force_refresh: bool = False) -> Dict[str, TVSignalResult]:
+        """Fetch TV analysis for many symbols in a single HTTP request.
+
+        Uses the same scanner endpoint tradingview_ta calls, but batched —
+        N symbols = 1 request, which avoids the per-symbol 429 rate limit.
+        Results are stored in the per-symbol cache so get_signal() /
+        get_position_guidance() / confluence all see them without refetching.
+
+        Returns {symbol: TVSignalResult} for the symbols the API returned.
+        """
+        if not self.is_enabled():
+            return {}
+        if not REQUESTS_AVAILABLE:
+            return {}
+        if not symbols:
+            return {}
+
+        symbols = list(dict.fromkeys(str(s).upper().strip() for s in symbols if str(s).strip()))
+        if not symbols:
+            return {}
+
+        # Skip symbols already cached & fresh unless force_refresh
+        need = []
+        for s in symbols:
+            if force_refresh:
+                need.append(s)
+            else:
+                cached = self._get_from_cache(s, force_refresh=False, skip_stale_disk=True, require_fresh=True)
+                if cached is None:
+                    need.append(s)
+        if not need:
+            return {}
+
+        # Rate limit: one batch = one request (counts against global cap only)
+        with self._rate_limit_lock:
+            now = time.time()
+            minute_key = f"_batch_{int(now // 60)}"
+            if self._rate_limit_tracker.get(minute_key, 0) >= 6:
+                return {}
+            self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
+
+        tickers = [f"BINANCE:{s}" for s in need]
+        try:
+            resp = _requests.post(
+                self._SCAN_URL,
+                json={"symbols": {"tickers": tickers}, "columns": self._SCAN_COLUMNS},
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                self._health_status["last_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                self._update_health(False)
+                return {}
+            data = (resp.json() or {}).get("data", [])
+            if not data:
+                self._health_status["last_error"] = f"scan API returned 0 rows for {len(need)} symbols"
+                self._update_health(False)
+                return {}
+
+            results: Dict[str, TVSignalResult] = {}
+            for row in data:
+                ticker = str(row.get("s", ""))
+                sym = ticker.split(":", 1)[-1] if ":" in ticker else ticker
+                vals = dict(zip(self._SCAN_COLUMNS, row.get("d", [])))
+                res = self._build_batch_result(sym, vals)
+                if res is not None:
+                    results[sym] = res
+                    self._store_in_cache(sym, res)
+                    self._consecutive_fails.pop(sym, None)
+            self._update_health(True)
+            self._global_consecutive_fails = max(0, self._global_consecutive_fails - 1)
+            return results
+        except Exception as exc:
+            self._health_status["last_error"] = f"{type(exc).__name__}: {exc}"[:240]
+            self._update_health(False)
+            return {}
 
     def confirm_signal(self, tv_result: TVSignalResult, internal_signal: str) -> float:
         if not tv_result or tv_result.signal == TVSignal.ERROR:

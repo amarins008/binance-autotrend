@@ -2956,20 +2956,16 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
 
             tv_client = get_tv_mcp(cfg)
 
-            async def _refresh_tv(symbol: str, intel: dict) -> None:
-                signal = str(intel.get("signal", "WAIT") or "WAIT").upper()
-                confidence = float(intel.get("confidence", 0.0) or 0.0)
-                if signal in ("LONG", "SHORT"):
-                    await asyncio.to_thread(tv_client.get_signal, symbol, signal, confidence)
-
-            await asyncio.gather(
-                *[
-                    _refresh_tv(symbol, intel)
-                    for symbol, intel in zip(candidates, results)
-                    if isinstance(intel, dict)
-                ],
-                return_exceptions=True,
-            )
+            # Batch prefetch: all candidates in ONE scanner request (avoids the
+            # per-symbol 429 rate limit that the per-symbol gather used to hit).
+            batch_symbols = [
+                symbol
+                for symbol, intel in zip(candidates, results)
+                if isinstance(intel, dict)
+                and str(intel.get("signal", "WAIT") or "WAIT").upper() in ("LONG", "SHORT")
+            ]
+            if batch_symbols:
+                await asyncio.to_thread(tv_client.batch_fetch_signals, batch_symbols)
         except Exception:
             pass
     best_sym = None
