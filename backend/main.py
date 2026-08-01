@@ -5295,6 +5295,50 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         if bias != 0:
             notes.append(f"Candles tuned SHORT confidence: {old_conf:.3f} -> {confidence:.3f} (bias={bias:.4f})")
 
+    # ── TV hard-conflict gate (same logic as trading/confluence.py) ────────
+    # The inline confluence scoring above has NO TV layer, so entries could
+    # open against a fresh strong TV signal (GIGGLEUSDT 09:44 opened SHORT
+    # vs TV LONG strength 0.92 -> SL hit in 50s). The evaluate_confluence()
+    # path with this gate is only used by intel_pipeline, not by the scan/
+    # entry flow that calls intel_analyze — so the gate must live here too.
+    if final_signal in ("LONG", "SHORT") and bool(req_cfg.get("tradingviewEnabled", False)):
+        try:
+            from trading.tradingview_mcp import get_tv_mcp
+
+            _tv_client = get_tv_mcp(req_cfg)
+            _tv_res = await asyncio.to_thread(_tv_client.get_signal, symbol, final_signal, confidence)
+            if _tv_res is not None and _tv_res.signal is not None and _tv_res.signal.value not in ("WAIT", "ERROR"):
+                _tv_age = time.time() - _tv_res.timestamp
+                _tv_stale = float(req_cfg.get("tvStaleEntrySec", 300) or 300)
+                if _tv_age > _tv_stale:
+                    try:
+                        _fresh = await asyncio.to_thread(
+                            _tv_client.get_signal, symbol, final_signal, confidence, True
+                        )
+                    except Exception:
+                        _fresh = None
+                    if _fresh is not None and (time.time() - _fresh.timestamp) <= _tv_stale:
+                        _tv_res = _fresh
+                        notes.append(f"TV refreshed on entry (was {_tv_age:.0f}s old)")
+                        _tv_age = time.time() - _tv_res.timestamp
+                    else:
+                        notes.append(f"TV stale ({_tv_age:.0f}s > {_tv_stale:.0f}s) — no refresh")
+                _tv_boost = _tv_client.confirm_signal(_tv_res, final_signal)
+                _tv_strength = float((_tv_res.metadata or {}).get("strength", 0.0) or 0.0)
+                if _tv_boost <= -900.0:
+                    notes.append(
+                        f"TV hard conflict BLOCK: TV={_tv_res.signal.value} vs {final_signal} strength={_tv_strength:.2f}"
+                    )
+                    final_signal = "WAIT"
+                    confidence = min(confidence, 0.40)
+                elif _tv_boost != 0.0:
+                    notes.append(
+                        f"TV {'align' if _tv_boost > 0 else 'conflict'} "
+                        f"{_tv_res.signal.value} strength={_tv_strength:.2f} ({_tv_age:.0f}s old)"
+                    )
+        except Exception:
+            pass
+
     result = {
         "symbol": symbol,
         "signal": final_signal,
