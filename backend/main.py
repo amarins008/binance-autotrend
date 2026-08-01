@@ -6063,10 +6063,33 @@ def _entry_snapshot_from_intel(symbol: str | None, side: str | None, intel: dict
     # Capture TV data at entry time for post-trade analysis
     try:
         _tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
+        if not _tv:
+            # Restart-safe fallback: after a restart lastDecisions is empty,
+            # so guardian re-seeding entrySnapshot (live_guardian.py:1199)
+            # and entry snapshots (main.py:8774) would lose the TV data and
+            # post-trade analysis couldn't tell "entered against TV" apart
+            # from "no TV data". Read the persisted per-symbol signal instead.
+            try:
+                _sym = str(symbol or intel.get("symbol") or "").upper().strip()
+                _tv_path = VAULT_DIR / "symbols" / _sym / "tv_signal.json"
+                if _tv_path.exists():
+                    _tv_disk = json.loads(_tv_path.read_text(encoding="utf-8"))
+                    if isinstance(_tv_disk, dict) and str(_tv_disk.get("signal", "") or "").strip():
+                        _tv = {
+                            "signal": str(_tv_disk.get("signal", "") or ""),
+                            "confidence": float(_tv_disk.get("confidence", 0.0) or 0.0),
+                            "strength": float(_tv_disk.get("strength", 0.0) or 0.0),
+                            "age": int(max(0.0, time.time() - float(_tv_disk.get("ts", 0) or 0))),
+                            "_source": "disk-fallback",
+                        }
+            except Exception:
+                _tv = {}
         if _tv:
             snap["tvSignal"] = str(_tv.get("signal", "") or "")
             snap["tvConfidence"] = float(_tv.get("confidence", 0.0) or 0.0)
             snap["tvStrength"] = float(_tv.get("strength", 0.0) or 0.0)
+            if _tv.get("age") is not None:
+                snap["tvAge"] = int(_tv.get("age") or 0)
     except Exception:
         pass
     return snap
