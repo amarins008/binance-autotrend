@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 10
+CONFIG_VERSION = 11
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -134,6 +134,27 @@ _FORCE_DEFAULTS_V10: dict = {
     # 3) momentum gate 0.065 was blocking every candidate (lastSkip weak_momentum
     #    0.010-0.016 for hours) — relax to keep entries flowing:
     "minMomentumStrength": 0.03,
+}
+
+
+_FORCE_DEFAULTS_V11: dict = {
+    # Entry-quality gates (2026-08-01 V12 audit): candlestick patterns with
+    # lifetime WR 37-46% (bearish_engulfing 46.3%/-12.24, doji 46.4%/-13.23,
+    # hammer 39.8%/-7.40, 5m_hammer 36.7%/-7.02 over 2,616 LIVE trades) are
+    # blocked at the pipeline entry gate; TV signals opposing the entry at
+    # strength >= 0.60 are blocked as well (intel layer 1 blocks >= 0.75,
+    # this closes the 0.60-0.75 soft-conflict zone where entries against TV
+    # kept SL'ing in seconds — GIGGLE/MMT/COTI today).
+    "blockedEntryPatterns": [
+        "bearish_engulfing",
+        "5m_bearish_engulfing",
+        "15m_bearish_engulfing",
+        "doji",
+        "15m_doji",
+        "hammer",
+        "5m_hammer",
+    ],
+    "tvConflictBlockStrength": 0.60,
 }
 
 
@@ -521,6 +542,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 10:
             for _fk, _fv in _FORCE_DEFAULTS_V10.items():
+                out[_fk] = _fv
+        if _stored_ver < 11:
+            for _fk, _fv in _FORCE_DEFAULTS_V11.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out

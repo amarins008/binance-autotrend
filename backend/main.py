@@ -2540,7 +2540,11 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             guard_sl *= 0.986
             guard_lock *= 0.965
         guard_tp = max(0.35, min(6.0, guard_tp))
-        guard_sl = max(0.20, min(3.5, guard_sl))
+        # V11: per-trade SL ratchet must respect the global SL floor — the
+        # old hardcoded 0.20 floor let losing streaks tighten per-symbol SL
+        # to noise level (0.28-0.47% → instant whipsaw SL hits).
+        _sl_floor = float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80)
+        guard_sl = max(_sl_floor, min(3.5, guard_sl))
         guard_lock = max(0.08, min(1.50, guard_lock))
         pr["tpPct"] = round(guard_tp, 4)
         pr["slPct"] = round(guard_sl, 4)
@@ -5425,6 +5429,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # vs TV LONG strength 0.92 -> SL hit in 50s). The evaluate_confluence()
     # path with this gate is only used by intel_pipeline, not by the scan/
     # entry flow that calls intel_analyze — so the gate must live here too.
+    _tv_res = None
     if final_signal in ("LONG", "SHORT") and bool(req_cfg.get("tradingviewEnabled", False)):
         try:
             from trading.tradingview_mcp import get_tv_mcp
@@ -5460,9 +5465,28 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                         f"TV {'align' if _tv_boost > 0 else 'conflict'} "
                         f"{_tv_res.signal.value} strength={_tv_strength:.2f} ({_tv_age:.0f}s old)"
                     )
+            else:
+                # TV disabled / unavailable: persist an explicit marker so the
+                # entry pipeline's TV-conflict gate (V12) can tell "no TV data"
+                # apart from "TV aligned". Without this, a failed TV fetch
+                # silently bypassed the TV gate entirely.
+                _tv_res = None
         except Exception:
-            pass
+            _tv_res = None
 
+    # Expose the TV snapshot on the intel result so downstream layers (entry
+    # pipeline TV-conflict gate, entry snapshot, dashboards) read the SAME
+    # signal the intel gate evaluated — not a stale disk read.
+    _tv_snap = {}
+    if bool(req_cfg.get("tradingviewEnabled", False)) and _tv_res is not None:
+        _tv_snap = {
+            "signal": str(getattr(_tv_res, "signal", None) or ""),
+            "confidence": float(getattr(_tv_res, "confidence", 0.0) or 0.0),
+            "strength": float((getattr(_tv_res, "metadata", None) or {}).get("strength", 0.0) or 0.0),
+            "age": int(max(0.0, time.time() - getattr(_tv_res, "timestamp", time.time()))),
+        }
+        if _tv_snap.get("signal") == "ERROR":
+            _tv_snap = {"signal": "ERROR", "strength": 0.0, "age": 0}
     result = {
         "symbol": symbol,
         "signal": final_signal,
@@ -5514,6 +5538,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         "snapshotMeta": {"disabled": True, "provider": "none"},
         "execution": execution,
         "candles": candle_ctx,
+        "tv": _tv_snap,
     }
     result["decisionData"] = _decision_data_layers(
         symbol=symbol,
@@ -7301,7 +7326,8 @@ def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
         "longBias": round(float(out.get("scan_long_bias", 0.5)), 4),
         "chaseSpeed": str(out.get("scan_chase_speed", "normal")),
         "tpPct": round(float(cfg.get("takeProfitPct", 1.8) or 1.8) * float(out.get("tpsl_mult", 1.0)), 4),
-        "slPct": round(float(cfg.get("stopLossPct", 0.9) or 0.9) * float(out.get("sl_mult", 1.0)), 4),
+        "slPct": round(max(float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80),
+                           float(cfg.get("stopLossPct", 0.9) or 0.9) * float(out.get("sl_mult", 1.0))), 4),
         "profitLockTriggerUsdt": round(float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35) * float(out.get("lock_trigger_mult", 1.0)), 4),
         "notionalCapUsdt": round(float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0) * float(out.get("max_trade_notional_mult", 1.0)), 4),
         "cooldownMinutes": int(max(0, round(float(cfg.get("symbolCooldownMins", 15) or 15)))) if wr >= 60.0 else int(max(0, round(float(cfg.get("symbolCooldownMins", 15) or 15) * 1.2))),
@@ -7532,7 +7558,14 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     intel_present = isinstance(intel, dict) and bool(_flat_intel_keys(intel))
 
     base_tp = float(cfg.get("takeProfitPct", 1.2) or 1.2)
-    base_sl = max(0.20, float(cfg.get("stopLossPct", 0.8) or 0.8))
+    # V11: per-symbol SL must never fall below the global SL floor. The
+    # per-trade ratchet (guard_sl *= 0.986 on losses, floor 0.20) and the
+    # sl_mult write path were tightening per-symbol slPct to 0.28-0.47%
+    # (noise level on 15x → instant whipsaw SL hits in <1 min, 9 SL/-2.97
+    # on 08-01). The V10 supervisorStopLossFloor only capped the global
+    # weak_payoff ratchet — this floors the effective per-symbol SL too.
+    _sl_floor = float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80)
+    base_sl = max(_sl_floor, float(cfg.get("stopLossPct", 0.8) or 0.8))
     base_cap = max(20.0, float(cfg.get("tradeNotionalCapUsdt", RISK["max_notional"]) or RISK["max_notional"]))
     base_lock_trigger = float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)
     base_lock_keep = float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15)
@@ -7572,7 +7605,7 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
         "capMult": round(cap_mult, 4),
         "lockMult": round(lock_mult, 4),
         "tpPct": round(float(sym_overrides.get("tpPct", base_tp * tp_mult)), 4),
-        "slPct": round(float(sym_overrides.get("slPct", base_sl * sl_mult)), 4),
+        "slPct": round(max(_sl_floor, float(sym_overrides.get("slPct", base_sl * sl_mult))), 4),
         "notionalCapUsdt": round(float(sym_overrides.get("notionalCapUsdt", base_cap * cap_mult)), 4),
         "profitLockTriggerUsdt": round(
             float(sym_overrides.get("profitLockTriggerUsdt", base_lock_trigger * lock_mult)), 4),

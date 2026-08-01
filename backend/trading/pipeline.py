@@ -126,6 +126,59 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # Pattern quality gate (V12): candlestick patterns with historically
+    # negative expectancy block entries outright. 2,616 LIVE trades:
+    # bearish_engulfing WR 46.3% / -12.24, doji 46.4% / -13.23,
+    # hammer 39.8% / -7.40, 5m_hammer 36.7% / -7.02 — all 🔴. Conversely
+    # shooting_star (54.8%) and bullish_engulfing (53.0%) are fine, so the
+    # blocklist is explicit, not a denylist of everything non-winning.
+    blocked_patterns = [
+        str(p).strip().lower()
+        for p in (cfg.get("blockedEntryPatterns") or [])
+    ]
+    candles_ctx = inp.intel.get("candles") if isinstance(inp.intel.get("candles"), dict) else {}
+    entry_tags = [
+        str(t).strip().lower()
+        for t in (candles_ctx.get("tags") or [])
+        if str(t).strip()
+    ]
+    if blocked_patterns and entry_tags:
+        hit = next((t for t in entry_tags if t in blocked_patterns), None)
+        if hit:
+            return EntryPlan(
+                False,
+                "bad_pattern",
+                f"Skip: pattern {hit} in blocked set (WR 37-46% lifetime)",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+        _step(pipeline, "pattern", True, f"patterns {entry_tags}")
+
+    # TV-conflict block (V12, layer 2): intel_analyze hard-blocks at strength
+    # >= 0.75, but the 0.60-0.75 "soft conflict" zone only applied a -0.072
+    # penalty and the gate is skipped entirely when TV fetch errors (except ->
+    # pass). Entries against strong TV are the #1 loser pattern (DEXEUSDT /
+    # KAITOUSDT / GIGGLEUSDT opened against TV 0.69-1.0 -> SL in seconds), so
+    # re-check the same TV snapshot here at a configurable strength.
+    tv_info = inp.intel.get("tv") if isinstance(inp.intel.get("tv"), dict) else {}
+    tv_sig = str(tv_info.get("signal", "") or "").upper().strip()
+    tv_strength = float(tv_info.get("strength", 0.0) or 0.0)
+    if tv_sig in ("LONG", "SHORT") and tv_sig != signal:
+        tv_block_strength = float(cfg.get("tvConflictBlockStrength", 0.60) or 0.60)
+        if tv_strength >= tv_block_strength:
+            return EntryPlan(
+                False,
+                "tv_conflict",
+                f"Skip: TV {tv_sig} strength {tv_strength:.2f} >= {tv_block_strength:.2f} conflicts {signal}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+        _step(pipeline, "tv_conflict", True, f"TV {tv_sig} {tv_strength:.2f} < block {tv_block_strength:.2f}")
+    else:
+        _step(pipeline, "tv_conflict", True, f"TV {tv_sig or 'n/a'}")
+
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion
     # (RSI extremes, divergence, wick rejection). The score used to be computed
