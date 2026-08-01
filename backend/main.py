@@ -90,6 +90,11 @@ ENV_PATH = Path(os.getenv("HERMES_ENV_PATH", Path(__file__).with_name(".env"))).
 SNAPSHOT_PATH = _DATA_ROOT / "autotrade_snapshot.json"
 VAULT_DIR = _DATA_ROOT / "obsidian_vault"
 TRADES_LOG_PATH = VAULT_DIR / "trades_log.jsonl"
+# Scan events (mode=SCAN) are ~97% of the old single trade log (89k of 91k
+# lines) yet only LIVE rows are used for stats. Splitting them keeps
+# trades_log.jsonl tiny (~2-3k rows) so every stats/session-bias read is fast
+# forever instead of re-parsing a file that grows ~1.5MB/day unbounded.
+SCAN_EVENTS_PATH = VAULT_DIR / "scan_events.jsonl"
 TRAIN_REPORT_PATH = VAULT_DIR / "learning_report.json"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 
@@ -289,11 +294,13 @@ def _scan_error_penalty(symbol: str) -> float:
 def _append_trade_log(entry: dict):
     global _LIVE_STATS_VERSION
     _ensure_vault()
+    is_scan = str(entry.get("mode", "")).upper() == "SCAN"
+    target = SCAN_EVENTS_PATH if is_scan else TRADES_LOG_PATH
     try:
-        with TRADES_LOG_PATH.open("a", encoding="utf-8") as f:
+        with target.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        print(f"[Trade Log] Written to {TRADES_LOG_PATH}: mode={entry.get('mode')}, pnl={entry.get('pnl')}, symbol={entry.get('symbol')}")
-        if str(entry.get("mode", "")).upper() == "LIVE" and "pnl" in entry:
+        print(f"[Trade Log] Written to {target.name}: mode={entry.get('mode')}, pnl={entry.get('pnl')}, symbol={entry.get('symbol')}")
+        if not is_scan and "pnl" in entry:
             _LIVE_STATS_VERSION += 1
             print(f"[Trade Log] LIVE_STATS_VERSION incremented to {_LIVE_STATS_VERSION}")
             # NOTE: do NOT clear _LIVE_STATS_CACHE here. Cache key is keyed by
@@ -304,7 +311,7 @@ def _append_trade_log(entry: dict):
             # trade flow (see also _aggregate_live_trade_stats_from_log).
             _SESSION_BIAS_CACHE["builtAt"] = 0.0
     except Exception as exc:
-        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
+        print(f"[Trade Log] ERROR writing {target}: {exc}")
 
 
 def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
@@ -1976,39 +1983,41 @@ def _weighted_recent_memory_score(windows: dict[str, dict]) -> dict:
 def _entry_session_hours_from_log(max_trades: int = 700) -> dict[int, dict]:
     now = time.time()
     try:
-        mtime = TRADES_LOG_PATH.stat().st_mtime if TRADES_LOG_PATH.exists() else -1.0
+        mtime_trades = TRADES_LOG_PATH.stat().st_mtime if TRADES_LOG_PATH.exists() else -1.0
+        mtime_scan = SCAN_EVENTS_PATH.stat().st_mtime if SCAN_EVENTS_PATH.exists() else -1.0
     except Exception:
-        mtime = -1.0
+        mtime_trades = mtime_scan = -1.0
+    mtime = (mtime_trades, mtime_scan)
     cached_hours = _SESSION_BIAS_CACHE.get("hours")
     if (
         isinstance(cached_hours, dict)
         and float(_SESSION_BIAS_CACHE.get("builtAt", 0.0) or 0.0) > 0
         and int(_SESSION_BIAS_CACHE.get("liveVersion", -1) or -1) == int(_LIVE_STATS_VERSION)
-        and float(_SESSION_BIAS_CACHE.get("mtime", -2.0) or -2.0) == mtime
+        and _SESSION_BIAS_CACHE.get("mtime") == mtime
         and now - float(_SESSION_BIAS_CACHE.get("builtAt", 0.0) or 0.0) < 300.0
     ):
         return cached_hours
     if not TRADES_LOG_PATH.exists():
         _SESSION_BIAS_CACHE.update({"builtAt": now, "liveVersion": _LIVE_STATS_VERSION, "mtime": mtime, "hours": {}})
         return {}
-    try:
-        lines = TRADES_LOG_PATH.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        _SESSION_BIAS_CACHE.update({"builtAt": now, "liveVersion": _LIVE_STATS_VERSION, "mtime": mtime, "hours": {}})
-        return {}
     lookback_days = 30
     cutoff_ts = int(now) - (lookback_days * 86400)
     picked: dict[tuple[str, str], list[int]] = {}
-    closed: list[dict] = []
-    for line in lines:
+    # Scan events live in their own file (split from trades log); LIVE rows
+    # stay in trades_log.jsonl. Both are tiny after the split, so a full read
+    # is cheap and the 5-min cache keeps it amortized.
+    try:
+        scan_lines = SCAN_EVENTS_PATH.read_text(encoding="utf-8").splitlines() if SCAN_EVENTS_PATH.exists() else []
+    except Exception:
+        scan_lines = []
+    for line in scan_lines:
         if not line.strip():
             continue
         try:
             obj = json.loads(line)
         except Exception:
             continue
-        mode = str(obj.get("mode", "")).upper()
-        if mode == "SCAN" and bool(obj.get("picked")):
+        if bool(obj.get("picked")):
             sig = str(obj.get("signal", "")).upper()
             sym = str(obj.get("symbol", "")).upper().strip()
             if sig in ("LONG", "SHORT") and sym:
@@ -2018,26 +2027,40 @@ def _entry_session_hours_from_log(max_trades: int = 700) -> dict[int, dict]:
                     ts = 0
                 if ts >= cutoff_ts:
                     picked.setdefault((sym, sig), []).append(ts)
-        elif mode == "LIVE" and "pnl" in obj:
-            try:
-                pnl = float(obj.get("pnl", 0.0) or 0.0)
-                entry = float(obj.get("entry", 0.0) or 0.0)
-                exit_px = float(obj.get("exit", 0.0) or 0.0)
-                ts = int(float(obj.get("closedAt", obj.get("ts", 0)) or 0))
-            except Exception:
-                continue
-            if ts < cutoff_ts:
-                continue
-            if ts <= 0 or not math.isfinite(pnl) or abs(pnl) > 5000.0:
-                continue
-            closed.append({
-                "symbol": str(obj.get("symbol", "")).upper().strip(),
-                "side": str(obj.get("side", "")).upper(),
-                "pnl": pnl,
-                "entry": entry,
-                "exit": exit_px,
-                "ts": ts,
-            })
+    closed: list[dict] = []
+    try:
+        lines = TRADES_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        _SESSION_BIAS_CACHE.update({"builtAt": now, "liveVersion": _LIVE_STATS_VERSION, "mtime": mtime, "hours": {}})
+        return {}
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if "pnl" not in obj:
+            continue
+        try:
+            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            entry = float(obj.get("entry", 0.0) or 0.0)
+            exit_px = float(obj.get("exit", 0.0) or 0.0)
+            ts = int(float(obj.get("closedAt", obj.get("ts", 0)) or 0))
+        except Exception:
+            continue
+        if ts < cutoff_ts:
+            continue
+        if ts <= 0 or not math.isfinite(pnl) or abs(pnl) > 5000.0:
+            continue
+        closed.append({
+            "symbol": str(obj.get("symbol", "")).upper().strip(),
+            "side": str(obj.get("side", "")).upper(),
+            "pnl": pnl,
+            "entry": entry,
+            "exit": exit_px,
+            "ts": ts,
+        })
     closed = closed[-max(50, int(max_trades or 700)) :]
     buckets: dict[int, list[dict]] = {}
     for item in closed:
