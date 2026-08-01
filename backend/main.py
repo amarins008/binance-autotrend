@@ -8764,6 +8764,8 @@ async def autotrade_adopt_live(symbol: str | None = None):
 
 
 async def autotrade_close_orphan(symbol: str | None = None):
+    if not symbol or not str(symbol).strip():
+        return {"ok": False, "reason": "MISSING_SYMBOL"}
     key = os.getenv("BINANCE_API_KEY")
     secret = os.getenv("BINANCE_API_SECRET")
     base = _binance_base()
@@ -12510,14 +12512,20 @@ async def combined_status():
 async def bot_start(payload: dict = Body(default_factory=dict)):
     """Bot start endpoint — wraps autotrade/start for dashboard compatibility."""
     from schemas import AutoTradeStartRequest
-    req = AutoTradeStartRequest(**payload)
+    try:
+        req = AutoTradeStartRequest(**payload)
+    except Exception as e:
+        return {"ok": False, "error": f"invalid payload: {e}"}
     return await autotrade_start(req)
 
 
-def bot_stop(payload: dict = Body(default_factory=dict)):
+async def bot_stop(payload: dict = Body(default_factory=dict)):
     """Bot stop endpoint — wraps autotrade/stop for dashboard compatibility."""
     from schemas import AutoTradeControlRequest
-    req = AutoTradeControlRequest(**payload)
+    try:
+        req = AutoTradeControlRequest(**payload)
+    except Exception as e:
+        return {"ok": False, "error": f"invalid payload: {e}"}
     return autotrade_stop(req)
 
 
