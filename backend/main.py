@@ -5429,16 +5429,24 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # vs TV LONG strength 0.92 -> SL hit in 50s). The evaluate_confluence()
     # path with this gate is only used by intel_pipeline, not by the scan/
     # entry flow that calls intel_analyze — so the gate must live here too.
+    # NOTE (V13 audit): req_cfg is the API request payload (symbol only), so
+    # req_cfg.get("tradingviewEnabled") was ALWAYS False here -> the gate was
+    # silently skipped and intel["tv"] stayed {} -> the V12 pipeline TV gate
+    # fail-opened on every entry. Load the live bot config instead.
+    try:
+        _live_cfg = apply_autotrade_defaults(copy.deepcopy(AUTO_TRADE.get("config") or {}))
+    except Exception:
+        _live_cfg = req_cfg
     _tv_res = None
-    if final_signal in ("LONG", "SHORT") and bool(req_cfg.get("tradingviewEnabled", False)):
+    if final_signal in ("LONG", "SHORT") and bool(_live_cfg.get("tradingviewEnabled", False)):
         try:
             from trading.tradingview_mcp import get_tv_mcp
 
-            _tv_client = get_tv_mcp(req_cfg)
+            _tv_client = get_tv_mcp(_live_cfg)
             _tv_res = await asyncio.to_thread(_tv_client.get_signal, symbol, final_signal, confidence)
             if _tv_res is not None and _tv_res.signal is not None and _tv_res.signal.value not in ("WAIT", "ERROR"):
                 _tv_age = time.time() - _tv_res.timestamp
-                _tv_stale = float(req_cfg.get("tvStaleEntrySec", 300) or 300)
+                _tv_stale = float(_live_cfg.get("tvStaleEntrySec", 300) or 300)
                 if _tv_age > _tv_stale:
                     try:
                         _fresh = await asyncio.to_thread(
@@ -5478,9 +5486,12 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # pipeline TV-conflict gate, entry snapshot, dashboards) read the SAME
     # signal the intel gate evaluated — not a stale disk read.
     _tv_snap = {}
-    if bool(req_cfg.get("tradingviewEnabled", False)) and _tv_res is not None:
+    if bool(_live_cfg.get("tradingviewEnabled", False)) and _tv_res is not None:
+        _tv_sig_value = str(getattr(_tv_res, "signal", None) or "")
+        if _tv_sig_value.startswith("TVSignal."):
+            _tv_sig_value = _tv_sig_value.split(".", 1)[1]
         _tv_snap = {
-            "signal": str(getattr(_tv_res, "signal", None) or ""),
+            "signal": _tv_sig_value,
             "confidence": float(getattr(_tv_res, "confidence", 0.0) or 0.0),
             "strength": float((getattr(_tv_res, "metadata", None) or {}).get("strength", 0.0) or 0.0),
             "age": int(max(0.0, time.time() - getattr(_tv_res, "timestamp", time.time()))),
