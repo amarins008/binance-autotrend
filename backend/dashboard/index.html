@@ -5832,7 +5832,15 @@ function paintStatus(data) {
   if (ui.engineBadge) ui.engineBadge.textContent = String(ev).replace("pro-", "") || "desk";
 
   const cv = bot.config?._configVersion || "—";
-  if (ui.configVersionBadge) ui.configVersionBadge.textContent = "V" + cv;
+  if (ui.configVersionBadge) {
+    // Show the release version (e.g. V13.1) + git commit, falling back to
+    // the config schema version when appVersion is absent (older backend).
+    const av = bot.appVersion || "";
+    const bc = bot.buildCommit || "";
+    const label = av ? `V${av}${bc ? " · " + bc : ""}` : `V${cv}`;
+    ui.configVersionBadge.textContent = label;
+    ui.configVersionBadge.title = `config schema v${cv}${av ? ` · release ${av}${bc ? " (" + bc + ")" : ""}` : ""}`;
+  }
 
 
 

@@ -153,6 +153,33 @@ SCAN_ANALYZE_CONCURRENCY = max(1, int(os.getenv("SCAN_ANALYZE_CONCURRENCY", "2")
 _DATA_PROVIDER_HEALTH: dict[str, object] = {"streak": 0, "cooldownUntil": 0, "lastErrorAt": 0, "lastError": ""}
 _LIVE_STATS_CACHE: dict[tuple, tuple[float, dict]] = {}
 _LIVE_STATS_VERSION = 0
+# Release version shown on the dashboard. Bump on every feature release;
+# the git commit hash is resolved at runtime so the dashboard always shows
+# the exact deployed build (e.g. "V13.1 · 231cdac").
+APP_VERSION = "13.1"
+_APP_COMMIT_CACHE: dict[str, str] = {"hash": "", "at": 0.0}
+
+
+def _app_commit() -> str:
+    """Short git commit hash of the running build (cached 5 min)."""
+    now = time.time()
+    if _APP_COMMIT_CACHE["hash"] and (now - _APP_COMMIT_CACHE["at"]) < 300:
+        return _APP_COMMIT_CACHE["hash"]
+    _hash = ""
+    try:
+        _head = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".git", "HEAD")
+        if os.path.exists(_head):
+            with open(_head, "r", encoding="utf-8", errors="replace") as f:
+                ref = f.read().strip()
+            if ref.startswith("ref: "):
+                ref_path = os.path.join(os.path.dirname(_head), *ref[5:].split("/"))
+                if os.path.exists(ref_path):
+                    with open(ref_path, "r", encoding="utf-8", errors="replace") as f:
+                        _hash = f.read().strip()[:7]
+    except Exception:
+        _hash = ""
+    _APP_COMMIT_CACHE.update({"hash": _hash, "at": now})
+    return _hash
 _SESSION_BIAS_CACHE: dict[str, object] = {"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}}
 _EXCHANGE_FILTERS_CACHE: dict[str, tuple[float, dict]] = {}
 _EXCHANGE_FILTERS_CACHE_TTL = 60  # seconds
@@ -10339,6 +10366,8 @@ async def autotrade_status(symbol: str | None = None):
         "running": AUTO_TRADE["running"],
         "manageOpenOnly": bool(AUTO_TRADE.get("manageOpenOnly")),
         "pauseUntil": int(AUTO_TRADE.get("pauseUntil", 0) or 0),
+        "appVersion": APP_VERSION,
+        "buildCommit": _app_commit(),
         "riskCooldownLossSignature": str(AUTO_TRADE.get("riskCooldownLossSignature", "") or ""),
         "riskCooldownBySymbol": _prune_risk_cooldowns(),
         "perfLocks": AUTO_TRADE.get("perfLocks", {}),
@@ -12581,6 +12610,8 @@ async def combined_status():
         "bot": {
             "running": running,
             "config": cfg,
+            "appVersion": APP_VERSION,
+            "buildCommit": _app_commit(),
             "sessionId": AUTO_TRADE.get("sessionId"),
             "startedAt": AUTO_TRADE.get("startedAt", 0),
             "consecutiveErrors": AUTO_TRADE.get("consecutiveErrors", 0),
