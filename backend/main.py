@@ -10333,6 +10333,12 @@ async def autotrade_status(symbol: str | None = None):
         "perfLocks": AUTO_TRADE.get("perfLocks", {}),
         "sessionId": AUTO_TRADE.get("sessionId"),
         "startedAt": AUTO_TRADE.get("startedAt", 0),
+        # V13 liveness telemetry: guardian tick timestamp (set every loop
+        # iteration in _autotrade_loop) + last skip/decision timestamps so an
+        # external watchdog can tell "loop stalled" from "no candidates".
+        "guardianMonitorTs": int(AUTO_TRADE.get("_guardianMonitorTs", 0) or 0),
+        "lastSkipAt": int((AUTO_TRADE.get("lastSkip") or {}).get("ts", 0) or 0),
+        "lastDecisionAt": int((AUTO_TRADE.get("lastDecision") or {}).get("ts", 0) or 0),
         "autotradeTask": _autotrade_task_state(),
         "config": public_cfg,
         "tradingviewHealth": tv_health,
