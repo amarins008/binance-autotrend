@@ -1,6 +1,7 @@
 """TradingView client using tradingview-ta library for maximum stability."""
 
 import time
+import json
 import threading
 import random
 from typing import Optional, Dict, Any, List
@@ -53,7 +54,52 @@ class TradingViewClient:
         self._symbol_cooldown: Dict[str, float] = {}
         self._consecutive_fails: Dict[str, int] = {}
         self._global_consecutive_fails = 0
+        # Symbols the scanner API does not know (stock tokens, new listings
+        # absent from TV's crypto universe). Tracked so batches skip them
+        # instead of repeatedly burning rate-limit and tripping the
+        # failure-disable circuit (SNXX/KORU/DRAM/MUU … 0 rows every time).
+        self._tv_missing: Dict[str, float] = {}
+        self._tv_missing_ttl = 86400.0  # re-probe once per day
         self.update_config(config)
+        self._load_missing_cache()
+
+    def _missing_cache_path(self) -> str:
+        try:
+            from services.config_paths import VAULT_DIR
+            return str(VAULT_DIR / "shared" / "tv_missing.json")
+        except Exception:
+            return ""
+
+    def _save_missing_cache(self) -> None:
+        """Persist the miss list so a restart does not re-arm the fail chain."""
+        path = self._missing_cache_path()
+        if not path:
+            return
+        try:
+            from pathlib import Path
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(
+                json.dumps(self._tv_missing, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _load_missing_cache(self) -> None:
+        path = self._missing_cache_path()
+        if not path:
+            return
+        try:
+            from pathlib import Path
+            p = Path(path)
+            if p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                now = time.time()
+                self._tv_missing = {
+                    s: float(ts) for s, ts in data.items()
+                    if (now - float(ts)) < self._tv_missing_ttl
+                }
+        except Exception:
+            self._tv_missing = {}
 
     def update_config(self, config: Dict[str, Any]) -> None:
         self.enabled = bool(config.get("tradingviewEnabled", False))
@@ -219,6 +265,12 @@ class TradingViewClient:
     def get_signal(self, symbol: str, internal_signal: str, internal_confidence: float, force_refresh: bool = False) -> Optional[TVSignalResult]:
         if not self.is_enabled():
             return None
+
+        # Known-absent symbol: do not burn a per-symbol fetch on it.
+        if not force_refresh:
+            miss_ts = self._tv_missing.get(symbol)
+            if miss_ts and (time.time() - miss_ts) < self._tv_missing_ttl:
+                return None
 
         cached = self._get_from_cache(symbol, force_refresh=force_refresh)
         if cached and not force_refresh:
@@ -501,15 +553,19 @@ class TradingViewClient:
         if not symbols:
             return {}
 
-        # Skip symbols already cached & fresh unless force_refresh
+        # Skip symbols already cached & fresh unless force_refresh; also skip
+        # symbols known to be absent from the scanner API (miss cache).
+        now = time.time()
         need = []
         for s in symbols:
             if force_refresh:
                 need.append(s)
-            else:
-                cached = self._get_from_cache(s, force_refresh=False, skip_stale_disk=True, require_fresh=True)
-                if cached is None:
-                    need.append(s)
+                continue
+            if self._tv_missing.get(s, 0) and (now - self._tv_missing.get(s, 0)) < self._tv_missing_ttl:
+                continue  # known absent — do not burn rate limit on it
+            cached = self._get_from_cache(s, force_refresh=False, skip_stale_disk=True, require_fresh=True)
+            if cached is None:
+                need.append(s)
         if not need:
             return {}
 
@@ -534,20 +590,41 @@ class TradingViewClient:
                 return {}
             data = (resp.json() or {}).get("data", [])
             if not data:
-                self._health_status["last_error"] = f"scan API returned 0 rows for {len(need)} symbols"
-                self._update_health(False)
+                # 0 rows is a legitimate response when every requested symbol
+                # is absent from the scanner's crypto universe (stock tokens,
+                # delisted names). That is NOT an API failure — mark them
+                # missing so future batches skip them, and keep the client
+                # healthy. Only HTTP errors / exceptions trip the circuit.
+                for s in need:
+                    self._tv_missing[s] = now
+                self._save_missing_cache()
                 return {}
 
             results: Dict[str, TVSignalResult] = {}
+            found = set()
             for row in data:
                 ticker = str(row.get("s", ""))
                 sym = ticker.split(":", 1)[-1] if ":" in ticker else ticker
+                found.add(sym)
                 vals = dict(zip(self._SCAN_COLUMNS, row.get("d", [])))
                 res = self._build_batch_result(sym, vals)
                 if res is not None:
                     results[sym] = res
                     self._store_in_cache(sym, res)
                     self._consecutive_fails.pop(sym, None)
+                    # Symbol came back on TV — clear its miss entry (auto-heal).
+                    if sym in self._tv_missing:
+                        self._tv_missing.pop(sym, None)
+            # Symbols we asked for but the API did not return are absent
+            # from TV — remember them so future batches skip them.
+            miss_changed = False
+            for s in need:
+                if s not in found and s not in self._tv_missing:
+                    self._tv_missing[s] = now
+                    miss_changed = True
+            if miss_changed:
+                self._save_missing_cache()
+            # Partial success is not a failure (rate-limit/HTTP errors are).
             self._update_health(True)
             self._global_consecutive_fails = max(0, self._global_consecutive_fails - 1)
             return results

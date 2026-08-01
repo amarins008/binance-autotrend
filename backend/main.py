@@ -2911,6 +2911,16 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
     candidates = await _scan_market_candidates(int(cfg.get("scanTopLiquid", 30)))
     blocked_symbols = {str(s).upper().strip() for s in (exclude_symbols or set()) if str(s).strip()}
     blocked_symbols.update(_parse_symbol_whitelist(cfg.get("scanDenySymbols")))
+    # Skip symbols TradingView's scanner does not know (stock tokens, delisted
+    # names): their TV signal is always empty → blind entries, and batches
+    # that include them burn rate limit / used to trip the failure-disable
+    # circuit. The miss list is learned + persisted by batch_fetch_signals.
+    try:
+        from trading.tradingview_mcp import get_tv_mcp
+        tv_client = get_tv_mcp(cfg)
+        blocked_symbols.update(str(s).upper().strip() for s in (tv_client._tv_missing or {}).keys())
+    except Exception:
+        pass
     live_scan = str(cfg.get("executionMode", "") or "").upper() == "LIVE"
     if live_scan:
         blocked_symbols.update(_fapi_agreement_locked_symbols())
