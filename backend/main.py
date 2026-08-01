@@ -877,8 +877,12 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
 
     tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55))
     tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.2) or 2.2))
-    set_float("tpTargetMinUsdt", min(1.20, tp_min * (1.0 + 0.15 * severity)), 3)
-    set_float("tpTargetMaxUsdt", min(3.20, max(tp_max * (1.0 + 0.12 * severity), float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.4)), 3)
+    # Ceilings on the TP-target ratchet: unbounded raises made TP unreachable
+    # (DEAD_ZONE_TIMEOUT 41% of trades). Configurable.
+    tp_min_ceil = float(cfg.get("supervisorTpTargetMinCeiling", 0.85) or 0.85)
+    tp_max_ceil = float(cfg.get("supervisorTpTargetMaxCeiling", 2.50) or 2.50)
+    set_float("tpTargetMinUsdt", min(tp_min_ceil, tp_min * (1.0 + 0.15 * severity)), 3)
+    set_float("tpTargetMaxUsdt", min(tp_max_ceil, max(tp_max * (1.0 + 0.12 * severity), float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.4)), 3)
 
     be_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
     set_float("profitLockBreakevenTriggerUsdt", min(0.45, max(0.20, be_trigger * (1.0 + 0.15 * severity))), 3)
@@ -888,7 +892,12 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         sl_pct = max(0.20, float(cfg.get("stopLossPct", 0.9) or 0.9))
         loss_pressure = avg_loss / max(avg_win, 0.01)
         sl_factor = max(0.70, 0.88 if loss_pressure >= 2.4 else 0.94 - 0.06 * severity)
-        set_float("stopLossPct", max(0.48, sl_pct * sl_factor), 3)
+        # Ratchet cap: never tighten SL below the supervisor floor (default
+        # 0.80). Previously hardcoded 0.48 — a bad day drove SL to 0.48%,
+        # which whipsawed stops on 15x leverage (29 SLs vs 2 TP hits over the
+        # last 200 trades) and fed the next day's regression.
+        sl_floor = float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80)
+        set_float("stopLossPct", max(sl_floor, sl_pct * sl_factor), 3)
         cap = float(cfg.get("payoffLossGuardLossToWinCap", 1.05) or 1.05)
         set_float("payoffLossGuardLossToWinCap", max(0.85, min(cap, 0.95 - 0.05 * severity)), 3)
         max_loss_usdt = float(cfg.get("payoffLossGuardMaxLossUsdt", 0.9) or 0.9)
@@ -1030,7 +1039,24 @@ def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg
     }
     state["delegations"] = delegations
     AUTO_TRADE["supervisorAutoTune"] = state
-    AUTO_TRADE["config"] = copy.deepcopy(cfg)
+    # Merge ONLY the tuner's changes onto the CURRENT live config. The old
+    # code replaced the whole config with the tuner's cfg copy — a review that
+    # started before a /bot/config apply held a stale cfg reference, so its
+    # commit silently clobbered operator keys (scanDenySymbols, minConfidence,
+    # stopLossPct, ...) applied moments earlier (full-audit 2026-08-01).
+    live = AUTO_TRADE.get("config")
+    if isinstance(live, dict):
+        merged = copy.deepcopy(live)
+        for _k, _v in (changes or {}).items():
+            if isinstance(_v, dict) and "new" in _v:
+                merged[_k] = _v["new"]
+            elif isinstance(_v, dict) and "reverted" in _v:
+                merged[_k] = _v["reverted"]
+            else:
+                merged[_k] = _v
+        AUTO_TRADE["config"] = merged
+    else:
+        AUTO_TRADE["config"] = copy.deepcopy(cfg)
     _tuning_history_append(key, changes, _tuning_pre_metrics())
     try:
         _persist_autotrade_snapshot()
@@ -1454,6 +1480,14 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     signature = _tuning_signature("daily_entry_regression", day=today.get("day"), trades=today.get("trades"), winRatePct=today.get("winRatePct"), pnl=today.get("pnl"), baseline_day=baseline.get("day"), baseline_pnl=baseline.get("pnl"))
     rec = delegations.get("daily_entry_regression") if isinstance(delegations.get("daily_entry_regression"), dict) else {}
 
+    # Cooldown gate: a tuned type stays locked for the cooldown window even when
+    # the signature shifts (e.g. a new trade lands mid-day). Without this, the
+    # daily-regression tune re-applies on every review cycle (changes always
+    # non-empty vs an operator-relaxed config) and silently overrides manual
+    # config changes made via /bot/config.
+    if active:
+        return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature}
+
     changes: dict[str, dict] = {}
 
     def set_float(key: str, value: float, digits: int = 3):
@@ -1473,7 +1507,9 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     min_conf = float(cfg.get("minConfidence", 0.66) or 0.66)
     # Profitable baseline days were not purely high-confidence trades; avoid
     # choking AUTO scan by pushing the global gate toward 0.90.
-    set_float("minConfidence", min(0.84, max(min_conf, min_conf + 0.015 * (1.0 + severity * 2.0))), 3)
+    # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
     set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
@@ -1501,8 +1537,6 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     set_float("todayPerformanceGuardMaxWinRatePct", min(48.0, max(float(cfg.get("todayPerformanceGuardMaxWinRatePct", 40.0) or 40.0), 45.0 + 3.0 * severity)), 2)
 
     if not changes:
-        if active and str(rec.get("signature", "") or "") == signature:
-            return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature}
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
     out = _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, changes, "daily_entry_regression")
     delegations = AUTO_TRADE.get("supervisorAutoTune", {}).get("delegations", {})
@@ -1601,7 +1635,10 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     signature = _tuning_signature("negative_expectancy", label=label, trades=trades_n, win_rate=win_rate, avg_pnl=avg_pnl, total_pnl=total_pnl)
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("negative_expectancy", cfg, 45)
     rec = delegations.get("negative_expectancy") if isinstance(delegations.get("negative_expectancy"), dict) else {}
-    if active and str(rec.get("signature", "") or "") == signature:
+    # Cooldown gate (same rationale as daily_entry_regression): block re-tunes
+    # within the cooldown window regardless of signature drift, so operator
+    # config changes via /bot/config are not silently overridden every review.
+    if active:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature}
 
     if _tuning_should_rollback("negative_expectancy"):
@@ -1632,7 +1669,9 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
 
     min_conf = float(cfg.get("minConfidence", 0.62) or 0.62)
     conf_step = 0.03 if avg_pnl < -0.10 or win_rate < 40.0 else 0.02
-    set_float("minConfidence", min(0.84, max(min_conf, min_conf + min(conf_step, 0.015) * (1.0 + severity * 2.0))), 3)
+    # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + min(conf_step, 0.015) * (1.0 + severity * 2.0))), 3)
 
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
     set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
@@ -3183,7 +3222,13 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # Hard per-symbol floor: never allow entries below 0.60 even if the
         # group profile or learned window loosens the gate (ESPUSDT-style
         # 0.47 profiles opened too easily and ate oversized SLs).
-        adaptive_min_conf = max(0.60, max(group_conf_floor, min(0.82, adaptive_min_conf)))
+        # Upper bound = supervisor autotune ceiling (configurable), keeping the
+        # scan board consistent with the entry pipeline. Lower bound = hard
+        # confidence floor (minConfidenceHardFloor, default 0.72) — the
+        # 0.7-0.8 zone lost -29.11 USDT over 1,385 LIVE trades (WR 49%).
+        autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+        conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
+        adaptive_min_conf = max(conf_hard_floor, max(group_conf_floor, min(autotune_ceiling, adaptive_min_conf)))
         score = score + float(session_bias.get("scoreShift", 0.0) or 0.0)
         # Per-group long-bias: shift score up when signal matches the
         # group's directional preference (e.g. trend-friendly groups
@@ -3207,6 +3252,11 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         elif conf < adaptive_min_conf:
             qualified = False
             reject_reason = "low_conf"
+        elif conf > float(cfg.get("maxEntryConfidence", 0.90) or 0.90):
+            # Late-chase cap: >=0.90 zone underperforms (WR 44% lifetime) —
+            # mirror the pipeline gate so the board shows the same decision.
+            qualified = False
+            reject_reason = "conf_too_high_late"
         elif spread_bps > max_spread_bps:
             qualified = False
             reject_reason = "wide_spread"
@@ -3325,8 +3375,12 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 score = _intel_score(sym, out) + float(session_bias.get("scoreShift", 0.0) or 0.0)
                 spread_bps = float(ex.get("spreadBps", 0.0) or 0.0)
                 adaptive_min_conf = float(_learned_min_conf(sym, base_min_conf)) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
-                # Hard per-symbol floor: same 0.60 floor as the main scan board.
-                adaptive_min_conf = max(0.60, min(0.90, adaptive_min_conf))
+                # Hard per-symbol floor: same floor as the main scan board
+                # (minConfidenceHardFloor, default 0.72); upper bound follows
+                # the supervisor autotune ceiling.
+                autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+                conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
+                adaptive_min_conf = max(conf_hard_floor, min(autotune_ceiling, adaptive_min_conf))
                 qualified = True
                 reject_reason = ""
                 if sig not in ("LONG", "SHORT"):
@@ -3335,6 +3389,11 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 elif conf < adaptive_min_conf:
                     qualified = False
                     reject_reason = "low_conf"
+                elif conf > float(cfg.get("maxEntryConfidence", 0.90) or 0.90):
+                    # Late-chase cap: >=0.90 zone underperforms (WR 44% lifetime) —
+                    # mirror the pipeline gate so the board shows the same decision.
+                    qualified = False
+                    reject_reason = "conf_too_high_late"
                 elif spread_bps > max_spread_bps:
                     qualified = False
                     reject_reason = "wide_spread"
@@ -4421,7 +4480,9 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
             changes[key] = {"old": old, "new": str(value)}
 
     old_conf = float(out.get("minConfidence", 0.65) or 0.65)
-    new_conf = min(0.86, max(old_conf, old_conf + 0.02 * (1.0 + severity * 2.0)))
+    # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
+    autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    new_conf = min(autotune_ceiling, max(old_conf, old_conf + 0.02 * (1.0 + severity * 2.0)))
     if new_conf > old_conf:
         set_float("minConfidence", new_conf, 4)
         actions.append(f"minConfidence {old_conf:.2f}->{new_conf:.2f}")
@@ -9340,9 +9401,13 @@ async def _autotrade_loop():
             adaptive_min_conf = _learned_min_conf(cfg["symbol"], float(cfg["minConfidence"]))
             min_conf_floor = float(cfg.get("minConfidenceFloor", 0.30))
             min_conf_cap = float(cfg.get("minConfidenceCap", 0.95))
+            autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
             adaptive_min_conf = max(
                 min_conf_floor,
-                min(min_conf_cap, float(adaptive_min_conf) + float(session_bias.get("confidenceShift", 0.0) or 0.0)),
+                min(
+                    min(min_conf_cap, autotune_ceiling),
+                    float(adaptive_min_conf) + float(session_bias.get("confidenceShift", 0.0) or 0.0),
+                ),
             )
             vision = intel.get("vision")
             px = intel.get("precision") if isinstance(intel, dict) and isinstance(intel.get("precision"), dict) else {}

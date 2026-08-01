@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 8
+CONFIG_VERSION = 10
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -99,6 +99,41 @@ _FORCE_DEFAULTS_V8: dict = {
     "weakSignalMinHoldSec": 180,
     "weakSignalPeakMultiplier": 2.0,
     "swingPeakRequireMomentumAgainst": True,
+}
+
+
+_FORCE_DEFAULTS_V9: dict = {
+    # Autotune hard ceiling: supervisor tuners (daily_entry_regression,
+    # negative_expectancy, loss_streak_self_review) may tighten minConfidence
+    # only up to this bound, and the effective adaptive_min_conf (learned +
+    # session shift) is clamped to it as well. Prevents a bad day from
+    # ratcheting the entry gate up to 0.92-0.93 where no candidate can ever
+    # qualify — the bot goes quiet instead of protecting.
+    "supervisorMinConfidenceCeiling": 0.82,
+}
+
+
+_FORCE_DEFAULTS_V10: dict = {
+    # Performance audit 2026-08-01 (full-audit session):
+    # 1) weak_payoff ratchet was tightening SL down to a 0.48% floor on every
+    #    bad day (main.py set_float stopLossPct max(0.48,...)) → whipsaw SLs
+    #    (29 SLs / 200 trades vs 2 TP hits) + TP targets drifting up → 41%
+    #    DEAD_ZONE_TIMEOUT. Restore the proven baseline and cap the ratchet:
+    "stopLossPct": 0.9,
+    "takeProfitPct": 1.8,
+    "supervisorStopLossFloor": 0.80,       # weak_payoff may not tighten below this
+    "supervisorTpTargetMinCeiling": 0.85,  # tpTargetMinUsdt raise cap
+    "supervisorTpTargetMaxCeiling": 2.50,  # tpTargetMaxUsdt raise cap
+    # 2) confidence zones (1,385 LIVE trades): 0.7-0.8 = -29.11 (WR 49%),
+    #    0.8-0.9 = +1.42 (WR 54%), >=0.9 = -5.24 (WR 44% late-chase).
+    #    Raise the hard floor to cut the 0.7-0.8 hole; cap the top to stop
+    #    late entries at reversal tops:
+    "minConfidenceFloor": 0.72,            # entry-path adaptive floor
+    "minConfidenceHardFloor": 0.72,        # scan-board floor (was hardcoded 0.60)
+    "maxEntryConfidence": 0.90,            # late-chase cap
+    # 3) momentum gate 0.065 was blocking every candidate (lastSkip weak_momentum
+    #    0.010-0.016 for hours) — relax to keep entries flowing:
+    "minMomentumStrength": 0.03,
 }
 
 
@@ -480,6 +515,12 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                     out[_fk] = _fv
         if _stored_ver < 8:
             for _fk, _fv in _FORCE_DEFAULTS_V8.items():
+                out[_fk] = _fv
+        if _stored_ver < 9:
+            for _fk, _fv in _FORCE_DEFAULTS_V9.items():
+                out[_fk] = _fv
+        if _stored_ver < 10:
+            for _fk, _fv in _FORCE_DEFAULTS_V10.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out

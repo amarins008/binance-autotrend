@@ -112,6 +112,20 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # Late-chase cap: confidence >= 0.90 historically underperforms (WR 44%,
+    # -5.24 over 1,385 LIVE trades — entries at reversal tops). Cap the top
+    # end of the confidence gate; configurable via maxEntryConfidence.
+    max_entry_conf = float(cfg.get("maxEntryConfidence", 0.90) or 0.90)
+    if conf > max_entry_conf:
+        return EntryPlan(
+            False,
+            "conf_too_high_late",
+            f"Skip: confidence {conf:.3f} > max {max_entry_conf:.2f} (late-chase cap)",
+            signal,
+            conf,
+            pipeline=pipeline,
+        )
+
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion
     # (RSI extremes, divergence, wick rejection). The score used to be computed
