@@ -291,11 +291,42 @@ def _scan_error_penalty(symbol: str) -> float:
     return penalty
 
 
+def _rotate_scan_events_if_needed(max_bytes: int = 25 * 1024 * 1024) -> None:
+    """Archive scan_events.jsonl once it grows past max_bytes.
+
+    The scan-event log grows ~1.5MB/day and nothing reads it in a hot path,
+    so archiving keeps disk bounded without any runtime cost. Runs only on a
+    SCAN append (inside _append_trade_log), i.e. at most once per cycle, and
+    only when the size threshold is actually crossed.
+    """
+    try:
+        if not SCAN_EVENTS_PATH.exists():
+            return
+        size = SCAN_EVENTS_PATH.stat().st_size
+        if size < max_bytes:
+            return
+        archive = VAULT_DIR / f"scan_events.archive.{time.strftime('%Y%m%d')}.jsonl"
+        if archive.exists():
+            # append current content to the daily archive, then reset the live file
+            with SCAN_EVENTS_PATH.open("r", encoding="utf-8") as src:
+                tail = src.read()
+            with archive.open("a", encoding="utf-8") as dst:
+                dst.write(tail)
+            SCAN_EVENTS_PATH.write_text("", encoding="utf-8")
+        else:
+            SCAN_EVENTS_PATH.rename(archive)
+        print(f"[Scan Events] Rotated {size/1048576:.1f} MB -> {archive.name}")
+    except Exception as exc:
+        print(f"[Scan Events] Rotate skipped: {exc}")
+
+
 def _append_trade_log(entry: dict):
     global _LIVE_STATS_VERSION
     _ensure_vault()
     is_scan = str(entry.get("mode", "")).upper() == "SCAN"
     target = SCAN_EVENTS_PATH if is_scan else TRADES_LOG_PATH
+    if is_scan:
+        _rotate_scan_events_if_needed()
     try:
         with target.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -4577,7 +4608,6 @@ def health():
     }
 
 
-@app.get("/debug/binance-positions")
 async def debug_binance_positions():
     """Diagnostic endpoint — test Binance Futures position fetch directly."""
     import traceback
@@ -7271,7 +7301,6 @@ def _symbol_effective_profile(symbol: str, cfg: dict | None = None) -> dict:
 
 # --- API: read/write per-symbol profiles (used by the dashboard) ---
 
-@app.get("/hermes/symbol/profile")
 def hermes_get_symbol_profile(symbol: str):
     """Return the resolved 3-tier policy for ``symbol`` (System -> Group -> Symbol).
 
@@ -7329,7 +7358,6 @@ def hermes_get_symbol_profile(symbol: str):
     }
 
 
-@app.post("/hermes/symbol/profile")
 def hermes_set_symbol_profile(payload: dict = Body(default_factory=dict)):
     sym = str(payload.get("symbol", "") or "").upper().strip()
     if not sym:
@@ -7366,7 +7394,6 @@ def hermes_set_symbol_profile(payload: dict = Body(default_factory=dict)):
             "effective": _symbol_effective_profile(sym)}
 
 
-@app.get("/hermes/symbol/profiles")
 def hermes_list_symbol_profiles():
     """Return per-symbol effective profiles for all symbols seen in the
     recent trade log, sorted by sample count descending.
@@ -8653,7 +8680,6 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
     return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": None, "trailing": trailing, "entrySnapshot": entry_snapshot}
 
 
-@app.post("/trade")
 async def trade(req: TradeRequest):
     try:
         return await place_futures_order(
@@ -8674,7 +8700,6 @@ async def trade(req: TradeRequest):
         raise HTTPException(status_code=400, detail=mapped)
 
 
-@app.post("/autotrade/config")
 async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     cur = dict(AUTO_TRADE.get("config") or {})
     if not cur:
@@ -8707,7 +8732,6 @@ async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     return {"ok": True, "updated": True, "config": cur}
 
 
-@app.post("/autotrade/adopt-live")
 async def autotrade_adopt_live(symbol: str | None = None):
     key = os.getenv("BINANCE_API_KEY")
     secret = os.getenv("BINANCE_API_SECRET")
@@ -8739,7 +8763,6 @@ async def autotrade_adopt_live(symbol: str | None = None):
     return {"ok": True, "running": AUTO_TRADE.get("running", False), "config": cfg, "adoptedPositions": adopted_positions}
 
 
-@app.post("/autotrade/close-orphan")
 async def autotrade_close_orphan(symbol: str | None = None):
     key = os.getenv("BINANCE_API_KEY")
     secret = os.getenv("BINANCE_API_SECRET")
@@ -8751,7 +8774,6 @@ async def autotrade_close_orphan(symbol: str | None = None):
     return {"ok": True, "closed": closed}
 
 
-@app.post("/autotrade/update-sl-tp")
 async def autotrade_update_sl_tp(payload: dict = Body(default_factory=dict)):
     symbol = str(payload.get("symbol", "") or "").upper().strip()
     tp_pct = payload.get("takeProfitPct")
@@ -9851,7 +9873,6 @@ async def _autotrade_loop():
         await asyncio.sleep(interval + extra)
 
 
-@app.post("/autotrade/start")
 async def autotrade_start(req: AutoTradeStartRequest):
     if RISK["kill_switch"]:
         raise HTTPException(status_code=403, detail="Kill-switch enabled")
@@ -9990,7 +10011,6 @@ async def autotrade_start(req: AutoTradeStartRequest):
     }
 
 
-@app.post("/autotrade/stop")
 def autotrade_stop(req: AutoTradeControlRequest | None = None):
     req = req or AutoTradeControlRequest()
     current_session = AUTO_TRADE.get("sessionId")
@@ -10025,7 +10045,6 @@ def autotrade_stop(req: AutoTradeControlRequest | None = None):
     return {"ok": True, "running": False, "manageOpenOnly": keep_manage_open}
 
 
-@app.post("/autotrade/reset")
 def autotrade_reset(req: AutoTradeControlRequest | None = None):
     req = req or AutoTradeControlRequest()
     current_session = AUTO_TRADE.get("sessionId")
@@ -10057,7 +10076,6 @@ def autotrade_reset(req: AutoTradeControlRequest | None = None):
     return {"ok": True, "running": False, "reset": True}
 
 
-@app.get("/autotrade/status")
 async def autotrade_status(symbol: str | None = None):
     await _ensure_autotrade_task_alive("status-watchdog")
     p_raw = AUTO_TRADE.get("paper") if isinstance(AUTO_TRADE.get("paper"), dict) else {}
@@ -11803,14 +11821,12 @@ def _cached_hermes_supervisor_review(
     return fallback
 
 
-@app.get("/hermes/supervisor-review")
 def hermes_supervisor_review(refresh: bool = False):
     if not refresh:
         return _cached_hermes_supervisor_review(AUTO_TRADE, max_age_sec=60, allow_compute=False)
     return _hermes_supervisor_review()
 
 
-@app.post("/hermes/supervisor/external-signal")
 def hermes_supervisor_external_signal(payload: dict = Body(default_factory=dict)):
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
     out = _maybe_tune_external_signal_guard(payload, cfg)
@@ -11825,7 +11841,6 @@ def hermes_supervisor_external_signal(payload: dict = Body(default_factory=dict)
 
 
 
-@app.get("/autotrade/status-lite")
 async def autotrade_status_lite():
     cfg = AUTO_TRADE.get("config") or {}
     if isinstance(cfg, dict) and cfg:
@@ -12101,7 +12116,6 @@ async def autotrade_status_lite():
     }
 
 
-@app.get("/learning/status")
 def learning_status(symbol: str | None = None):
     if symbol:
         sym = _normalize_symbol(symbol)
@@ -12150,7 +12164,6 @@ def learning_status(symbol: str | None = None):
     return {"items": out, "vaultDir": str(VAULT_DIR), "source": "trades_log"}
 
 
-@app.get("/learning/propose-config")
 def learning_propose_config(symbol: str | None = None):
     if not symbol or not str(symbol).strip():
         raise HTTPException(status_code=400, detail="symbol is required")
@@ -12175,7 +12188,6 @@ def learning_propose_config(symbol: str | None = None):
     return out
 
 
-@app.get("/learning/walk-forward")
 def learning_walk_forward(
     symbol: str,
     mode: str = "ALL",
@@ -12327,7 +12339,6 @@ def _backfill_vault_trades_to_log(vault_dir: Path = VAULT_DIR, log_path: Path = 
     return {"appended": len(appended), "symbols": symbols, "message": "Backfill complete"}
 
 
-@app.post("/bot/backfill-vault-trades")
 def autotrade_backfill_vault_trades(payload: dict = Body(default_factory=dict)):
     """CLI/endpoint to backfill missing LIVE trades from vault markdown to trades_log.jsonl.
     Use when trades were recorded in vault files but failed to reach the log due to errors.
@@ -12366,8 +12377,6 @@ def _run_learning_train_background():
 
 
 # ── /status combined endpoint ───────────────────────────────────────────────
-@app.get("/status")
-@app.get("/status/quick")
 async def combined_status():
     """Combined status endpoint for dashboard — matches paintStatus expectations."""
     cfg = AUTO_TRADE.get("config") or {}
@@ -12498,7 +12507,6 @@ async def combined_status():
     }
 
 
-@app.post("/bot/start")
 async def bot_start(payload: dict = Body(default_factory=dict)):
     """Bot start endpoint — wraps autotrade/start for dashboard compatibility."""
     from schemas import AutoTradeStartRequest
@@ -12506,7 +12514,6 @@ async def bot_start(payload: dict = Body(default_factory=dict)):
     return await autotrade_start(req)
 
 
-@app.post("/bot/stop")
 def bot_stop(payload: dict = Body(default_factory=dict)):
     """Bot stop endpoint — wraps autotrade/stop for dashboard compatibility."""
     from schemas import AutoTradeControlRequest
@@ -12514,31 +12521,26 @@ def bot_stop(payload: dict = Body(default_factory=dict)):
     return autotrade_stop(req)
 
 
-@app.post("/bot/config")
-def bot_config(payload: dict = Body(default_factory=dict)):
+async def bot_config(payload: dict = Body(default_factory=dict)):
     """Bot config update endpoint — wraps autotrade/config for dashboard compatibility."""
-    return autotrade_update_config(payload)
+    return await autotrade_update_config(payload)
 
 
-@app.post("/service/start")
 def service_start():
     """Service start — no-op since app is always running."""
     return {"ok": True, "service": {"running": True, "healthy": True}}
 
 
-@app.post("/service/stop")
 def service_stop():
     """Service stop — cannot stop self, return ok."""
     return {"ok": True, "service": {"running": True, "healthy": True}}
 
 
-@app.get("/bot/precheck-live")
 def bot_precheck_live(symbol: str = "BTCUSDT"):
     """Precheck for LIVE mode — delegates to autotrade endpoint."""
     return {"ok": True, "precheck": {"symbol": symbol, "canTrade": True}}
 
 
-@app.post("/learning/train-now")
 def learning_train_now(payload: dict = Body(default_factory=dict)):
     """Trigger learning training now."""
     try:
@@ -12633,8 +12635,7 @@ def _ip_info_snapshot() -> dict[str, Any]:
     }
 
 
-# ── /learning/report endpoint ────────────────────────────────────────────
-@app.get("/learning/report")
+# ── /learning/report endpoint (registered via routers/learning_routes.py) ──
 def learning_report():
     """Return the persisted learning train report (or empty)."""
     if not TRAIN_REPORT_PATH.exists():
@@ -12668,7 +12669,6 @@ def learning_report():
 
 
 # ── /api/ip-info endpoint ───────────────────────────────────────────────
-@app.get("/api/ip-info")
 def api_ip_info(request: Request):
     """Return public + LAN IP for the dashboard.
 
@@ -12687,9 +12687,19 @@ def api_ip_info(request: Request):
 
 from routers.analysis_routes import router as analysis_router
 from routers.system_routes import router as system_router
+from routers import learning_routes as _learning_routes
+from routers import trading_routes as _trading_routes
+from routers import hermes_routes as _hermes_routes
+from routers import bot_routes as _bot_routes
+from routers import misc_routes as _misc_routes
 
 app.include_router(system_router)
 app.include_router(analysis_router)
+app.include_router(_learning_routes.register(sys.modules[__name__]))
+app.include_router(_trading_routes.register(sys.modules[__name__]))
+app.include_router(_hermes_routes.register(sys.modules[__name__]))
+app.include_router(_bot_routes.register(sys.modules[__name__]))
+app.include_router(_misc_routes.register(sys.modules[__name__]))
 
 # ── Static files: serve dashboard directly from FastAPI ──────────────────
 _DASHBOARD_DIR = Path(__file__).parent / "dashboard"

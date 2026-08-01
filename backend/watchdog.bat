@@ -20,6 +20,16 @@ set "BACKEND_HOST=0.0.0.0"
 call :log "[watchdog] tick start"
 
 REM ===========================================================
+REM   Rotate watchdog.log once it exceeds 5 MB (keep 3 generations)
+REM ===========================================================
+for %%A in ("%LOG%") do if %%~zA GEQ 5242880 (
+    if exist "%LOG%.2" del "%LOG%.2"
+    if exist "%LOG%.1" ren "%LOG%.1" "%LOG%.2"
+    ren "%LOG%" "%LOG%.1"
+    call :log "[watchdog] rotated watchdog.log (was >5 MB)"
+)
+
+REM ===========================================================
 REM   [1/3] Check launcher (8021)
 REM ===========================================================
 powershell -NoProfile -Command "$p=%LAUNCHER_PORT%; if (Test-NetConnection -ComputerName 127.0.0.1 -Port $p -WarningAction SilentlyContinue -InformationLevel Quiet) { exit 0 } else { exit 1 }" >nul 2>&1
