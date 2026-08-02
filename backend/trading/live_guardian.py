@@ -1291,9 +1291,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         tp = float(st.get("tp", 0.0) or 0.0)
         sl = float(st.get("sl", 0.0) or 0.0)
         bk_floor = float(st.get("_bk_floor", 0.03))
+        fee_min_local = float(st.get("_fee_min", 0.0) or 0.0)
         if mark > 0 and tp > 0 and sl > 0:
             hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
-            hit_be = bool(st.get("breakevenGuardArmed")) and 0 < upnl <= bk_floor
+            # Fee-aware breakeven: don't close at a profit smaller than round-trip
+            # fee (net loss after fees). Only lock when upnl >= fee floor.
+            hit_be = bool(st.get("breakevenGuardArmed")) and fee_min_local <= upnl <= bk_floor
             if hit_be or hit_sl:
                 if f"{sym}:{side}" in _closed_symbols:
                     continue
@@ -1520,8 +1523,10 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             continue
 
         # ── Dead zone exit: held too long in stagnant profit + weak signal ──
+        # Fee-aware: only exit when profit >= round-trip fee. Closing a stale
+        # position at upnl < fee floor converts it into a guaranteed net loss.
         dead_zone_sec = float(cfg.get("deadZoneExitSec", 600) or 600)
-        if held_sec >= dead_zone_sec and upnl < lock_trigger and weak_now and upnl > -fee_min_capture:
+        if held_sec >= dead_zone_sec and weak_now and upnl >= fee_min_capture and upnl < lock_trigger:
             if f"{sym}:{side}" not in _closed_symbols:
                 _persist_single_lock_before_close(st, cfg)
                 await _main()._close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT")
@@ -1537,7 +1542,8 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if mark > 0 and tp > 0 and sl > 0:
             hit_tp = (side == "LONG" and mark >= tp) or (side == "SHORT" and mark <= tp)
             hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
-            hit_be = bool(st.get("breakevenGuardArmed")) and 0 < upnl <= bk_floor
+            # Fee-aware breakeven guard: never lock at a profit below the fee floor.
+            hit_be = bool(st.get("breakevenGuardArmed")) and fee_min_capture <= upnl <= bk_floor
             if tv_early_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
