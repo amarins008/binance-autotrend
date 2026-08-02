@@ -185,7 +185,24 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         # opened against TV 0.82/0.94 while TV was silently disabled; both
         # PREEMPTIVE_LOSS_EXIT). Configurable via tvUnavailableMinConf.
         tv_unavail_min_conf = float(cfg.get("tvUnavailableMinConf", 0.85) or 0.85)
-        if conf < tv_unavail_min_conf:
+        # Fresh WAIT is a deliberate non-confirmation, not "no data": the
+        # NEUTRAL bucket (entry while TV is undecided) was WR 50% net -0.239
+        # after V13.3 — require extra confidence via tvWaitMinConf.
+        _tv_age = int(tv_info.get("age", 0) or 0)
+        _tv_wait_stale = int(cfg.get("tvStaleEntrySec", 300) or 300)
+        if tv_sig == "WAIT" and 0 <= _tv_age <= _tv_wait_stale:
+            tv_wait_min_conf = float(cfg.get("tvWaitMinConf", 0.88) or 0.88)
+            if conf < tv_wait_min_conf:
+                return EntryPlan(
+                    False,
+                    "tv_wait_low_conf",
+                    f"Skip: TV WAIT (fresh {_tv_age}s) requires conf >= {tv_wait_min_conf:.2f}, got {conf:.3f}",
+                    signal,
+                    conf,
+                    pipeline=pipeline,
+                )
+            _step(pipeline, "tv_conflict", True, f"TV WAIT fresh {_tv_age}s conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
+        elif conf < tv_unavail_min_conf:
             return EntryPlan(
                 False,
                 "tv_unavailable_low_conf",
@@ -194,7 +211,8 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                 conf,
                 pipeline=pipeline,
             )
-        _step(pipeline, "tv_conflict", True, f"TV n/a ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
+        else:
+            _step(pipeline, "tv_conflict", True, f"TV n/a ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
 
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion

@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 11
+CONFIG_VERSION = 12
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -155,6 +155,21 @@ _FORCE_DEFAULTS_V11: dict = {
         "5m_hammer",
     ],
     "tvConflictBlockStrength": 0.60,
+    # TV fresh and explicitly WAIT (neutral): entries against an undecided
+    # TV are the NEUTRAL bucket (WR 50%, net -0.239 over 8 trades after
+    # V13.3) — require extra confidence so we don't blind-enter while TV
+    # has no edge. Lower than tvUnavailableMinConf only when TV says
+    # nothing at all (n/a); a fresh WAIT is a deliberate non-confirmation.
+    "tvWaitMinConf": 0.88,
+}
+
+_FORCE_DEFAULTS_V12: dict = {
+    # V13.6 entry-timing audit (2026-08-02): NEUTRAL bucket (entering while
+    # a fresh TV signal is explicitly WAIT / undecided) was WR 50% net
+    # -0.239 over 8 LIVE trades after V13.3 — blind-entries while TV has no
+    # edge. Fresh WAIT now requires conf >= tvWaitMinConf (0.88) instead of
+    # falling through to the generic n/a floor (0.85).
+    "tvWaitMinConf": 0.88,
 }
 
 
@@ -330,6 +345,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
     out.setdefault("tradingviewMaxFailures", 10)  # Max failures before auto-disable
     out.setdefault("tvUnavailableMinConf", 0.85)  # Conservative floor when TV signal is unavailable
+    out.setdefault("tvWaitMinConf", 0.88)  # Fresh explicit TV WAIT needs extra confidence (V13.6)
     out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
     out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)
     # TradingView position management (global defaults)
@@ -546,6 +562,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 11:
             for _fk, _fv in _FORCE_DEFAULTS_V11.items():
+                out[_fk] = _fv
+        if _stored_ver < 12:
+            for _fk, _fv in _FORCE_DEFAULTS_V12.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
     return out
