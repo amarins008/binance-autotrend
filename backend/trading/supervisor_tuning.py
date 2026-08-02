@@ -335,6 +335,8 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     # client recovered. That left TV disabled forever (2026-08-02: healthy
     # + fail_count=5 -> never re-enabled -> entries opened blind against
     # strong TV, LINK 06:26 / ENA 10:35). Healthy means the client works now.
+    state: dict = AUTO_TRADE.get("supervisorAutoTune") or {}
+    delegations: dict = state.get("delegations") or {}
     if is_healthy:
         if not cfg.get("tradingviewEnabled", True):
             try:
@@ -374,8 +376,6 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
 
     # Real failure — check recovery cooldown (bypass _supervisor_delegation_cooldown
     # because its min 300s is too slow for immediate recovery)
-    state: dict = AUTO_TRADE.get("supervisorAutoTune") or {}
-    delegations: dict = state.get("delegations") or {}
     tv_rec: dict = delegations.get("tradingview_health") or {}
     last_at = int(tv_rec.get("at", 0) or 0)
     _TV_RECOVERY_COOLDOWN = 120  # 2 min between recovery attempts
