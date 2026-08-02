@@ -394,7 +394,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
             if hour != 7:
                 unlocked_hours.append(hour)
         out["liveBadUtcHours"] = unlocked_hours
-    out.setdefault("riskCooldownEnabled", False)
+    out.setdefault("riskCooldownEnabled", True)  # V13.8: per-symbol cooldown after loss streaks (was False)
     out.setdefault("riskCooldownAdaptiveMarket", True)
     out.setdefault("riskCooldownAdaptiveCheckSec", 30)
     out.setdefault("riskCooldownLightScanEnabled", True)
