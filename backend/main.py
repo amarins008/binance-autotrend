@@ -3043,6 +3043,16 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         from trading.tradingview_mcp import get_tv_mcp
         tv_client = get_tv_mcp(cfg)
         blocked_symbols.update(str(s).upper().strip() for s in (tv_client._tv_missing or {}).keys())
+        # Proactive skip: symbols TradingView's scanner does not know are
+        # dropped before analysis entirely (no per-symbol fetch → no timeout,
+        # no rate-limit burn, no fail_count). is_tv_known falls back to True
+        # when the universe cache is not loaded yet, so this only ever
+        # removes, never blocks everything.
+        try:
+            if tv_client.get_tv_universe():
+                candidates = [s for s in candidates if tv_client.is_tv_known(s)]
+        except Exception:
+            pass
     except Exception:
         pass
     live_scan = str(cfg.get("executionMode", "") or "").upper() == "LIVE"

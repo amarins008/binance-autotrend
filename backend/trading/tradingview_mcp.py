@@ -60,8 +60,16 @@ class TradingViewClient:
         # failure-disable circuit (SNXX/KORU/DRAM/MUU … 0 rows every time).
         self._tv_missing: Dict[str, float] = {}
         self._tv_missing_ttl = 86400.0  # re-probe once per day
+        # Proactive universe whitelist: the set of symbols TradingView's
+        # crypto scanner actually knows for BINANCE, fetched once per TTL.
+        # Symbols absent from it are skipped before analysis entirely, so we
+        # never burn a per-symbol timeout / rate-limit slot on them.
+        self._tv_universe: set[str] = set()
+        self._tv_universe_ts = 0.0
+        self._tv_universe_ttl = 86400.0
         self.update_config(config)
         self._load_missing_cache()
+        self._load_universe_cache()
 
     def _missing_cache_path(self) -> str:
         try:
@@ -69,6 +77,86 @@ class TradingViewClient:
             return str(VAULT_DIR / "shared" / "tv_missing.json")
         except Exception:
             return ""
+
+    def _universe_cache_path(self) -> str:
+        try:
+            from services.config_paths import VAULT_DIR
+            return str(VAULT_DIR / "shared" / "tv_universe.json")
+        except Exception:
+            return ""
+
+    def _save_universe_cache(self) -> None:
+        path = self._universe_cache_path()
+        if not path:
+            return
+        try:
+            from pathlib import Path
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(
+                json.dumps({"ts": self._tv_universe_ts, "symbols": sorted(self._tv_universe)},
+                           ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_universe_cache(self) -> None:
+        path = self._universe_cache_path()
+        if not path:
+            return
+        try:
+            from pathlib import Path
+            raw = Path(path).read_text(encoding="utf-8")
+            d = json.loads(raw)
+            self._tv_universe = set(str(s) for s in (d.get("symbols") or []))
+            self._tv_universe_ts = float(d.get("ts", 0.0) or 0.0)
+        except Exception:
+            self._tv_universe = set()
+            self._tv_universe_ts = 0.0
+
+    def get_tv_universe(self, force_refresh: bool = False) -> set[str]:
+        """Return the set of BINANCE USDT symbols TradingView's crypto scanner
+        knows (base names, '.P'/'.PERP' suffix stripped). Fetched once per TTL
+        and persisted to disk; returns the cached set on failure so a network
+        blip never empties the whitelist. Empty set means 'unknown yet'."""
+        now = time.time()
+        if not force_refresh and self._tv_universe and (now - self._tv_universe_ts) < self._tv_universe_ttl:
+            return self._tv_universe
+        try:
+            resp = _requests.post(
+                self._SCAN_URL,
+                json={"filter": [{"left": "exchange", "operation": "equal", "right": "BINANCE"}],
+                      "columns": ["name"], "options": {"lang": "en"}},
+                timeout=min(20.0, max(5.0, self.timeout * 2)),
+            )
+            if resp.status_code == 200:
+                rows = (resp.json() or {}).get("data", [])
+                univ: set[str] = set()
+                for row in rows:
+                    ticker = str(row.get("s", ""))
+                    base = ticker.split(":", 1)[-1] if ":" in ticker else ticker
+                    for suffix in (".P", ".PERP"):
+                        if base.endswith(suffix):
+                            base = base[: -len(suffix)]
+                            break
+                    if base.endswith("USDT"):
+                        univ.add(base)
+                if univ:
+                    self._tv_universe = univ
+                    self._tv_universe_ts = now
+                    self._save_universe_cache()
+            return self._tv_universe
+        except Exception:
+            return self._tv_universe
+
+    def is_tv_known(self, symbol: str) -> bool:
+        """True if symbol is in the known TV universe. Without a loaded
+        universe (first run / fetch never succeeded) this returns True so we
+        fall back to the learned _tv_missing list instead of skipping
+        everything."""
+        if not self._tv_universe:
+            return True
+        return str(symbol).upper() in self._tv_universe
 
     def _save_missing_cache(self) -> None:
         """Persist the miss list so a restart does not re-arm the fail chain."""
@@ -267,10 +355,12 @@ class TradingViewClient:
             return None
 
         # Known-absent symbol: do not burn a per-symbol fetch on it.
-        if not force_refresh:
-            miss_ts = self._tv_missing.get(symbol)
-            if miss_ts and (time.time() - miss_ts) < self._tv_missing_ttl:
-                return None
+        # Checked even for force_refresh: batch_fetch_signals re-probes the
+        # analyzed set + open positions every scan cycle and auto-heals the
+        # miss list (pop on return), so a stale miss self-recovers within TTL.
+        miss_ts = self._tv_missing.get(symbol)
+        if miss_ts and (time.time() - miss_ts) < self._tv_missing_ttl:
+            return None
 
         cached = self._get_from_cache(symbol, force_refresh=force_refresh)
         if cached and not force_refresh:
@@ -659,6 +749,14 @@ class TradingViewClient:
 
     def get_position_guidance(self, symbol: str, side: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         if not self.is_enabled():
+            return None
+
+        # Known-absent symbol: do not burn a fetch (same guard as get_signal).
+        # The guardian calls this every cycle for open positions; a symbol
+        # TradingView does not know would otherwise time out per cycle
+        # (10s each), trip the rate limiter, and eventually disable TV.
+        miss_ts = self._tv_missing.get(symbol)
+        if miss_ts and (time.time() - miss_ts) < self._tv_missing_ttl:
             return None
 
         cached = self._get_from_cache(symbol, force_refresh=force_refresh, skip_stale_disk=True, require_fresh=True)
