@@ -1689,8 +1689,8 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             _autotrade_log(f"Profit lock armed: {sym} {side} lock={st['lockUsdt']:.3f} peak={st['peak']:.3f}")
 
         if st.get("armed") and st["peak"] >= max(fee_min_capture, 0.12):
-            retrace_abs_floor = notional * float(cfg.get("profitLockRetraceFloorRatePct", 0.70) or 0.70) / 100.0
-            retrace_budget = max(fee_min_capture, float(st.get("lockUsdt",0.0) or 0.0) * 0.55, float(st["peak"]) * 0.55, float(st["peak"]) - max(retrace_abs_floor, 0.03))
+            max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22))
+            retrace_budget = max(fee_min_capture, float(st["peak"]) - max_giveback, float(st["peak"]) * 0.55)
             if upnl <= retrace_budget:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
