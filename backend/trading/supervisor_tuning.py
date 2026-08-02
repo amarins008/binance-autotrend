@@ -328,8 +328,14 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     last_error = health.get("last_error", "")
     error_type = health.get("error_type", "")
 
-    # If healthy, no action needed (unless disabled — auto-recover)
-    if is_healthy and fail_count < 3:
+    # If healthy, no action needed (unless disabled — auto-recover).
+    # NOTE: don't gate auto-recovery on fail_count < 3 — fail_count is
+    # cumulative (decremented once per success, reset by force_enable), so a
+    # streak that already happened keeps the counter high even after the
+    # client recovered. That left TV disabled forever (2026-08-02: healthy
+    # + fail_count=5 -> never re-enabled -> entries opened blind against
+    # strong TV, LINK 06:26 / ENA 10:35). Healthy means the client works now.
+    if is_healthy:
         if not cfg.get("tradingviewEnabled", True):
             try:
                 from main import _autotrade_log as alog

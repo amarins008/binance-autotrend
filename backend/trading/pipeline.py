@@ -176,8 +176,25 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                 pipeline=pipeline,
             )
         _step(pipeline, "tv_conflict", True, f"TV {tv_sig} {tv_strength:.2f} < block {tv_block_strength:.2f}")
+    elif tv_sig in ("LONG", "SHORT") and tv_sig == signal:
+        _step(pipeline, "tv_conflict", True, f"TV align {tv_sig} {tv_strength:.2f}")
     else:
-        _step(pipeline, "tv_conflict", True, f"TV {tv_sig or 'n/a'}")
+        # TV unavailable (no signal / WAIT / ERROR / TV disabled): conservative
+        # mode — only high-confidence entries pass so we don't blind-trade
+        # against a strong TV signal we can't see (LINK 06:26 / ENA 10:35
+        # opened against TV 0.82/0.94 while TV was silently disabled; both
+        # PREEMPTIVE_LOSS_EXIT). Configurable via tvUnavailableMinConf.
+        tv_unavail_min_conf = float(cfg.get("tvUnavailableMinConf", 0.85) or 0.85)
+        if conf < tv_unavail_min_conf:
+            return EntryPlan(
+                False,
+                "tv_unavailable_low_conf",
+                f"Skip: TV n/a ({tv_sig or 'none'}) requires conf >= {tv_unavail_min_conf:.2f}, got {conf:.3f}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+        _step(pipeline, "tv_conflict", True, f"TV n/a ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
 
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion

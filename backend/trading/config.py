@@ -329,6 +329,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewTimeout", 10.0)  # API timeout in seconds
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
     out.setdefault("tradingviewMaxFailures", 10)  # Max failures before auto-disable
+    out.setdefault("tvUnavailableMinConf", 0.85)  # Conservative floor when TV signal is unavailable
     out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
     out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)
     # TradingView position management (global defaults)
