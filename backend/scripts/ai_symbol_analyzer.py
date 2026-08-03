@@ -65,15 +65,26 @@ def analyze_symbol(sym, trades, window):
     dz_count = sum(1 for x in reasons if x == "DEAD_ZONE_TIMEOUT")
     fee_bleed = sum(1 for p in pnls if -FEE_FLOOR < p < FEE_FLOOR)  # closed below fee floor
 
-    # TV alignment at entry (tvAtEntry present only when intel captured it)
+    # TV alignment at entry — distinguish real alignment from data gaps.
+    # tvAtEntry may be a plain string ("LONG"/"SHORT"/"WAIT") OR a dict {"signal": ...}.
+    # None = intel didn't capture TV (post-restart data gap, NOT a blind entry).
     tv_ok = 0
+    tv_wait = 0
     tv_miss = 0
     for r in recent:
         tv = r.get("tvAtEntry")
-        if isinstance(tv, dict) and tv.get("signal"):
-            tv_ok += 1
+        if isinstance(tv, dict):
+            sig = str(tv.get("signal") or "")
+        elif isinstance(tv, str):
+            sig = tv.strip().upper()
         else:
-            tv_miss += 1
+            sig = ""
+        if sig in ("LONG", "SHORT"):
+            tv_ok += 1
+        elif sig == "WAIT":
+            tv_wait += 1
+        else:
+            tv_miss += 1  # None / missing → data gap, reported separately below
 
     # Guardian hold efficiency: actual pnl vs peak (did we give back profit?)
     hold_effs = []
@@ -97,6 +108,7 @@ def analyze_symbol(sym, trades, window):
         "deadZoneCount": dz_count,
         "feeBleedCount": fee_bleed,
         "tvAlignAtEntry": tv_ok,
+        "tvWaitAtEntry": tv_wait,
         "tvMissAtEntry": tv_miss,
         "holdEfficiency": round(hold_eff, 3) if hold_eff is not None else None,
         "reasons": dict(sorted(defaultdict(int, {x: reasons.count(x) for x in set(reasons)}).items(), key=lambda kv: -kv[1])),
