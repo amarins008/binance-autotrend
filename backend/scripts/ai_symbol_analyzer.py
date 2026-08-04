@@ -96,6 +96,31 @@ def analyze_symbol(sym, trades, window):
             hold_effs.append(min(1.0, max(-0.5, p / peak)))
     hold_eff = sum(hold_effs) / len(hold_effs) if hold_effs else None
 
+    # Consecutive loss streak — count back from the most recent trade while
+    # pnl < 0; track the streak's total damage (consecLossNet) and the longest
+    # streak anywhere in the window (maxConsecLoss). Streak risk tiers drive the
+    # AI tuner's cooldown/lock recommendations without touching rule-based locks.
+    consec_loss = 0
+    consec_net = 0.0
+    for p in reversed(pnls):
+        if p >= 0:
+            break
+        consec_loss += 1
+        consec_net += p
+    max_consec = 0
+    run = 0
+    for p in pnls:
+        run = run + 1 if p < 0 else 0
+        max_consec = max(max_consec, run)
+    if consec_loss >= 3:
+        streak_risk = "HIGH"
+    elif consec_loss == 2:
+        streak_risk = "MEDIUM"
+    elif consec_loss == 1:
+        streak_risk = "LOW"
+    else:
+        streak_risk = "NONE"
+
     last_closed = ts(recent[-1].get("closedAt") or recent[-1].get("ts"))
     return {
         "symbol": sym,
@@ -107,6 +132,10 @@ def analyze_symbol(sym, trades, window):
         "slCount": sl_count,
         "deadZoneCount": dz_count,
         "feeBleedCount": fee_bleed,
+        "consecLoss": consec_loss,
+        "consecLossNet": round(consec_net, 4),
+        "maxConsecLoss": max_consec,
+        "streakRisk": streak_risk,
         "tvAlignAtEntry": tv_ok,
         "tvWaitAtEntry": tv_wait,
         "tvMissAtEntry": tv_miss,
