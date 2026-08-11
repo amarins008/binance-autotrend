@@ -1086,7 +1086,7 @@ def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg
         AUTO_TRADE["config"] = copy.deepcopy(cfg)
     _tuning_history_append(key, changes, _tuning_pre_metrics())
     try:
-        _persist_autotrade_snapshot()
+        _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
         _autotrade_log(f"Supervisor delegated {key}: {changes}")
     except Exception:
         pass
@@ -4275,7 +4275,7 @@ def _switch_fixed_symbol_to_scan(cfg: dict, symbol: str, reason: str, detail: st
     AUTO_TRADE["config"] = copy.deepcopy(cfg)
     AUTO_TRADE["symbolWaitState"] = {}
     _autotrade_log(f"Symbol skip -> AUTO scan: {sym} ({reason}{': ' + detail if detail else ''})")
-    _persist_autotrade_snapshot()
+    _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
     return cfg
 
 
@@ -6747,7 +6747,7 @@ def _maybe_auto_heal_scan_config_drift(cfg: dict) -> dict:
     if len(wl) <= 1:
         cfg["whitelistSymbols"] = []
     AUTO_TRADE["config"] = copy.deepcopy(cfg)
-    _persist_autotrade_snapshot()
+    _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
     return {
         "applied": True,
         "reason": "live_scan_config_drift",
@@ -8893,7 +8893,7 @@ async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     _autotrade_log(
         f"AutoTrade config updated: lev={cur['leverage']} range={cur['leverageMin']}-{cur['leverageMax']} TP={cur.get('takeProfitPct')} SL={cur.get('stopLossPct')}"
     )
-    _persist_autotrade_snapshot()
+    _persist_autotrade_snapshot(force=True)  # config change must survive restart (30s throttle would lose it)
     return {"ok": True, "updated": True, "config": cur}
 
 
