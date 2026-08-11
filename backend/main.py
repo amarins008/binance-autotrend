@@ -5511,11 +5511,20 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                         f"{_tv_res.signal.value} strength={_tv_strength:.2f} ({_tv_age:.0f}s old)"
                     )
             else:
-                # TV disabled / unavailable: persist an explicit marker so the
+                # TV disabled / ERROR / unavailable: persist an explicit marker so the
                 # entry pipeline's TV-conflict gate (V12) can tell "no TV data"
                 # apart from "TV aligned". Without this, a failed TV fetch
                 # silently bypassed the TV gate entirely.
-                _tv_res = None
+                # WAIT is preserved (not nulled): it is a deliberate
+                # non-confirmation the pipeline must gate with tvWaitMinConf,
+                # not a "no data" state that falls back to the weaker
+                # tvUnavailableMinConf. (Before: WAIT -> _tv_res=None -> intel
+                # tv={} -> pipeline saw "" and used 0.82; tvWaitMinConf never
+                # fired -> 20/20 WAIT entries WR 20% net -0.87.)
+                if _tv_res is not None and _tv_res.signal is not None and _tv_res.signal.value == "WAIT":
+                    pass  # keep WAIT so _tv_snap carries it downstream
+                else:
+                    _tv_res = None
         except Exception:
             _tv_res = None
 

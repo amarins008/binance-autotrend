@@ -190,18 +190,21 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         # after V13.3 — require extra confidence via tvWaitMinConf.
         _tv_age = int(tv_info.get("age", 0) or 0)
         _tv_wait_stale = int(cfg.get("tvStaleEntrySec", 300) or 300)
-        if tv_sig == "WAIT" and 0 <= _tv_age <= _tv_wait_stale:
+        if tv_sig == "WAIT":
+            # WAIT (any age) is a deliberate non-confirmation — gate with
+            # tvWaitMinConf, never fall back to the weaker tvUnavailableMinConf
+            # for stale WAIT (stale = even less trustworthy, not more).
             tv_wait_min_conf = float(cfg.get("tvWaitMinConf", 0.88) or 0.88)
             if conf < tv_wait_min_conf:
                 return EntryPlan(
                     False,
                     "tv_wait_low_conf",
-                    f"Skip: TV WAIT (fresh {_tv_age}s) requires conf >= {tv_wait_min_conf:.2f}, got {conf:.3f}",
+                    f"Skip: TV WAIT (age {_tv_age}s) requires conf >= {tv_wait_min_conf:.2f}, got {conf:.3f}",
                     signal,
                     conf,
                     pipeline=pipeline,
                 )
-            _step(pipeline, "tv_conflict", True, f"TV WAIT fresh {_tv_age}s conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
+            _step(pipeline, "tv_conflict", True, f"TV WAIT (age {_tv_age}s) conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
         elif conf < tv_unavail_min_conf:
             return EntryPlan(
                 False,
