@@ -30,6 +30,11 @@ VAULT = os.path.join(BACKEND, "obsidian_vault")
 API = "http://127.0.0.1:8020"
 AUDIT = os.path.join(VAULT, "shared", "ai_tuner_audit.jsonl")
 
+# Telemetry-backed safety boundary. The 0.70-0.80 entry-confidence band was
+# materially loss-making; autonomous tuning may tighten this gate but cannot
+# lower it without an explicit code review and out-of-sample evidence.
+MIN_CONFIDENCE_FLOOR = 0.82
+
 # Keys Hermes is allowed to auto-apply (bounded, reversible, non-core).
 # Core risk keys (leverage, TP/SL, TV gates, fee floors) are EXCLUDED.
 SAFE_CONFIG_KEYS = {
@@ -81,8 +86,25 @@ def apply_config(key: str, value: str) -> dict:
     if key not in SAFE_CONFIG_KEYS:
         return {"ok": False, "reason": f"KEY_NOT_IN_SAFE_LIST: {key} (allowed: {sorted(SAFE_CONFIG_KEYS)})"}
     val = _coerce(value)
+    requested = val
+    if key == "minConfidence":
+        try:
+            val = max(MIN_CONFIDENCE_FLOOR, float(val))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": f"INVALID_MIN_CONFIDENCE: {value}"}
     res = _api("/autotrade/config", {key: val})
-    _audit({"action": "config", "key": key, "value": val, "ok": bool(res.get("ok"))})
+    _audit({
+        "action": "config",
+        "key": key,
+        "requested": requested,
+        "value": val,
+        "floor": MIN_CONFIDENCE_FLOOR if key == "minConfidence" else None,
+        "ok": bool(res.get("ok")),
+    })
+    if key == "minConfidence" and requested != val:
+        res["clamped"] = True
+        res["requested"] = requested
+        res["floor"] = MIN_CONFIDENCE_FLOOR
     return res
 
 def status() -> dict:

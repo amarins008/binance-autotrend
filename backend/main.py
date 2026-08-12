@@ -48,7 +48,7 @@ from obsidian_memory import (
     write_self_review_memory,
 )
 from trading.regime import detect_market_regime
-from trading.config import apply_autotrade_defaults
+from trading.config import ENTRY_MIN_CONFIDENCE_FLOOR, apply_autotrade_defaults
 from trading.live_guardian import (
     _manage_live_open_positions_once,
     _live_multi_profit_lock_manage,
@@ -1081,9 +1081,12 @@ def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg
                 merged[_k] = _v["reverted"]
             else:
                 merged[_k] = _v
+        _enforce_entry_confidence_floor(merged)
         AUTO_TRADE["config"] = merged
     else:
-        AUTO_TRADE["config"] = copy.deepcopy(cfg)
+        fallback_cfg = copy.deepcopy(cfg)
+        _enforce_entry_confidence_floor(fallback_cfg)
+        AUTO_TRADE["config"] = fallback_cfg
     _tuning_history_append(key, changes, _tuning_pre_metrics())
     try:
         _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
@@ -8874,11 +8877,38 @@ async def trade(req: TradeRequest):
         raise HTTPException(status_code=400, detail=mapped)
 
 
+# Statistical safety floor: the 0.70-0.80 entry-confidence bucket lost materially
+# in the 2026-08 telemetry review. This is deliberately code-enforced (rather
+# than a mutable config value) so supervisor/cron/API paths cannot silently reopen
+# the known-loss zone. Raise only after out-of-sample evidence.
+def _enforce_entry_confidence_floor(cfg: dict) -> dict:
+    if not isinstance(cfg, dict):
+        return cfg
+    try:
+        requested = float(cfg.get("minConfidence", ENTRY_MIN_CONFIDENCE_FLOOR) or ENTRY_MIN_CONFIDENCE_FLOOR)
+    except (TypeError, ValueError):
+        requested = ENTRY_MIN_CONFIDENCE_FLOOR
+    if requested < ENTRY_MIN_CONFIDENCE_FLOOR:
+        cfg["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
+    # Keep scan-derived adaptive thresholds from re-opening the same range.
+    cfg["minConfidenceHardFloor"] = max(
+        ENTRY_MIN_CONFIDENCE_FLOOR,
+        float(cfg.get("minConfidenceHardFloor", 0.0) or 0.0),
+    )
+    return cfg
+
+
 async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     cur = dict(AUTO_TRADE.get("config") or {})
     if not cur:
         return {"ok": False, "updated": False, "reason": "NO_ACTIVE_CONFIG"}
     cur.update(payload or {})
+    _requested_min_conf = cur.get("minConfidence")
+    _enforce_entry_confidence_floor(cur)
+    if _requested_min_conf is not None and cur.get("minConfidence") != _requested_min_conf:
+        _autotrade_log(
+            f"Entry confidence floor enforced: requested={_requested_min_conf} floor={ENTRY_MIN_CONFIDENCE_FLOOR}"
+        )
     lev_min = int(cur.get("leverageMin", cur.get("leverage", 5)) or 1)
     lev_max = int(cur.get("leverageMax", max(lev_min, cur.get("leverage", 5))) or lev_min)
     if lev_min > lev_max:

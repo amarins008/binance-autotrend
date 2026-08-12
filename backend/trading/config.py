@@ -187,6 +187,12 @@ def merge_preset(cfg: dict | None, preset: str = "pro") -> dict:
     return out
 
 
+# Telemetry-backed entry safety boundary. The 0.70-0.80 confidence bucket was
+# materially loss-making in the August 2026 review. All config normalization
+# paths must preserve this floor; raise it only with out-of-sample evidence.
+ENTRY_MIN_CONFIDENCE_FLOOR = 0.82
+
+
 def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") -> dict:
     """Apply PRO-oriented defaults; existing keys in cfg are preserved."""
     out = merge_preset(cfg, preset or "pro")
@@ -199,7 +205,18 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("strongFlipMinScoreGap", 1.5)
     out.setdefault("strongFlipUltraScoreGap", 2.2)
     out.setdefault("strongFlipUltraConfRelax", 0.08)
-    out.setdefault("minConfidence", 0.74)
+    out.setdefault("minConfidence", ENTRY_MIN_CONFIDENCE_FLOOR)
+    try:
+        out["minConfidence"] = max(ENTRY_MIN_CONFIDENCE_FLOOR, float(out["minConfidence"]))
+    except (TypeError, ValueError):
+        out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
+    try:
+        out["minConfidenceHardFloor"] = max(
+            ENTRY_MIN_CONFIDENCE_FLOOR,
+            float(out.get("minConfidenceHardFloor", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError):
+        out["minConfidenceHardFloor"] = ENTRY_MIN_CONFIDENCE_FLOOR
     out.setdefault("htfStrictEnabled", True)
     out.setdefault("htfMinStrength", 0.28)
     out.setdefault("requireVisionConsensus", False)
@@ -567,4 +584,18 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
             for _fk, _fv in _FORCE_DEFAULTS_V12.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
+
+    # Keep this final: version migrations above may intentionally overwrite
+    # legacy defaults, but they must never reopen the known-loss confidence band.
+    try:
+        out["minConfidence"] = max(ENTRY_MIN_CONFIDENCE_FLOOR, float(out.get("minConfidence") or 0.0))
+    except (TypeError, ValueError):
+        out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
+    try:
+        out["minConfidenceHardFloor"] = max(
+            ENTRY_MIN_CONFIDENCE_FLOOR,
+            float(out.get("minConfidenceHardFloor", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError):
+        out["minConfidenceHardFloor"] = ENTRY_MIN_CONFIDENCE_FLOOR
     return out
