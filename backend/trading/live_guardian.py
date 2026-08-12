@@ -1500,6 +1500,26 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         # ── Skip aggressive exit decisions if position is too new (< min_hold) ──
         if too_new:
             # Only allow SL hit and TP hit — skip all signal-based exits
+            # Early whipsaw cut: a position held < min_hold that already lost
+            # >= earlyWhipsawCutPct of the full SL distance AND never reached a
+            # meaningful peak (fee-scale) was entered at bad timing. Waiting for
+            # the full SL costs ~2x (whipsaw SL avg -0.94% notional vs cut at
+            # 50%). Peak filter keeps genuine recoverable dips (they print green
+            # early) and dip-detection stays untouched.
+            _ewc_hit = False
+            if bool(cfg.get("earlyWhipsawCutEnabled", True)):
+                try:
+                    _ewc_pct = float(cfg.get("earlyWhipsawCutPct", 0.50) or 0.50)
+                    _ewc_peak_min = float(cfg.get("earlyWhipsawCutPeakMinUsdt", 0.05) or 0.05)
+                    _ewc_peak = float(st.get("peak", 0.0) or 0.0)
+                    _ewc_qty = abs(float(st.get("qty", 0.0) or 0.0))
+                    if upnl < 0 and _ewc_peak < _ewc_peak_min and mark > 0 and sl > 0 and guard_entry > 0 and _ewc_qty > 0:
+                        _ewc_sl_dist = abs(guard_entry - sl)
+                        _ewc_full_loss = _ewc_sl_dist * _ewc_qty
+                        if _ewc_full_loss > 0 and abs(upnl) >= _ewc_full_loss * _ewc_pct:
+                            _ewc_hit = True
+                except Exception:
+                    _ewc_hit = False
             if mark > 0 and tp > 0 and sl > 0:
                 hit_sl = (side == "LONG" and mark <= sl) or (side == "SHORT" and mark >= sl)
                 hit_tp = (side == "LONG" and mark >= tp) or (side == "SHORT" and mark <= tp)
@@ -1512,6 +1532,18 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     reason = "LOCAL_TP_HIT" if hit_tp else "LOCAL_SL_HIT"
                     _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} (held {held_sec:.0f}s < {min_hold_sec:.0f}s) mark={mark:.6f}")
                     close_decisions.append(f"{sym}:{side}:{reason}:system=B")
+                    _delete_guardian_lock_file(k, cfg)
+                    locks.pop(k, None)
+                    app_state._LIVE_POSITIONS_CACHE = (0, [])
+                    changed = True
+                    continue
+                elif _ewc_hit:
+                    if f"{sym}:{side}" not in _closed_symbols:
+                        _persist_single_lock_before_close(st, cfg)
+                        await _main()._close_position_one_side(sym, side, key, secret, base, reason="EARLY_WHIPSAW_CUT")
+                        _closed_symbols.add(f"{sym}:{side}")
+                    _autotrade_log(f"LIVE multi guard close: {sym} {side} EARLY_WHIPSAW_CUT (held {held_sec:.0f}s < {min_hold_sec:.0f}s) loss={upnl:.4f} peak={float(st.get('peak',0.0)):.6f}")
+                    close_decisions.append(f"{sym}:{side}:EARLY_WHIPSAW_CUT:system=B")
                     _delete_guardian_lock_file(k, cfg)
                     locks.pop(k, None)
                     app_state._LIVE_POSITIONS_CACHE = (0, [])
