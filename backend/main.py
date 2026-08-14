@@ -1057,6 +1057,22 @@ def _tuning_should_rollback(key: str, post_window_trades: int = 3) -> bool:
     return False
 
 
+def _enforce_min_conf_brake(cfg: dict, ceiling: float | None = None) -> None:
+    """Supervisor entry-confidence brake (OWNERSHIP SPLIT).
+
+    The AI Tuner (cron) owns the *value* of minConfidence for long-horizon
+    optimization. The supervisor must never ratchet it down (that caused the
+    0.72<->0.83 swing). It may only enforce the hard statistical floor so a
+    stale/low tuner value can never reopen the known-loss 0.70-0.80 band.
+    """
+    if not isinstance(cfg, dict):
+        return
+    floor = ENTRY_MIN_CONFIDENCE_FLOOR
+    cur = float(cfg.get("minConfidence", floor) or floor)
+    if cur < floor:
+        cfg["minConfidence"] = floor
+
+
 def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str) -> dict:
     now = int(time.time())
     delegations[key] = {
@@ -1274,7 +1290,11 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
     if stuck_no_entry:
         min_floor = max(0.60, min(0.82, float(cfg.get("supervisorStuckLowEntryMinConfidenceFloor", 0.76) or 0.76)))
         early_floor = max(0.56, min(0.78, float(cfg.get("supervisorStuckLowEntryEarlyConfidenceFloor", 0.68) or 0.68)))
-        set_float("minConfidence", max(min_floor, min_conf - 0.015 * (1.0 + severity * 2.0)), 3)
+        # OWNERSHIP SPLIT: minConfidence is owned by the AI Tuner (cron) for
+        # long-horizon optimization. The supervisor may only enforce the hard
+        # 0.82 floor (brake) — it must NOT ratchet minConfidence down itself,
+        # otherwise the two agents fight and swing the gate 0.72<->0.83.
+        _enforce_min_conf_brake(cfg, min_floor)
         set_float("earlyEntryMinConfidence", max(early_floor, early_conf - 0.015 * (1.0 + severity * 2.0)), 3)
         for key in ("scanFallbackNearConfRelax", "scanGuardedFallbackConfRelax"):
             old = cfg.get(key)
@@ -1291,7 +1311,8 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
     else:
         base_step_min = 0.03 if quiet_board else 0.02
         base_step_early = 0.025 if quiet_board else 0.015
-        set_float("minConfidence", max(0.48 if quiet_board else 0.50, min_conf - base_step_min * (1.0 + severity * 2.0)), 3)
+        # OWNERSHIP SPLIT: supervisor does NOT lower minConfidence (Tuner owns it).
+        _enforce_min_conf_brake(cfg, 0.82)
         set_float("earlyEntryMinConfidence", max(0.50 if quiet_board else 0.52, early_conf - base_step_early * (1.0 + severity * 2.0)), 3)
     if quiet_board and not stuck_no_entry:
         score_gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
@@ -1539,7 +1560,13 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     # choking AUTO scan by pushing the global gate toward 0.90.
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
     autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
-    set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + 0.015 * (1.0 + severity * 2.0))), 3)
+    # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
+    # (the AI Tuner owns it). It only enforces the hard 0.82 floor brake.
+    # Operator may re-enable supervisor raises via supervisorMayTuneMinConfidence.
+    if bool(cfg.get("supervisorMayTuneMinConfidence", False)):
+        set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + 0.015 * (1.0 + severity * 2.0))), 3)
+    else:
+        _enforce_min_conf_brake(cfg, autotune_ceiling)
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
     set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
     gap = float(cfg.get("earlyEntryScoreGapMin", 1.40) or 1.40)
@@ -1701,7 +1728,12 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     conf_step = 0.03 if avg_pnl < -0.10 or win_rate < 40.0 else 0.02
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
     autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
-    set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + min(conf_step, 0.015) * (1.0 + severity * 2.0))), 3)
+    # OWNERSHIP SPLIT: supervisor does NOT move minConfidence by default (Tuner owns it);
+    # only enforce the hard 0.82 floor brake unless operator re-enables raises.
+    if bool(cfg.get("supervisorMayTuneMinConfidence", False)):
+        set_float("minConfidence", min(autotune_ceiling, max(min_conf, min_conf + min(conf_step, 0.015) * (1.0 + severity * 2.0))), 3)
+    else:
+        _enforce_min_conf_brake(cfg, autotune_ceiling)
 
     early_conf = float(cfg.get("earlyEntryMinConfidence", 0.60) or 0.60)
     set_float("earlyEntryMinConfidence", min(0.76, max(early_conf, early_conf + 0.015 * (1.0 + severity * 2.0))), 3)
@@ -4526,10 +4558,15 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
     old_conf = float(out.get("minConfidence", 0.65) or 0.65)
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
     autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
-    new_conf = min(autotune_ceiling, max(old_conf, old_conf + 0.02 * (1.0 + severity * 2.0)))
-    if new_conf > old_conf:
-        set_float("minConfidence", new_conf, 4)
-        actions.append(f"minConfidence {old_conf:.2f}->{new_conf:.2f}")
+    # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
+    # (the AI Tuner owns it). Only enforce the hard 0.82 floor brake here.
+    if bool(out.get("supervisorMayTuneMinConfidence", False)):
+        new_conf = min(autotune_ceiling, max(old_conf, old_conf + 0.02 * (1.0 + severity * 2.0)))
+        if new_conf > old_conf:
+            set_float("minConfidence", new_conf, 4)
+            actions.append(f"minConfidence {old_conf:.2f}->{new_conf:.2f}")
+    else:
+        _enforce_min_conf_brake(out, autotune_ceiling)
     if out.get("scanSidePreference") != "score":
         set_str("scanSidePreference", "score")
         actions.append("scanSidePreference=score")
