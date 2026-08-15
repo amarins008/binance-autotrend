@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 12
+CONFIG_VERSION = 13
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -170,6 +170,22 @@ _FORCE_DEFAULTS_V12: dict = {
     # edge. Fresh WAIT now requires conf >= tvWaitMinConf (0.88) instead of
     # falling through to the generic n/a floor (0.85).
     "tvWaitMinConf": 0.88,
+}
+
+
+# V13 (2026-08-14): evening-volatility guard. The 7-day telemetry (Thailand
+# time) showed the US-overlap window (16-23 BKK) bleeds: WR 54% but payoff 0.58
+# because avgLoss (-0.30) is ~2x avgWin (+0.17). Explicit, history-independent
+# size + entry-gate reduction during that window. Bangkok time, not server UTC.
+_FORCE_DEFAULTS_V13: dict = {
+    "eveningVolatilityGuardEnabled": True,
+    "eveningSessionHourStart": 16,
+    "eveningSessionHourEnd": 23,
+    "eveningSessionSizeMult": 0.70,
+    "eveningSessionConfShift": 0.04,
+    "eveningPreemptiveTighten": True,
+    "eveningPreemptiveMaxEntryPct": 0.75,
+    "eveningPreemptiveMinConfidence": 0.60,
 }
 
 
@@ -582,6 +598,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 12:
             for _fk, _fv in _FORCE_DEFAULTS_V12.items():
+                out[_fk] = _fv
+        if _stored_ver < 13:
+            for _fk, _fv in _FORCE_DEFAULTS_V13.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

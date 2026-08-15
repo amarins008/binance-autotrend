@@ -2225,7 +2225,16 @@ def _entry_session_hours_from_log(max_trades: int = 700) -> dict[int, dict]:
 
 
 def _entry_session_bias(cfg: dict, now_ts: int | None = None) -> dict:
-    hour = time.localtime(int(now_ts or time.time())).tm_hour
+    # Use Bangkok time (UTC+7) for session labeling, not server local time.
+    # The bot runs on a UTC host, so localtime() == UTC; Boss analyzes sessions
+    # in Thailand time. Evening US-overlap (16-23 BKK) is the high-volatility
+    # window that bleeds (payoff 0.58, avgLoss -0.30 vs avgWin +0.17).
+    # Bangkok time (UTC+7) for session labeling. The bot runs on a UTC host,
+    # so server localtime == UTC; Boss analyzes sessions in Thailand time.
+    # Evening US-overlap (16-23 BKK) is the high-volatility window that bleeds
+    # (payoff 0.58, avgLoss -0.30 vs avgWin +0.17).
+    _now = int(now_ts or time.time())
+    hour = (time.gmtime(_now).tm_hour + 7) % 24
     neutral = {
         "enabled": bool(cfg.get("sessionBiasEnabled", True)),
         "hour": hour,
@@ -2306,6 +2315,21 @@ def _entry_session_bias(cfg: dict, now_ts: int | None = None) -> dict:
         "sizeMult": round(max(0.50, min(1.75, 1.0 + (size_pct / 100.0))), 4),
         "reason": reason,
     })
+    # Explicit evening-volatility override (Bangkok 16-23). Applied LAST so it
+    # wins over learned history. This does NOT wait for min_samples; it
+    # hard-reduces size and tightens the entry gate during the known-loss
+    # US-overlap window regardless of session stats. OWNERSHIP: static risk cap,
+    # not a tuner/supervisor write, so it cannot be fought by the other agents.
+    evening_lo = int(cfg.get("eveningSessionHourStart", 16) or 16)
+    evening_hi = int(cfg.get("eveningSessionHourEnd", 23) or 23)
+    if bool(cfg.get("eveningVolatilityGuardEnabled", True)) and (evening_lo <= hour <= evening_hi):
+        size_mult = float(cfg.get("eveningSessionSizeMult", 0.70) or 0.70)
+        conf_shift = float(cfg.get("eveningSessionConfShift", 0.04) or 0.04)
+        neutral["sizeMult"] = round(max(0.40, min(1.0, size_mult)), 4)
+        neutral["confidenceShift"] = round(max(0.0, min(0.20, conf_shift)), 4)
+        neutral["scoreShift"] = round(-max(0.0, min(0.15, conf_shift * 0.8)), 4)
+        neutral["reason"] = "evening_volatility_guard"
+        neutral["eveningGuard"] = True
     return neutral
 
 

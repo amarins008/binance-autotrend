@@ -577,6 +577,24 @@ def _preemptive_loss_exit(side: str, intel: dict | None, cfg: dict, upnl: float,
     loss_vs_sl = abs(upnl) / total_sl_loss
     min_entry = float(cfg.get("preemptiveLossExitMinEntryPct", 0.50) or 0.50)
     max_entry = float(cfg.get("preemptiveLossExitMaxEntryPct", 0.85) or 0.85)
+    # Evening-volatility guard (Bangkok 16-23): tighten the preemptive exit so
+    # a losing position is cut sooner during the high-vol US-overlap window,
+    # where avgLoss (~-0.30) has been ~2x avgWin. Lower max_entry => exit before
+    # the full SL distance; higher min_confidence => only exit on a real signal
+    # flip. Ownership: static risk cap, not a tuner/supervisor write.
+    if bool(cfg.get("eveningPreemptiveTighten", False)):
+        try:
+            import time as _tg
+            _bkk_h = (int(_tg.gmtime(int(_tg.time())).tm_hour) + 7) % 24
+        except Exception:
+            _bkk_h = -1
+        _ev_lo = int(cfg.get("eveningSessionHourStart", 16) or 16)
+        _ev_hi = int(cfg.get("eveningSessionHourEnd", 23) or 23)
+        if _ev_lo <= _bkk_h <= _ev_hi:
+            _ev_max = float(cfg.get("eveningPreemptiveMaxEntryPct", 0.75) or 0.75)
+            _ev_minconf = float(cfg.get("eveningPreemptiveMinConfidence", 0.60) or 0.60)
+            max_entry = min(max_entry, _ev_max)
+            min_conf = max(min_conf, _ev_minconf)
     if loss_vs_sl < min_entry or loss_vs_sl > max_entry:
         return False, ""
 
