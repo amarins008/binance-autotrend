@@ -186,6 +186,7 @@ _FORCE_DEFAULTS_V13: dict = {
     "eveningPreemptiveTighten": True,
     "eveningPreemptiveMaxEntryPct": 0.75,
     "eveningPreemptiveMinConfidence": 0.60,
+    "eveningShortSizeMult": 0.60,
 }
 
 

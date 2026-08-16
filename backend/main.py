@@ -5566,6 +5566,25 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                         notes.append(f"TV stale ({_tv_age:.0f}s > {_tv_stale:.0f}s) — no refresh")
                 _tv_boost = _tv_client.confirm_signal(_tv_res, final_signal)
                 _tv_strength = float((_tv_res.metadata or {}).get("strength", 0.0) or 0.0)
+                # Redundant directional-conflict guard (2026-08-15): if TV and
+                # the internal signal are OPPOSITE sides (LONG vs SHORT) and TV
+                # strength clears tvConflictBlockStrength, block regardless of
+                # confirm_signal's return. Catches the SHORT-vs-TV=LONG bleed.
+                _tv_sig_val = str(getattr(_tv_res, "signal", None) or "")
+                if _tv_sig_val.startswith("TVSignal."):
+                    _tv_sig_val = _tv_sig_val.split(".", 1)[1]
+                _opp = {"LONG": "SHORT", "SHORT": "LONG"}
+                _block_str = float(_live_cfg.get("tvConflictBlockStrength", 0.60) or 0.60)
+                if (
+                    final_signal in _opp
+                    and _tv_sig_val == _opp[final_signal]
+                    and _tv_strength >= _block_str
+                ):
+                    notes.append(
+                        f"TV directional BLOCK: TV={_tv_sig_val} vs {final_signal} strength={_tv_strength:.2f}"
+                    )
+                    final_signal = "WAIT"
+                    confidence = min(confidence, 0.40)
                 if _tv_boost <= -900.0:
                     notes.append(
                         f"TV hard conflict BLOCK: TV={_tv_res.signal.value} vs {final_signal} strength={_tv_strength:.2f}"
@@ -9705,6 +9724,20 @@ async def _autotrade_loop():
                     f"confShift={float(session_bias.get('confidenceShift', 0.0) or 0.0):+.3f} "
                     f"size {old_trade_usdt:.2f}->{trade_usdt:.2f}"
                 )
+            # SHORT-specific evening haircut (Bangkok 16-23). The 2026-08-15
+            # session showed SHORT bled hardest in the US-overlap window
+            # (17-18h WR 17-50%, SHORT net -3.27 vs LONG -0.82). When the
+            # evening guard is active and the chosen side is SHORT, cut size
+            # further so a wrong-direction SHORT can't bleed the account.
+            if signal == "SHORT" and bool(session_bias.get("eveningGuard", False)):
+                short_mult = float(cfg.get("eveningShortSizeMult", 0.60) or 0.60)
+                short_mult = max(0.25, min(1.0, short_mult))
+                if abs(short_mult - 1.0) >= 0.001:
+                    trade_usdt = round(float(trade_usdt) * short_mult, 2)
+                    _autotrade_log(
+                        "Evening SHORT guard: extra size haircut x" + str(short_mult)
+                        + " -> " + str(trade_usdt) + " USDT"
+                    )
             eff_prof = _symbol_effective_profile(cfg["symbol"], cfg)
             symbol_size_mult = float(eff_prof.get("positionSizeMult") or eff_prof.get("position_size_mult", 1.0) or 1.0)
             # Loss-streak guard at the apply point too: a bleeding symbol's

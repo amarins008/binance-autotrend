@@ -739,9 +739,22 @@ class TradingViewClient:
             # signal, so a hard conflict (strength >= 0.75) returns a sentinel
             # that confluence interprets as a block — entries against TV are
             # the #1 loser (DEXEUSDT/KAITOUSDT opened LONG vs TV SHORT 0.69+).
-            if strength >= 0.75:
-                return -999.0  # hard block sentinel
-            if strength >= 0.60:
+            # Directional-conflict guard (2026-08-15): if TV and the internal
+            # signal are OPPOSITE sides (LONG vs SHORT), block whenever TV
+            # strength clears tvConflictBlockStrength (default 0.60) — not
+            # just at 0.75. The 2026-08-15 session showed SHORT entries opened
+            # against TV=LONG (strength ~0.6-0.7) bled badly (SHORT WR 22%,
+            # -3.27 USDT in one day) because the soft penalty (-0.072) did not
+            # stop them. A genuine opposite-side TV read is a hard conflict.
+            block_strength = float(getattr(self, "tv_conflict_block_strength", 0.60) or 0.60)
+            try:
+                _cfg = getattr(self, "_live_cfg", None) or {}
+                block_strength = float(_cfg.get("tvConflictBlockStrength", block_strength) or block_strength)
+            except Exception:
+                pass
+            if strength >= block_strength:
+                return -999.0  # hard block sentinel (opposite side)
+            if strength >= 0.45:
                 return -1.5 * boost * tv_result.confidence  # ~-0.072 @ conf 0.6
             return -0.5 * boost * tv_result.confidence
 
