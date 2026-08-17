@@ -45,11 +45,13 @@ class TVSignalResult:
 
 class TradingViewClient:
     def __init__(self, config: Dict[str, Any]):
+        self._cfg: Dict[str, Any] = dict(config or {})
         self._cache: Dict[str, TVSignalResult] = {}
         self._signal_history: Dict[str, Dict[str, Any]] = {}
         self._rate_limit_tracker: Dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
         self._health_status = {"healthy": True, "last_check": 0, "fail_count": 0, "last_error": ""}
+        self._last_success_ts = 0.0
         self._disabled_until = 0
         self._symbol_cooldown: Dict[str, float] = {}
         self._consecutive_fails: Dict[str, int] = {}
@@ -190,6 +192,7 @@ class TradingViewClient:
             self._tv_missing = {}
 
     def update_config(self, config: Dict[str, Any]) -> None:
+        self._cfg = dict(config or {})
         self.enabled = bool(config.get("tradingviewEnabled", False))
         self.cache_ttl = int(config.get("tradingviewCacheTtl", 300))
         self.rate_limit_per_minute = int(config.get("tradingviewRateLimit", 6))
@@ -342,6 +345,7 @@ class TradingViewClient:
         if success:
             self._health_status["fail_count"] = max(0, self._health_status["fail_count"] - 1)
             self._health_status["last_error"] = ""
+            self._last_success_ts = now
             if self._health_status["fail_count"] == 0:
                 self._health_status["healthy"] = True
         else:
@@ -839,15 +843,36 @@ class TradingViewClient:
         }
 
     def get_health_status(self) -> Dict[str, Any]:
+        now = time.time()
         # Auto-recover if disable window has expired
-        if not self._health_status["healthy"] and time.time() >= self._disabled_until:
+        if not self._health_status["healthy"] and now >= self._disabled_until:
             self._health_status["healthy"] = True
             self._health_status["fail_count"] = 0
+        # A missing library is a hard, non-transient failure — never report
+        # healthy for it. This was the silent-death case: is_enabled() returns
+        # False but get_health_status() still said healthy=True with no error.
+        if not TRADINGVIEW_TA_AVAILABLE:
+            self._health_status["healthy"] = False
+            self._health_status["last_error"] = "tradingview_ta library not installed"
+            self._health_status["fail_count"] = max(self._health_status["fail_count"], 1)
+        # Staleness: TV may be "healthy" by the fail-counter but have not
+        # produced a successful signal in a long time (silent degradation).
+        _stale_sec = float(self._cfg.get("tvStaleSec", 900) or 900)
+        _stale = self._last_success_ts > 0 and (now - self._last_success_ts) > _stale_sec
+        if _stale and self._health_status["healthy"]:
+            self._health_status["healthy"] = False
+            self._health_status["last_error"] = (
+                f"TV signal stale: {(now - self._last_success_ts):.0f}s since last success (> {_stale_sec:.0f}s)"
+            )
         last_error = self._health_status.get("last_error", "")
         if "429" in last_error:
             error_type = "rate_limited"
         elif last_error and ("timeout" in last_error.lower() or "connection" in last_error.lower()):
             error_type = "connection"
+        elif "not installed" in last_error:
+            error_type = "missing_lib"
+        elif "stale" in last_error:
+            error_type = "stale"
         elif last_error:
             error_type = "unknown"
         else:
@@ -904,6 +929,35 @@ def get_tv_client(config: Dict[str, Any]) -> TradingViewClient:
 def reset_tv_client():
     global _tv_client_instance
     _tv_client_instance = None
+
+
+def attempt_tv_soft_recovery(reason: str = "") -> bool:
+    """Drop the cached singleton so the next call重建s a fresh client.
+
+    This is the cheap, in-process self-heal: it clears rate-limit trackers,
+    symbol cooldowns and the stale cache that can accumulate after a TV
+    outage. Returns True if a reset was performed. The caller (main loop)
+    decides whether to escalate to a full backend restart.
+    """
+    global _tv_client_instance
+    inst = _tv_client_instance
+    if inst is None:
+        return False
+    try:
+        inst._rate_limit_tracker.clear()
+        inst._symbol_cooldown.clear()
+        inst._consecutive_fails.clear()
+        inst._health_status["fail_count"] = 0
+        inst._disabled_until = 0
+        inst._last_success_ts = 0.0
+        inst._health_status["last_error"] = f"soft-recovered: {reason}"[:240]
+        # Keep healthy False until the next successful fetch re-affirms it,
+        # but allow is_enabled() to retry immediately (disabled_until=0).
+        inst._health_status["healthy"] = False
+    except Exception:
+        pass
+    _tv_client_instance = None
+    return True
 
 
 # Backward compatibility aliases

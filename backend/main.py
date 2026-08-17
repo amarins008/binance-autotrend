@@ -4073,6 +4073,36 @@ _DAILY_PNL_DATE_KEY = 0
 _SNAPSHOT_LAST_FLUSH = 0.0
 _LIVE_POSITIONS_CACHE = (0.0, [])
 _SUPERVISOR_LAST_REVIEW = 0
+# TradingView self-heal state (full-auto recovery: soft-reset → backend restart)
+_TV_SELFHEAL_LAST_CHECK = 0
+_TV_SELFHEAL_SOFT_ATTEMPTS = 0
+_TV_SELFHEAL_HARD_DONE = False
+
+
+def _tv_notify(message: str) -> None:
+    """Best-effort real-time alert for TV self-heal events.
+
+    The bot has no Telegram token of its own; the available channel is the
+    Hermes agent delivery (the cron delivers to telegram:7669160611). We call
+    `hermes send` as a detached subprocess so a failure can never block the
+    trading loop. Failures are swallowed.
+    """
+    try:
+        import subprocess, sys, os
+        py = Path(__file__).parent / ".venv" / "Scripts" / "python.exe"
+        if not py.exists():
+            py = Path(sys.executable)
+        target = os.getenv("HERMES_TV_ALERT_TARGET", "telegram:7669160611")
+        subprocess.Popen(
+            [str(py), "-m", "hermes", "send", "--to", target, message],
+            cwd=str(Path(__file__).parent),
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+            close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 _AUTOTRADE_TASK: asyncio.Task | None = None  # track running task to prevent duplicates
 _AUTOTRADE_TASK_LOCK = asyncio.Lock()
 AUTO_TRADE = {
@@ -9123,6 +9153,50 @@ async def _autotrade_loop():
                     _SUPERVISOR_LAST_REVIEW = now
                 except Exception as e:
                     _autotrade_log(f"Supervisor review error: {_format_loop_error(e)[:80]}")
+
+            # ── TradingView self-heal monitor (every 60s) ───────────────
+            # Full-auto recovery for TV outages: detect (lib missing / stale /
+            # hard-fail), try a cheap in-process soft-recovery first, then
+            # escalate to a one-shot backend restart if it stays down.
+            global _TV_SELFHEAL_LAST_CHECK, _TV_SELFHEAL_SOFT_ATTEMPTS, _TV_SELFHEAL_HARD_DONE
+            if now - _TV_SELFHEAL_LAST_CHECK >= 60:
+                try:
+                    from trading.tradingview_mcp import get_tv_mcp, attempt_tv_soft_recovery
+                    _tv = get_tv_mcp(cfg)
+                    _h = _tv.get_health_status()
+                    _tv_down = (
+                        not _h.get("healthy")
+                        or not _h.get("tradingview_ta_available", True)
+                        or _h.get("error_type") in ("missing_lib", "stale", "connection")
+                    )
+                    if _tv_down:
+                        if _TV_SELFHEAL_SOFT_ATTEMPTS < 3:
+                            _TV_SELFHEAL_SOFT_ATTEMPTS += 1
+                            _did = attempt_tv_soft_recovery(_h.get("last_error", "tv unhealthy"))
+                            _autotrade_log(
+                                f"[TV-HEAL] attempt soft-recovery #{_TV_SELFHEAL_SOFT_ATTEMPTS} "
+                                f"(healthy={_h.get('healthy')} err={_h.get('last_error')}) did_reset={_did}"
+                            )
+                            _tv_notify(
+                                f"⚠️ TV ไม่ทำงาน (soft-recover #{_TV_SELFHEAL_SOFT_ATTEMPTS}): "
+                                f"{_h.get('last_error')}"
+                            )
+                        else:
+                            if not _TV_SELFHEAL_HARD_DONE:
+                                _TV_SELFHEAL_HARD_DONE = True
+                                _autotrade_log("[TV-HEAL] escalation: restarting backend once to reload TV subsystem")
+                                _tv_notify("🔴 TV ยังไม่หายหลัง soft-recover 3 ครั้ง → รีสตาร์ทบอท 1 รอบเพื่อโหลด TV ใหม่")
+                                await system_restart()
+                                return
+                    else:
+                        if _TV_SELFHEAL_SOFT_ATTEMPTS or _TV_SELFHEAL_HARD_DONE:
+                            _autotrade_log("[TV-HEAL] TV recovered — resetting heal counters")
+                            _tv_notify("✅ TV กลับมาทำงานปกติแล้ว")
+                        _TV_SELFHEAL_SOFT_ATTEMPTS = 0
+                        _TV_SELFHEAL_HARD_DONE = False
+                except Exception as _e:
+                    _autotrade_log(f"[TV-HEAL] monitor error: {_format_loop_error(_e)[:80]}")
+                _TV_SELFHEAL_LAST_CHECK = now
             running_entries = bool(AUTO_TRADE.get("running"))
             risk_cooldown_enabled = bool(cfg.get("riskCooldownEnabled", False))
             if not risk_cooldown_enabled:
