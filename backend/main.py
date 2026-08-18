@@ -2333,6 +2333,82 @@ def _entry_session_bias(cfg: dict, now_ts: int | None = None) -> dict:
     return neutral
 
 
+def _market_regime_sizing(cfg: dict, intel: dict | None, trades: list | None = None) -> dict:
+    """Dynamic size/threshold modifier based on market regime + result streak.
+
+    Design goals (2026-08-15):
+    - Trade is ALWAYS allowed when a symbol passes its normal gates. We never
+      hard-block on volatility (that was the old _risk_cooldown_resume_ok
+      behavior) — instead we scale exposure.
+    - CALM market + a winning streak -> raise cap + multiplier so gains compound.
+    - VOLATILE market -> raise the entry bar (confFloor) and cut cap + multiplier
+      to contain risk, but keep trading.
+
+    Returns a neutral dict the entry pipeline multiplies into trade sizing and
+    adds to the confidence floor. OWNERSHIP: static sizing cap, not
+    tuner/supervisor-owned (it must not be fought by the other agents).
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out = {
+        "sizeMult": 1.0,
+        "capMult": 1.0,
+        "confFloor": 0.0,
+        "reason": "regime_neutral",
+        "regime": "UNKNOWN",
+    }
+    if not bool(cfg.get("regimeSizingEnabled", True)):
+        out["reason"] = "regime_sizing_disabled"
+        return out
+
+    # ── Market regime from live intel ──
+    try:
+        from trading.regime import detect_market_regime
+        regime = detect_market_regime(intel if isinstance(intel, dict) else None)
+    except Exception:
+        regime = {"name": "UNKNOWN", "confidenceBoost": 0.0, "sizeMultiplier": 1.0, "strictness": "normal"}
+    regime_name = str(regime.get("name", "UNKNOWN")).upper()
+    out["regime"] = regime_name
+    # Clamp the regime's own suggested multiplier to a sane band so it can never
+    # blow up or zero-out sizing.
+    regime_mult = float(regime.get("sizeMultiplier", 1.0) or 1.0)
+    regime_mult = max(0.4, min(1.3, regime_mult))
+    out["sizeMult"] *= regime_mult
+
+    # ── Volatile -> stricter bar, smaller cap ──
+    if regime_name == "VOLATILE":
+        vol_size = float(cfg.get("regimeVolSizeMult", 0.60) or 0.60)
+        vol_cap = float(cfg.get("regimeVolCapMult", 0.60) or 0.60)
+        vol_floor = float(cfg.get("regimeVolConfFloor", 0.05) or 0.05)
+        out["sizeMult"] = round(max(0.30, min(1.0, out["sizeMult"] * vol_size)), 4)
+        out["capMult"] = round(max(0.30, min(1.0, vol_cap)), 4)
+        out["confFloor"] = round(max(0.0, min(0.15, vol_floor)), 4)
+        out["reason"] = "regime_volatile_reduced"
+        return out
+
+    # ── Calm / Range + winning streak -> scale UP ──
+    if regime_name in ("CALM", "RANGE", "UNKNOWN"):
+        try:
+            state = _recent_live_result_streak_state(
+                trades if isinstance(trades, list) else [],
+                int(cfg.get("supervisorSizeLookbackTrades", 12) or 12),
+            )
+            streak = int(state.get("streak", 0) or 0)
+            kind = str(state.get("kind", "") or "")
+        except Exception:
+            streak, kind = 0, ""
+        if kind == "win" and streak >= int(cfg.get("regimeCalmWinStreakMin", 3) or 3):
+            calm_size = float(cfg.get("regimeCalmSizeMult", 1.25) or 1.25)
+            calm_cap = float(cfg.get("regimeCalmCapMult", 1.20) or 1.20)
+            # Diminishing returns: each extra win adds less; cap the boost.
+            boost = min(streak - int(cfg.get("regimeCalmWinStreakMin", 3) or 3), 5)
+            size_boost = 1.0 + (calm_size - 1.0) * (1.0 + 0.1 * boost)
+            cap_boost = 1.0 + (calm_cap - 1.0) * (1.0 + 0.1 * boost)
+            out["sizeMult"] = round(min(1.8, max(0.4, out["sizeMult"] * size_boost)), 4)
+            out["capMult"] = round(min(1.8, max(0.4, cap_boost)), 4)
+            out["reason"] = f"regime_calm_win_streak_{streak}"
+    return out
+
+
 def _early_entry_pullback_reset_ok(side: str, precision: dict | None, cfg: dict | None = None) -> tuple[bool, str]:
     cfg = cfg if isinstance(cfg, dict) else {}
     if not bool(cfg.get("earlyEntryPullbackResetEnabled", True)):
@@ -3686,14 +3762,24 @@ def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) 
     regime_name = str(regime.get("name", "UNKNOWN")).upper()
     min_conf = max(float(cfg.get("minConfidence", 0.62) or 0.62), float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62))))
     gap_min = float(cfg.get("riskCooldownResumeScoreGapMin", cfg.get("earlyEntryScoreGapMin", 1.4)) or 1.4)
+    # 2026-08-15: do NOT hard-block on volatility. Trade stays allowed (symbol
+    # must still pass its normal gates) but the entry bar is raised via the
+    # regime confidence floor so we take fewer, higher-quality entries when
+    # the market is turbulent. The size/cap cut happens in _market_regime_sizing.
+    regime_conf_floor = 0.0
     if regime_name == "VOLATILE":
-        return False, f"market volatile ({symbol or '-'})"
+        regime_conf_floor = float(cfg.get("regimeVolConfFloor", 0.05) or 0.05)
+    # During low-edge conditions (UNKNOWN/RANGE with weak score gap) require a
+    # slightly higher confidence instead of blocking outright.
     if regime_name in ("UNKNOWN", "RANGE") and score_gap < gap_min:
-        return False, f"market {regime_name.lower()} gap={score_gap:.1f}"
+        regime_conf_floor = max(regime_conf_floor, float(cfg.get("regimeLowEdgeConfFloor", 0.03) or 0.03))
+    if regime_conf_floor > 0.0:
+        min_conf = max(min_conf, float(cfg.get("minConfidence", 0.62) or 0.62) + regime_conf_floor)
+        min_conf = min(min_conf, 0.95)  # never require an impossible confidence
     if signal not in ("LONG", "SHORT"):
         return False, f"signal {signal}"
     if conf < min_conf:
-        return False, f"confidence {conf:.2f} < {min_conf:.2f}"
+        return False, f"confidence {conf:.2f} < {min_conf:.2f} (regime {regime_name.lower()} floor +{regime_conf_floor:.2f})"
     if spread_bps > float(cfg.get("maxSpreadBps", 22.0) or 22.0):
         return False, f"spread {spread_bps:.1f}bps"
     return True, f"{regime_name} {symbol} {signal} c={conf:.2f} gap={score_gap:.1f}"
@@ -9812,6 +9898,26 @@ async def _autotrade_loop():
                         "Evening SHORT guard: extra size haircut x" + str(short_mult)
                         + " -> " + str(trade_usdt) + " USDT"
                     )
+            # ── Market-regime dynamic sizing (2026-08-15) ──────────────────
+            # Trade is always allowed when the symbol passes its normal gates;
+            # this only scales exposure. VOLATILE -> smaller cap + stricter
+            # entry bar; CALM + win-streak -> larger cap to compound gains.
+            try:
+                _regime = _market_regime_sizing(cfg, intel, AUTO_TRADE.get("trades"))
+                if abs(_regime.get("sizeMult", 1.0) - 1.0) >= 0.001:
+                    trade_usdt = round(float(trade_usdt) * float(_regime["sizeMult"]), 2)
+                    _autotrade_log(
+                        f"Regime sizing: {_regime.get('reason')} (regime={_regime.get('regime')}) "
+                        f"sizeMult={_regime.get('sizeMult')} -> {trade_usdt:.2f} USDT"
+                    )
+                # Add the volatility confidence floor on top of the base min.
+                if float(_regime.get("confFloor", 0.0) or 0.0) > 0.0:
+                    _regime_conf_floor = float(_regime["confFloor"])
+                    if isinstance(intel, dict):
+                        intel.setdefault("regimeConfFloor", 0.0)
+                        intel["regimeConfFloor"] = max(float(intel.get("regimeConfFloor", 0.0) or 0.0), _regime_conf_floor)
+            except Exception as _re:
+                _autotrade_log(f"Regime sizing error: {_format_loop_error(_re)[:80]}")
             eff_prof = _symbol_effective_profile(cfg["symbol"], cfg)
             symbol_size_mult = float(eff_prof.get("positionSizeMult") or eff_prof.get("position_size_mult", 1.0) or 1.0)
             # Loss-streak guard at the apply point too: a bleeding symbol's

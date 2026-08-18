@@ -188,6 +188,14 @@ _FORCE_DEFAULTS_V13: dict = {
     "eveningPreemptiveMinConfidence": 0.60,
     "eveningShortSizeMult": 0.60,
     "tvStaleSec": 900,
+    "regimeSizingEnabled": True,
+    "regimeVolSizeMult": 0.60,
+    "regimeVolCapMult": 0.60,
+    "regimeVolConfFloor": 0.05,
+    "regimeCalmSizeMult": 1.25,
+    "regimeCalmCapMult": 1.20,
+    "regimeCalmWinStreakMin": 3,
+    "regimeLowEdgeConfFloor": 0.03,
 }
 
 
