@@ -196,6 +196,7 @@ _FORCE_DEFAULTS_V13: dict = {
     "regimeCalmCapMult": 1.20,
     "regimeCalmWinStreakMin": 3,
     "regimeLowEdgeConfFloor": 0.03,
+    "noTradeWindowsAutoEnabled": False,
 }
 
 

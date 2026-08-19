@@ -4747,9 +4747,10 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
         wr = float(st.get("winRatePct", 0.0) or 0.0)
         pnl = float(st.get("pnl", 0.0) or 0.0)
         if trades >= int(out.get("selfReviewMinHourSamples", 8) or 8) and wr <= 42.0 and pnl < 0:
-            # Respect explicit user override: if auto no-trade windows are disabled,
-            # never re-add blocked hours (Boss: trade on strong signal regardless of hour).
-            if bool(out.get("noTradeWindowsAutoEnabled", True)):
+            # Respect explicit user override: auto no-trade windows are DISABLED
+            # by default (Boss: trade on strong signal regardless of hour). Only
+            # re-add blocked hours when the user explicitly enables them.
+            if bool(out.get("noTradeWindowsAutoEnabled", False)):
                 window = f"{hour:02d}:00-{(hour + 1) % 24:02d}:00"
                 old_windows = list(out.get("noTradeWindows") or [])
                 windows = list(old_windows)
