@@ -3750,6 +3750,12 @@ def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) 
     if not isinstance(intel, dict):
         return False, "no market intel"
     symbol = str(symbol or intel.get("symbol") or "").upper().strip()
+    # 2026-08-20: deny-list enforcement (covers both scan and single-symbol
+    # mode since both funnel through this gate). Low-cap / meme symbols that
+    # repeatedly SL out are refused regardless of signal strength.
+    _deny = set(str(s).upper().strip() for s in (cfg.get("denySymbols") or cfg.get("scanDenySymbols") or []) if str(s).strip())
+    if symbol in _deny:
+        return False, f"denied symbol {symbol}"
     signal = str(intel.get("signal", "WAIT")).upper()
     conf = float(intel.get("confidence", 0.0) or 0.0)
     px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
@@ -9971,6 +9977,12 @@ async def _autotrade_loop():
                 )
             eff_cap = _effective_tp_sl(cfg["symbol"], cfg, intel)
             trade_cap = max(20.0, float(eff_cap.get("notionalCapUsdt", RISK["max_notional"])))
+            # 2026-08-20: absolute hard cap. The per-symbol/volatility multiplier
+            # above can push the effective cap above the operator's
+            # tradeNotionalCapUsdt; clamp it so a single position never exceeds
+            # the capital-preservation limit regardless of tier.
+            _hard_cap = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+            trade_cap = min(trade_cap, max(20.0, _hard_cap))
             if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
                 trade_cap = min(
                     trade_cap,

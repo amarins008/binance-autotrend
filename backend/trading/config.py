@@ -200,6 +200,14 @@ _FORCE_DEFAULTS_V13: dict = {
     "shortMinConfidence": 0.85,
     "shortBaseSizeMult": 0.55,
     "longTpBoostPct": 0.35,
+    # 2026-08-20 capital-preservation: cap per-trade notional at 40 USDT so a
+    # 1% SL on a single position can never bleed more than ~0.4 USDT (was 80).
+    "tradeNotionalCapUsdt": 40.0,
+    "autoScanTradeNotionalCapUsdt": 40.0,
+    # 2026-08-20: low-cap / meme symbols that repeatedly SL out (7d telemetry
+    # PUMPUSDT -12 trades, LINKUSDT, ALICEUSDT, BOMEUSDT, WLDUSDT, REDUSDT).
+    # Denied in BOTH scan and single-symbol mode via _risk_cooldown_resume_ok.
+    "denySymbols": ["PUMPUSDT", "LINKUSDT", "ALICEUSDT", "BOMEUSDT", "WLDUSDT", "REDUSDT"],
 }
 
 
