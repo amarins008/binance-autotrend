@@ -3761,6 +3761,12 @@ def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) 
     regime = _risk_cooldown_regime(intel)
     regime_name = str(regime.get("name", "UNKNOWN")).upper()
     min_conf = max(float(cfg.get("minConfidence", 0.62) or 0.62), float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62))))
+    # 2026-08-16: Selective SHORT — require a higher confidence floor for SHORT
+    # entries than LONG. SHORT historically bleeds (7d WR 29% vs LONG 59%), so
+    # only take SHORT when the signal is strong. No-op when key is 0/disabled.
+    _short_min_conf = float(cfg.get("shortMinConfidence", 0.0) or 0.0)
+    if signal == "SHORT" and _short_min_conf > 0.0:
+        min_conf = max(min_conf, _short_min_conf)
     gap_min = float(cfg.get("riskCooldownResumeScoreGapMin", cfg.get("earlyEntryScoreGapMin", 1.4)) or 1.4)
     # 2026-08-15: do NOT hard-block on volatility. Trade stays allowed (symbol
     # must still pass its normal gates) but the entry bar is raised via the
@@ -9899,6 +9905,18 @@ async def _autotrade_loop():
                         "Evening SHORT guard: extra size haircut x" + str(short_mult)
                         + " -> " + str(trade_usdt) + " USDT"
                     )
+            # 2026-08-16: Selective SHORT — reduce ALL SHORT base size 24h
+            # (not just the evening window) so a wrong-direction SHORT bleeds
+            # less. Evening haircut still stacks on top when active.
+            if signal == "SHORT":
+                _sbase = float(cfg.get("shortBaseSizeMult", 1.0) or 1.0)
+                _sbase = max(0.25, min(1.0, _sbase))
+                if abs(_sbase - 1.0) >= 0.001:
+                    trade_usdt = round(float(trade_usdt) * _sbase, 2)
+                    _autotrade_log(
+                        "SHORT base size reduction x" + str(_sbase)
+                        + " -> " + str(trade_usdt) + " USDT"
+                    )
             # ── Market-regime dynamic sizing (2026-08-15) ──────────────────
             # Trade is always allowed when the symbol passes its normal gates;
             # this only scales exposure. VOLATILE -> smaller cap + stricter
@@ -10056,6 +10074,11 @@ async def _autotrade_loop():
                     _autotrade_log(f"PAPER close flip pnl={t['pnl']:.4f}")
                 if not AUTO_TRADE["paper"]["position"]:
                     eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
+                    # 2026-08-16: LONG TP boost — let winning LONGs run further.
+                    _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
+                    if signal == "LONG" and _long_boost > 0.0:
+                        eff = dict(eff)
+                        eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
                     tp = mark * (1 + eff["tpPct"] / 100) if signal == "LONG" else mark * (1 - eff["tpPct"] / 100)
                     sl = mark * (1 - eff["slPct"] / 100) if signal == "LONG" else mark * (1 + eff["slPct"] / 100)
                     candles = intel.get("candles") if isinstance(intel, dict) else None
@@ -10185,6 +10208,11 @@ async def _autotrade_loop():
 
                 # external MCP signal guard removed — no second guard to consult.
                 eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
+                # 2026-08-16: LONG TP boost — let winning LONGs run further.
+                _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
+                if signal == "LONG" and _long_boost > 0.0:
+                    eff = dict(eff)
+                    eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
                 async def _do_place():
                     return await place_futures_order(
                         cfg["symbol"],

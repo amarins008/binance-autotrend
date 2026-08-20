@@ -197,6 +197,9 @@ _FORCE_DEFAULTS_V13: dict = {
     "regimeCalmWinStreakMin": 3,
     "regimeLowEdgeConfFloor": 0.03,
     "noTradeWindowsAutoEnabled": False,
+    "shortMinConfidence": 0.85,
+    "shortBaseSizeMult": 0.55,
+    "longTpBoostPct": 0.35,
 }
 
 
