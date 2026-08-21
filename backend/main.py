@@ -2112,6 +2112,43 @@ def _weighted_recent_memory_score(windows: dict[str, dict]) -> dict:
     }
 
 
+def _bkk_hour(ts: float | None = None) -> int:
+    """Bangkok (UTC+7) hour, timezone-independent.
+
+    Uses UTC (gmtime) + 7 so it is correct regardless of the machine's local
+    timezone. Do NOT use time.localtime() for any hour/day bucketing that feeds
+    trading decisions or reports — a machine set to UTC or US time would shift
+    every bucket by several hours (e.g. the evening 16-23 BKK guard window).
+    """
+    if ts is None:
+        ts = time.time()
+    return (time.gmtime(ts).tm_hour + 7) % 24
+
+
+def _bkk_day_start_ts(ts: float | None = None) -> int:
+    """Epoch seconds of the Bangkok (UTC+7) midnight that starts day of `ts`."""
+    if ts is None:
+        ts = time.time()
+    bkk = time.gmtime(ts)
+    # Compute Bangkok wall-clock, then find the UTC epoch of its 00:00 BKK.
+    bkk_hour = (bkk.tm_hour + 7) % 24
+    bkk_min = bkk.tm_min
+    bkk_sec = bkk.tm_sec
+    bkk_yday = bkk.tm_yday
+    # Seconds already elapsed in the Bangkok day (BKK wall clock).
+    elapsed = bkk_hour * 3600 + bkk_min * 60 + bkk_sec
+    # UTC epoch of the Bangkok 00:00 of the same UTC calendar day, then adjust
+    # for the +7 offset so we land on the correct BKK day boundary.
+    utc_day_start = ts - (bkk.tm_hour * 3600 + bkk.tm_min * 60 + bkk.tm_sec)
+    # utc_day_start is 00:00 UTC of the UTC day. Bangkok day starts 7h earlier.
+    bkk_day_start = utc_day_start - 7 * 3600
+    # If we are in the 00:00-07:00 UTC window, the BKK day actually started the
+    # previous UTC day -> subtract another 24h.
+    if bkk_hour < 7:
+        bkk_day_start -= 24 * 3600
+    return int(bkk_day_start)
+
+
 def _entry_session_hours_from_log(max_trades: int = 700) -> dict[int, dict]:
     now = time.time()
     try:
@@ -2202,7 +2239,7 @@ def _entry_session_hours_from_log(max_trades: int = 700) -> dict[int, dict]:
             recent = [ts for ts in scans if 0 <= entry_ts - ts <= 10800]
             if recent:
                 entry_ts = max(recent)
-        hour = time.localtime(entry_ts).tm_hour
+        hour = _bkk_hour(entry_ts)
         entry = float(item.get("entry", 0.0) or 0.0)
         exit_px = float(item.get("exit", 0.0) or 0.0)
         move = abs((exit_px - entry) / entry * 100.0) if entry > 0 and exit_px > 0 else None
@@ -4752,7 +4789,7 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
         set_int("maxOpenPositions", diversification_floor)
         actions.append(f"maxOpenPositions {old_max_open}->{diversification_floor}")
     hours = _entry_session_hours_from_log(int(out.get("sessionBiasLookbackTrades", 700) or 700))
-    hour = time.localtime(now).tm_hour
+    hour = _bkk_hour(now)
     st = hours.get(hour)
     if isinstance(st, dict):
         trades = int(st.get("trades", 0) or 0)
@@ -12518,7 +12555,7 @@ async def autotrade_status_lite():
     p_losses = int(p.get("losses", 0) or 0)
     p_total = p_wins + p_losses
     p_history = p.get("history") if isinstance(p.get("history"), list) else []
-    today_start = int(datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    today_start = _bkk_day_start_ts()
     p_wins_today = sum(1 for t in p_history if int(t.get("closedAt", 0) or 0) >= today_start and float(t.get("pnl", 0) or 0) >= 0)
     p_losses_today = sum(1 for t in p_history if int(t.get("closedAt", 0) or 0) >= today_start and float(t.get("pnl", 0) or 0) < 0)
     p_total_today = p_wins_today + p_losses_today
