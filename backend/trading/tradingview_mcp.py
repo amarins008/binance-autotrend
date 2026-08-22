@@ -49,6 +49,7 @@ class TradingViewClient:
         self._cache: Dict[str, TVSignalResult] = {}
         self._signal_history: Dict[str, Dict[str, Any]] = {}
         self._rate_limit_tracker: Dict[str, float] = {}
+        self._negative_cache: Dict[str, float] = {}  # symbol -> last-fail ts (short negative cache)
         self._rate_limit_lock = threading.Lock()
         self._health_status = {"healthy": True, "last_check": 0, "fail_count": 0, "last_error": ""}
         self._last_success_ts = 0.0
@@ -201,6 +202,7 @@ class TradingViewClient:
         self.confidence_boost = float(config.get("tradingviewConfidenceBoost", 0.08))
         self.staleness_threshold = int(config.get("tradingviewStalenessThreshold", 900))
         self._max_failures_before_disable = int(config.get("tradingviewMaxFailures", 10))
+        self._negative_cache_ttl = int(config.get("tradingviewNegativeCacheTtl", 60))
 
     def is_enabled(self) -> bool:
         if not self.enabled:
@@ -350,6 +352,7 @@ class TradingViewClient:
 
         if success:
             self._health_status["fail_count"] = max(0, self._health_status["fail_count"] - 1)
+            self._negative_cache.clear()  # recovered: allow retries
             self._health_status["last_error"] = ""
             self._last_success_ts = now
             if self._health_status["fail_count"] == 0:
@@ -385,6 +388,15 @@ class TradingViewClient:
             self._consecutive_fails.pop(symbol, None)
             return cached
 
+        # 2026-08-22: NEGATIVE CACHE. If this symbol just failed (429 / network /
+        # empty), do not re-hammer the API on every loop tick — return None
+        # immediately (without consuming a rate-limit slot) until the short
+        # negative TTL expires. This is the sustainable rate-limit defense: a
+        # failed symbol stays quiet instead of burning quota every 30-60s.
+        _neg = self._negative_cache.get(symbol, 0)
+        if _neg and (time.time() - _neg) < self._negative_cache_ttl:
+            return None
+
         if not self._check_rate_limit(symbol):
             return None
 
@@ -394,6 +406,7 @@ class TradingViewClient:
             if result:
                 self._store_in_cache(symbol, result)
                 self._consecutive_fails.pop(symbol, None)
+                self._negative_cache.pop(symbol, None)
                 self._global_consecutive_fails = max(0, self._global_consecutive_fails - 1)
                 self._update_health(True)
                 return result
@@ -401,6 +414,7 @@ class TradingViewClient:
                 self._consecutive_fails[symbol] = self._consecutive_fails.get(symbol, 0) + 1
                 self._global_consecutive_fails += 1
                 self._compute_symbol_cooldown(symbol)
+                self._negative_cache[symbol] = time.time()
                 self._update_health(False)
                 return None
 
@@ -408,6 +422,7 @@ class TradingViewClient:
             self._consecutive_fails[symbol] = self._consecutive_fails.get(symbol, 0) + 1
             self._global_consecutive_fails += 1
             self._compute_symbol_cooldown(symbol)
+            self._negative_cache[symbol] = time.time()
             self._update_health(False)
             return None
 

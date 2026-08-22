@@ -77,6 +77,7 @@ _FORCE_DEFAULTS_V6: dict = {
     "tradingviewRateLimit": 6,
     "tradingviewTimeout": 10.0,
     "tradingviewMaxFailures": 10,
+    "tradingviewNegativeCacheTtl": 60,  # short negative cache: keep failed symbols quiet after a 429/empty
     "tvStaleEntrySec": 300,
     # TV entry confirmation gate (2026-08-22): reject entries whose TradingView
     # snapshot is stale (>tvEntryMaxAgeSec) or weak (<tvEntryMinConfidence).
@@ -414,7 +415,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewRateLimit", 6)  # Rate limit per minute
     out.setdefault("tradingviewTimeout", 10.0)  # API timeout in seconds
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
-    out.setdefault("tradingviewMaxFailures", 10)  # Max failures before auto-disable
+    out.setdefault("tradingviewMaxFailures", 10)
+    out.setdefault("tradingviewNegativeCacheTtl", 60)  # Max failures before auto-disable
     out.setdefault("tvUnavailableMinConf", 0.85)  # Conservative floor when TV signal is unavailable
     out.setdefault("tvWaitMinConf", 0.88)  # Fresh explicit TV WAIT needs extra confidence (V13.6)
     out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
