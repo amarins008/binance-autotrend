@@ -56,6 +56,7 @@ class TradingViewClient:
         self._symbol_cooldown: Dict[str, float] = {}
         self._consecutive_fails: Dict[str, int] = {}
         self._global_consecutive_fails = 0
+        self._disable_round = 0  # consecutive disable rounds for exponential backoff
         # Symbols the scanner API does not know (stock tokens, new listings
         # absent from TV's crypto universe). Tracked so batches skip them
         # instead of repeatedly burning rate-limit and tripping the
@@ -244,6 +245,11 @@ class TradingViewClient:
 
             self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
             self._rate_limit_tracker[global_key] = self._rate_limit_tracker.get(global_key, 0) + 1
+            # 2026-08-22: after consuming a rate-limit slot, impose a tiny global
+            # spacing so a tight scan loop cannot burn all 20 global slots in one
+            # burst and trip the 429 circuit. Cheap sleep only when near the cap.
+            if self._rate_limit_tracker.get(global_key, 0) >= self.rate_limit_per_minute:
+                time.sleep(2.0)
 
             current_minute = str(int(now // 60))
             old_keys = [k for k in self._rate_limit_tracker if k.split("_")[-1] != current_minute]
@@ -348,11 +354,19 @@ class TradingViewClient:
             self._last_success_ts = now
             if self._health_status["fail_count"] == 0:
                 self._health_status["healthy"] = True
+                self._disable_round = 0  # recovered -> backoff resets
         else:
             self._health_status["fail_count"] += 1
             if self._health_status["fail_count"] >= self._max_failures_before_disable:
                 self._health_status["healthy"] = False
-                self._disabled_until = now + 300
+                # 2026-08-22: exponential backoff on the rate-limit circuit. A flat
+                # 300s disable just retries at the same burst rate and re-trips 429
+                # forever (observed: fail_count stuck at 10-11, TV never recovers).
+                # Each successive disable round doubles the cooldown (5/10/20/40/80m
+                # cap) so the free API quota actually refills between retries.
+                self._disable_round += 1
+                _backoff = 300 * (2 ** min(self._disable_round - 1, 4))
+                self._disabled_until = now + _backoff
 
     def get_signal(self, symbol: str, internal_signal: str, internal_confidence: float, force_refresh: bool = False) -> Optional[TVSignalResult]:
         if not self.is_enabled():
