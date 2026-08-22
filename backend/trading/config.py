@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 13
+CONFIG_VERSION = 14
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -225,6 +225,19 @@ _FORCE_DEFAULTS_V13: dict = {
     # PUMPUSDT -12 trades, LINKUSDT, ALICEUSDT, BOMEUSDT, WLDUSDT, REDUSDT).
     # Denied in BOTH scan and single-symbol mode via _risk_cooldown_resume_ok.
     "denySymbols": ["PUMPUSDT", "LINKUSDT", "ALICEUSDT", "BOMEUSDT", "WLDUSDT", "REDUSDT"],
+}
+
+
+_FORCE_DEFAULTS_V14: dict = {
+    # TV entry confirmation gate + SHORT-specific gate + Guardian hold/whipsaw/TV-exit (2026-08-22)
+    # Hard override (not soft) so these keys are enforced on version bump even if already present.
+    # This prevents config drift where live values (e.g. shortTvMinConfidence=0.70) differ from defaults.
+    "tvEntryMaxAgeSec": 30,
+    "tvEntryMinConfidence": 0.60,
+    "shortTvMinConfidence": 0.60,
+    "holdMinProfitUsdt": 0.03,
+    "whipGraceSec": 180,
+    "tradingviewEarlyExitMinStrength": 0.60,
 }
 
 
@@ -641,6 +654,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 13:
             for _fk, _fv in _FORCE_DEFAULTS_V13.items():
+                out[_fk] = _fv
+        if _stored_ver < 14:
+            for _fk, _fv in _FORCE_DEFAULTS_V14.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 
