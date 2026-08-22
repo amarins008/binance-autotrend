@@ -3479,6 +3479,22 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         elif spread_bps > max_spread_bps:
             qualified = False
             reject_reason = "wide_spread"
+
+        # TV confirmation gate (2026-08-22): stale or weak TradingView signal
+        # rejects the entry. Telemetry (7d) showed tvAge>30s -> WR 12-17% and
+        # tvConfidence<0.7 -> net -4.78 USDT; only age<=30s & conf>=0.7 were
+        # net-positive. Only applied when TV is enabled AND we actually have a
+        # fresh TV snapshot for this symbol (otherwise we don't punish).
+        elif bool(cfg.get("tradingviewEnabled", False)):
+            _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
+            if _tv:
+                _tv_age = int(_tv.get("age", 9999) or 9999)
+                _tv_conf = float(_tv.get("confidence", 0.0) or 0.0)
+                _max_age = int(cfg.get("tvEntryMaxAgeSec", 30) or 30)
+                _min_conf = float(cfg.get("tvEntryMinConfidence", 0.70) or 0.70)
+                if _tv_age > _max_age or _tv_conf < _min_conf:
+                    qualified = False
+                    reject_reason = "tv_stale_or_weak"
         perf_ok, perf_reason, perf = _symbol_perf_gate(cfg, sym)
         soft_perf_eligible = False
         soft_perf_reason = ""

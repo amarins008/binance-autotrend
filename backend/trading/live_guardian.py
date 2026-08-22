@@ -1606,7 +1606,17 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 app_state._LIVE_POSITIONS_CACHE = (0, [])
                 changed = True
                 continue
-            if hit_tp and (strong_follow or _should_hold_winner(side, intel, cfg, _per_sym_eff.get("holdMinConfidence") if _per_sym_eff else None)):
+            # 2026-08-22: activate hold/extend on ANY in-profit position (not only
+            # when price literally touches TP). Telemetry showed TP targets were
+            # set too far (only 7/195 trades hit TP in 7d) so the old
+            # `hit_tp and ...` branch never fired -> holdWinnerActivated=0/195 and
+            # ~+0.105 USDT/position of peak profit leaked out. Now we also hold
+            # when upnl exceeds a small profit floor AND the signal is still
+            # aligned (strong_follow / _should_hold_winner), letting the guardian
+            # trail SL to breakeven / extend TP on winners that never tap TP.
+            _hold_min_profit = float(cfg.get("holdMinProfitUsdt", 0.03) or 0.03)
+            _in_profit_hold = upnl > _hold_min_profit
+            if (hit_tp or (isinstance(intel, dict) and _in_profit_hold)) and (strong_follow or _should_hold_winner(side, intel, cfg, _per_sym_eff.get("holdMinConfidence") if _per_sym_eff else None)):
                 _tv_prefetched = _tv_results.get(f"{sym}:{side}")
                 new_tp, new_sl, extended = await _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, sym, _per_sym_eff.get("holdTrailPct") if _per_sym_eff else None, _tv_guidance=_tv_prefetched)
                 if not extended:

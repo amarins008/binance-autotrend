@@ -78,6 +78,14 @@ _FORCE_DEFAULTS_V6: dict = {
     "tradingviewTimeout": 10.0,
     "tradingviewMaxFailures": 10,
     "tvStaleEntrySec": 300,
+    # TV entry confirmation gate (2026-08-22): reject entries whose TradingView
+    # snapshot is stale (>tvEntryMaxAgeSec) or weak (<tvEntryMinConfidence).
+    # Telemetry: tvAge>30s -> WR 12-17%; tvConf<0.7 -> net -4.78 USDT.
+    "tvEntryMaxAgeSec": 30,
+    "tvEntryMinConfidence": 0.70,
+    # Guardian: hold/extend winners once upnl exceeds this floor (not only when
+    # price literally taps TP). Fixes holdWinnerActivated=0/195 (TP set too far).
+    "holdMinProfitUsdt": 0.03,
 }
 
 _FORCE_DEFAULTS_V7: dict = {
