@@ -1,4 +1,4 @@
-﻿"""Runtime config defaults and preset merge."""
+"""Runtime config defaults and preset merge."""
 
 import os
 
@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
 # the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 14
+CONFIG_VERSION = 15
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -240,6 +240,30 @@ _FORCE_DEFAULTS_V14: dict = {
     "tradingviewEarlyExitMinStrength": 0.60,
 }
 
+_FORCE_DEFAULTS_V15: dict = {
+    # Guardian hold-on-profit fix (2026-08-22): thresholds were too high, never fired.
+    # - tpExtendMinConfidence was hardcoded 0.78 -> lower to 0.55 (match holdMinConfidence)
+    # - tpExtendMinScoreGap was hardcoded 1.2 -> lower to 0.5 (TV score gap more achievable)
+    # - holdMinMomentumPct was hardcoded 0.15% -> lower to 0.05% (momentum threshold)
+    # - holdMinConfidence in code default was 0.55 -> align config 0.72 but allow lower via key
+    "tpExtendMinConfidence": 0.55,
+    "tpExtendMinScoreGap": 0.5,
+    "holdMinMomentumPct": 0.05,
+    # Guardian: ensure hold logic evaluates even if TV briefly WAIT
+    "holdAllowWaitSignal": True,
+    # P1: time-based fallback to prevent LIVE_CLOSE timeout
+    "liveCloseFallbackMinSec": 1800,
+    # P2: SL floor to prevent noise-whacks (local SL hits had min 0.43%)
+    "slMinPct": 0.60,
+    # P4: SHORT-specific tuning (SHORT_vs_SHORT WR only 35%)
+    "shortSlMult": 0.80,
+    "shortConfFloor": 0.80,
+    # P3: TV batch fetch rate-limit tuning (reduce 429 frequency)
+    "tvBatchRateLimitPerMin": 4,       # lower than 6 to avoid burst 429
+    "tvBatchRetryBackoff": 2.0,        # seconds to wait on 429 before next batch
+    "tvStaleSec": 900,                 # re-fetch after 15min (was 300 in places)
+}
+
 
 def _normalize_config_symbol(symbol: str) -> str:
     return str(symbol or "").upper().replace("/", "").strip()
@@ -329,6 +353,17 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("holdWinners", True)
     out.setdefault("holdMinConfidence", 0.72)
     out.setdefault("holdTrailPct", 0.32)
+    out.setdefault("holdMinMomentumPct", 0.05)
+    out.setdefault("holdAllowWaitSignal", True)
+    out.setdefault("tpExtendMinConfidence", 0.55)
+    out.setdefault("tpExtendMinScoreGap", 0.5)
+    out.setdefault("liveCloseFallbackMinSec", 1800)
+    out.setdefault("slMinPct", 0.60)
+    out.setdefault("shortSlMult", 0.80)
+    out.setdefault("shortConfFloor", 0.80)
+    out.setdefault("tvBatchRateLimitPerMin", 4)
+    out.setdefault("tvBatchRetryBackoff", 2.0)
+    out.setdefault("tvStaleSec", 900)
     out.setdefault("profitLockTriggerUsdt", 0.25)
     out.setdefault("profitLockKeepUsdt", 0.10)
     out.setdefault("profitLockMaxGivebackUsdt", 0.18)
@@ -657,6 +692,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 14:
             for _fk, _fv in _FORCE_DEFAULTS_V14.items():
+                out[_fk] = _fv
+        if _stored_ver < 15:
+            for _fk, _fv in _FORCE_DEFAULTS_V15.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

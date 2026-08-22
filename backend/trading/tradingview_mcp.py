@@ -696,7 +696,8 @@ class TradingViewClient:
         with self._rate_limit_lock:
             now = time.time()
             minute_key = f"_batch_{int(now // 60)}"
-            if self._rate_limit_tracker.get(minute_key, 0) >= 6:
+            _rate_limit_per_min = int(float(self._cfg.get("tvBatchRateLimitPerMin", 4) or 4))
+            if self._rate_limit_tracker.get(minute_key, 0) >= _rate_limit_per_min:
                 return {}
             self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
 

@@ -7939,7 +7939,8 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     # on 08-01). The V10 supervisorStopLossFloor only capped the global
     # weak_payoff ratchet — this floors the effective per-symbol SL too.
     _sl_floor = float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80)
-    base_sl = max(_sl_floor, float(cfg.get("stopLossPct", 0.8) or 0.8))
+    _sl_min = max(_sl_floor, float(cfg.get("slMinPct", 0.60) or 0.60))
+    base_sl = max(_sl_min, float(cfg.get("stopLossPct", 0.8) or 0.8))
     base_cap = max(20.0, float(cfg.get("tradeNotionalCapUsdt", RISK["max_notional"]) or RISK["max_notional"]))
     base_lock_trigger = float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)
     base_lock_keep = float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15)
@@ -7968,6 +7969,11 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     # sufficient (>= SYMBOL_PROFILE_MIN_TRADES). Missing keys still fall
     # through to the computed values.
     sym_overrides = sym_profile if sym_profile.get("source") == "symbol+group" else {}
+    # P4: SHORT-specific SL multiplier (SHORT positions need tighter SL to avoid
+    # large adverse moves; SHORT_vs_SHORT WR was only 35% historically)
+    _sl_mult_adj = sl_mult
+    if (intel or {}).get("side") == "SHORT" or str(symbol).upper().endswith("SHORT"):
+        _sl_mult_adj = sl_mult * float(cfg.get("shortSlMult", 0.80) or 0.80)
     ret = {
         "symbol": str(symbol or "").upper().strip(),
         "tier": vol.get("tier", "med"),
@@ -7975,11 +7981,11 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
         "source": sym_profile.get("source", "group"),
         "sampleTrades": sym_profile.get("sampleTrades", 0),
         "tpMult": round(tp_mult, 4),
-        "slMult": round(sl_mult, 4),
+        "slMult": round(_sl_mult_adj, 4),
         "capMult": round(cap_mult, 4),
         "lockMult": round(lock_mult, 4),
         "tpPct": round(float(sym_overrides.get("tpPct", base_tp * tp_mult)), 4),
-        "slPct": round(max(_sl_floor, float(sym_overrides.get("slPct", base_sl * sl_mult))), 4),
+        "slPct": round(max(_sl_min, float(sym_overrides.get("slPct", base_sl * _sl_mult_adj))), 4),
         "notionalCapUsdt": round(float(sym_overrides.get("notionalCapUsdt", base_cap * cap_mult)), 4),
         "profitLockTriggerUsdt": round(
             float(sym_overrides.get("profitLockTriggerUsdt", base_lock_trigger * lock_mult)), 4),

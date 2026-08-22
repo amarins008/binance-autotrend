@@ -232,11 +232,20 @@ def _should_hold_winner(side: str, intel: dict | None, cfg: dict, hold_min_conf:
     sig = str(intel.get("signal", "WAIT")).upper()
     conf = float(intel.get("confidence", 0.0) or 0.0)
     min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55))
-    if sig != side or conf < min_conf:
-        return False
+    # Allow WAIT signal if holdAllowWaitSignal is True (default True from V15)
+    # A fresh WAIT is not a reversal; it just means TV hasn't confirmed yet.
+    if not cfg.get("holdAllowWaitSignal", True):
+        if sig != side or conf < min_conf:
+            return False
+    else:
+        # With holdAllowWaitSignal: allow WAIT, only block opposite signal or low conf
+        if sig != "WAIT" and sig != side:
+            return False
+        if conf < min_conf:
+            return False
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
     mom = float(ex.get("momentumPct", 0.0) or 0.0)
-    min_momentum = float(cfg.get("holdMinMomentumPct", 0.15) or 0.15)
+    min_momentum = float(cfg.get("holdMinMomentumPct", 0.05) or 0.05)
     return (side == "LONG" and mom >= min_momentum) or (side == "SHORT" and mom <= -min_momentum)
 
 async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None, _tv_guidance: dict | None = None) -> tuple[float, float]:
@@ -481,15 +490,15 @@ def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_m
     if sig != current_side:
         return False, ""
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    base_min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55) or 0.55)
-    min_conf = max(base_min_conf, float(cfg.get("tpExtendMinConfidence", 0.78) or 0.78))
+    base_min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55))
+    min_conf = max(base_min_conf, float(cfg.get("tpExtendMinConfidence", 0.55) or 0.55))
     if conf < min_conf:
         return False, ""
     px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
     long_score = float(px.get("longScore", 0.0) or 0.0)
     short_score = float(px.get("shortScore", 0.0) or 0.0)
     score_gap = (long_score - short_score) if current_side == "LONG" else (short_score - long_score)
-    min_gap = float(cfg.get("tpExtendMinScoreGap", 1.2) or 1.2)
+    min_gap = float(cfg.get("tpExtendMinScoreGap", 0.5) or 0.5)
     if score_gap < min_gap:
         return False, ""
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
@@ -1283,6 +1292,17 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             gs["peakProfitUsdt"] = round(max(float(gs.get("peakProfitUsdt", 0.0) or 0.0), float(st.get("peak", 0.0) or 0.0)), 6)
             gs["notionalUsdt"] = round(float(notional), 6)
             gs["updatedAt"] = now
+        # ── P1: time-based fallback (prevent LIVE_CLOSE timeout) ──
+        # If position has been open longer than liveCloseFallbackMinSec, arm
+        # breakeven guard even if profit hasn't reached trigger yet. This
+        # prevents positions from hanging until the bot closes them at a loss.
+        live_close_fallback_sec = float(cfg.get("liveCloseFallbackMinSec", 1800) or 1800)
+        age_sec = now - int(st.get("openedAt", now) or now)
+        if age_sec >= live_close_fallback_sec and not st.get("breakevenGuardArmed"):
+            st["breakevenGuardArmed"] = True
+            st["breakevenFloorUsdt"] = round(float(bk_floor_ph1), 6)
+            st["timeFallbackArmed"] = True
+            _autotrade_log(f"[Guardian] P1 fallback: {sym} {side} age={age_sec}s ≥ {live_close_fallback_sec}s → breakeven armed")
         if st["peak"] >= bk_trigger_ph1:
             st["breakevenGuardArmed"] = True
             st["breakevenFloorUsdt"] = round(float(bk_floor_ph1), 6)
