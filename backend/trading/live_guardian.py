@@ -1525,7 +1525,16 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             # 50%). Peak filter keeps genuine recoverable dips (they print green
             # early) and dip-detection stays untouched.
             _ewc_hit = False
-            if bool(cfg.get("earlyWhipsawCutEnabled", True)):
+            # 2026-08-22: WHIPSAW GRACE PERIOD. Telemetry showed EARLY_WHIPSAW_CUT
+            # closed 23 trades at avg 83s with net -3.35 (WR 19%) — the guardian
+            # cut at the exact bottom before the bounce. Now we refuse to cut
+            # during the first whipGraceSec (default 180s) of a position's life,
+            # giving the price room to recover. Only after the grace window may
+            # the whipsaw cut fire (and only if it still meets the loss/peak
+            # criteria, i.e. it was genuinely bad timing, not a normal dip).
+            _whip_grace = float(cfg.get("whipGraceSec", 180) or 180)
+            _within_grace = held_sec < _whip_grace
+            if bool(cfg.get("earlyWhipsawCutEnabled", True)) and not _within_grace:
                 try:
                     _ewc_pct = float(cfg.get("earlyWhipsawCutPct", 0.50) or 0.50)
                     _ewc_peak_min = float(cfg.get("earlyWhipsawCutPeakMinUsdt", 0.05) or 0.05)

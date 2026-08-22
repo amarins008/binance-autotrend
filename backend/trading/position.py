@@ -145,20 +145,26 @@ def should_exit_early_with_tradingview(side: str, tv_guidance: Optional[Dict[str
     
     rec = tv_guidance.get("recommendation", "")
     strength = tv_guidance.get("strength", 0.0)
-    min_strength = float(cfg.get("tradingviewEarlyExitMinStrength", 0.45))
+    # 2026-08-22: raise the floor so a brief TV flicker doesn't cut a still-valid
+    # trend. Telemetry: TRADINGVIEW_EARLY_EXIT closed 27 trades at avg 435s net
+    # -0.72 — TV exited mid-pullback before the bounce. Require a STRONG opposite
+    # recommendation (not a weak/neutral flicker) and a higher strength floor.
+    min_strength = float(cfg.get("tradingviewEarlyExitMinStrength", 0.60))
 
     # TV library returns BUY/SELL/NEUTRAL — map SHORT→SELL, LONG→BUY
     tv_opp = "SELL" if side == "LONG" else "BUY"
 
-    # Exit early if TradingView reverses (lowered threshold — TV rarely >0.7)
-    if rec in (tv_opp, f"STRONG_{tv_opp}") and strength >= min_strength:
+    # Exit early ONLY on a clear, strong reversal — STRONG_<opp> with strength
+    # above the (raised) floor. A plain opposite rec at low strength is a normal
+    # pullback inside the trend and must NOT trigger an early exit.
+    if rec == f"STRONG_{tv_opp}" and strength >= min_strength:
         return True
 
-    # Also exit if TV confidence is high enough and signal is opposite
-    if strength >= 0.6 and rec == tv_opp:
+    # A plain opposite rec now requires much higher conviction to cut.
+    if rec == tv_opp and strength >= max(0.75, min_strength + 0.15):
         return True
 
-    # Check for divergence in oscillators
+    # RSI divergence only counts as a cut signal at the raised floor.
     oscillators = tv_guidance.get("oscillators", {})
     if oscillators and isinstance(oscillators, dict):
         compute = oscillators.get("COMPUTE", {})
@@ -169,7 +175,7 @@ def should_exit_early_with_tradingview(side: str, tv_guidance: Optional[Dict[str
             return True
         if side == "SHORT" and rsi_buy and strength >= min_strength:
             return True
-    
+
     return False
 
 

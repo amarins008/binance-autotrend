@@ -86,6 +86,10 @@ _FORCE_DEFAULTS_V6: dict = {
     # Guardian: hold/extend winners once upnl exceeds this floor (not only when
     # price literally taps TP). Fixes holdWinnerActivated=0/195 (TP set too far).
     "holdMinProfitUsdt": 0.03,
+    # Guardian whipsaw grace period (2026-08-22): refuse EARLY_WHIPSAW_CUT during
+    # the first whipGraceSec of a position's life so a normal dip can bounce
+    # before the guardian cuts at the bottom.
+    "whipGraceSec": 180,
 }
 
 _FORCE_DEFAULTS_V7: dict = {
