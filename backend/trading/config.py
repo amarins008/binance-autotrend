@@ -90,6 +90,10 @@ _FORCE_DEFAULTS_V6: dict = {
     # the first whipGraceSec of a position's life so a normal dip can bounce
     # before the guardian cuts at the bottom.
     "whipGraceSec": 180,
+    # SHORT-specific TV confidence floor (2026-08-22): SHORT only enters when TV
+    # confidence >= this (telemetry: SHORT TV-conf>=0.7 was net-positive WR 62%,
+    # while 0.6-0.7 SHORT lost WR 22%). Also blocks SHORT when TV signal=LONG.
+    "shortTvMinConfidence": 0.70,
 }
 
 _FORCE_DEFAULTS_V7: dict = {

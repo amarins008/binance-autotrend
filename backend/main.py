@@ -3495,6 +3495,26 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 if _tv_age > _max_age or _tv_conf < _min_conf:
                     qualified = False
                     reject_reason = "tv_stale_or_weak"
+        # SHORT-specific TV gate (2026-08-22): telemetry showed SHORT WR 25% /
+        # net -5.07 over 7d while only TV-conf>=0.7 SHORT trades were net-positive
+        # (WR 62%) and any SHORT entered while TV signal was LONG lost (WR 20%).
+        # Require SHORT entries to (a) have a TV snapshot that agrees (signal in
+        # LONG/SHORT/WAIT but NOT conflicting LONG) and (b) meet a higher TV
+        # confidence floor than LONG.
+        if qualified and sig == "SHORT":
+            _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
+            if _tv:
+                _tv_sig = str(_tv.get("signal", "")).upper()
+                _tv_c = float(_tv.get("confidence", 0.0) or 0.0)
+                _short_min_conf = float(cfg.get("shortTvMinConfidence", 0.70) or 0.70)
+                # Block SHORT when TV explicitly points LONG (conflicting signal)
+                if _tv_sig == "LONG":
+                    qualified = False
+                    reject_reason = "short_tv_conflict_long"
+                # Require higher TV confidence for SHORT than the generic floor
+                elif _tv_c < _short_min_conf:
+                    qualified = False
+                    reject_reason = "short_tv_low_conf"
         perf_ok, perf_reason, perf = _symbol_perf_gate(cfg, sym)
         soft_perf_eligible = False
         soft_perf_reason = ""
