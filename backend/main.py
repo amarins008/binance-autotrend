@@ -3207,6 +3207,12 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
     candidates = await _scan_market_candidates(int(cfg.get("scanTopLiquid", 30)))
     blocked_symbols = {str(s).upper().strip() for s in (exclude_symbols or set()) if str(s).strip()}
     blocked_symbols.update(_parse_symbol_whitelist(cfg.get("scanDenySymbols")))
+    # 2026-08-22: also apply the capital-preservation deny list here. The
+    # resume gate (_risk_cooldown_resume_ok) covers single-symbol entries, but
+    # AUTO/scan mode picks its symbol via this picker, which previously only
+    # consulted scanDenySymbols — so denySymbols low-caps (PUMP/LINK/ALICE/
+    # BOME/WLD/RED) leaked through as fresh scan picks (17 trades post-fix).
+    blocked_symbols.update(_parse_symbol_whitelist(cfg.get("denySymbols")))
     # Skip symbols TradingView's scanner does not know (stock tokens, delisted
     # names): their TV signal is always empty → blind entries, and batches
     # that include them burn rate limit / used to trip the failure-disable
