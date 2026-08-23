@@ -709,6 +709,10 @@ class TradingViewClient:
                 timeout=self.timeout,
             )
             if resp.status_code != 200:
+                # 429 handling with exponential backoff
+                if resp.status_code == 429:
+                    backoff = float(self._cfg.get("tvBatchRetryBackoff", 2.0) or 2.0)
+                    time.sleep(backoff)
                 self._health_status["last_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 self._update_health(False)
                 return {}
