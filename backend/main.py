@@ -2606,7 +2606,7 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
     if _avg_win > 0.01:
         # desired avg win = midpoint of target band
         _desired = (_tgt_min + _tgt_max) / 2.0
-        _target_profit_mult = max(0.3, min(2.5, _desired / _avg_win))
+        _target_profit_mult = max(0.3, min(5.0, _desired / _avg_win))
     else:
         # no wins yet -> modest boost so small winners can reach the floor
         _target_profit_mult = 1.15
@@ -2639,7 +2639,7 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
     # so both constraints pull toward the safe zone; target-profit dominates when
     # wins are systematically too small/large for the 0.5-1.0 USDT goal).
     size_mult = float(size_mult) * float(_target_profit_mult)
-    size_mult = max(0.3, min(2.5, size_mult))
+    size_mult = max(0.30, min(5.0, size_mult))
     leverage_mult = max(0.55, min(1.18, float(leverage_mult)))
     lev_min, lev_max = _autotrade_leverage_bounds(cfg) if cfg else (1, _autotrade_leverage_cap())
     recommended_max = max(lev_min, min(25, int(round(float(lev_max) * float(leverage_mult)))))
