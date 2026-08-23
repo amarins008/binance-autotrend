@@ -288,6 +288,9 @@ _FORCE_DEFAULTS_V17: dict = {
     # typical win lands in [0.5, 1.0] USDT (Boss directive).
     "perSymbolTargetProfitMinUsdt": 0.5,
     "perSymbolTargetProfitMaxUsdt": 1.0,
+    # Entry confidence floor (Boss: allow slightly more entries; 0.82 is the
+    # safe floor from the August 2026 review — never go below this).
+    "minConfidence": 0.82,
 }
 
 
