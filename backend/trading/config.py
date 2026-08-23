@@ -279,6 +279,11 @@ _FORCE_DEFAULTS_V17: dict = {
     "weakSignalMinHoldSec": 240,
     "usdtTooSmallMultiplierMax": 1.0,
     "usdtTooSmallAction": "skip",
+    # Margin-aware sizing: auto-scale trade size to live account balance
+    "marginBasedSizing": True,
+    "marginRiskFraction": 0.33,
+    "marginSizingMinUsdt": 5.0,
+    "marginSizingMaxUsdt": 25.0,
 }
 
 

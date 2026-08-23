@@ -8122,6 +8122,47 @@ def _adaptive_trade_usdt(base_usdt: float, symbol: str, intel: dict, cfg: dict) 
     return round(float(base_usdt) * mult, 2)
 
 
+async def _margin_aware_trade_usdt(cfg: dict) -> float:
+    """Compute per-trade USDT budget from the LIVE account balance.
+
+    When ``marginBasedSizing`` is enabled, the base trade size is derived from
+    the Binance ``availableBalance`` (USDT free margin) instead of the fixed
+    ``usdtAmount`` knob::
+
+        per_trade = availableBalance / maxOpenPositions * marginRiskFraction
+
+    This keeps sizing proportional to actual capital: if the account grows to
+    200 USDT, each of 3 concurrent trades auto-scales to ~22 USDT; if it drops
+    to 30 USDT, each trade shrinks to ~3.3 USDT — no manual re-tuning needed.
+
+    Falls back to the fixed ``usdtAmount`` when the balance can't be fetched
+    (network/key error) so entries never stall.
+    """
+    if not bool(cfg.get("marginBasedSizing", False)):
+        return float(cfg.get("usdtAmount", 20.0) or 20.0)
+    # account_balance is injected by the entry loop (avoids duplicate API calls)
+    avail = float(cfg.get("_liveAvailableBalance", 0.0) or 0.0)
+    if avail <= 0.0:
+        # Fallback: try the cached account if the loop didn't inject it
+        try:
+            key = cfg.get("_apiKey"); secret = cfg.get("_apiSecret"); base = cfg.get("_apiBase", "https://fapi.binance.com")
+            if key and secret:
+                acct = await _get_account_cached(key, secret, base)
+                avail = float((acct or {}).get("availableBalance", 0.0) or 0.0)
+        except Exception:
+            avail = 0.0
+    if avail <= 0.0:
+        return float(cfg.get("usdtAmount", 20.0) or 20.0)
+    max_open = max(1, int(cfg.get("maxOpenPositions", 3) or 3))
+    frac = max(0.05, min(0.95, float(cfg.get("marginRiskFraction", 0.33) or 0.33)))
+    per_trade = avail / max_open * frac
+    floor = max(1.0, float(cfg.get("marginSizingMinUsdt", 5.0) or 5.0))
+    _inner = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+    cap = max(floor, float(cfg.get("marginSizingMaxUsdt", _inner)))
+    per_trade = max(floor, min(cap, per_trade))
+    return round(per_trade, 2)
+
+
 def _autotrade_leverage_cap() -> int:
     return max(1, min(25, int(RISK.get("max_leverage", 25) or 25)))
 
@@ -9972,7 +10013,7 @@ async def _autotrade_loop():
                     f"Adaptive leverage: {cfg['symbol']} x{eff_leverage} "
                     f"(range {lev_meta.get('min')}-{lev_meta.get('max')}, heat={float(lev_meta.get('heat', 0.0) or 0.0):.2f})"
                 )
-            trade_usdt = _adaptive_trade_usdt(cfg["usdtAmount"], cfg["symbol"], intel, cfg)
+            trade_usdt = await _margin_aware_trade_usdt(cfg)
             size_mult = float(session_bias.get("sizeMult", 1.0) or 1.0)
             if abs(size_mult - 1.0) >= 0.001:
                 old_trade_usdt = trade_usdt
@@ -10269,6 +10310,7 @@ async def _autotrade_loop():
                         timeout=6.0,
                     )
                     avail = float(acct.get("availableBalance", 0) or 0)
+                    cfg["_liveAvailableBalance"] = avail
                     required = trade_usdt / max(eff_leverage, 1)
                     if avail < required * 1.05:  # 5% buffer
                         # Auto-reduce amount to fit available balance
