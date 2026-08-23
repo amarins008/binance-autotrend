@@ -7,9 +7,9 @@ from trading.presets import PRO_STANDALONE_PRESET
 # ── Schema version ────────────────────────────────────────────────────────
 # Bump this when you change default values that should override stale
 # snapshot config.  On the first restart after a bump, force-override keys
-# listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts within
-# the same version preserve user customizations from the dashboard.
-CONFIG_VERSION = 15
+# listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
+# respect the snapshot (user may have tuned).
+CONFIG_VERSION = 16
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -251,17 +251,22 @@ _FORCE_DEFAULTS_V15: dict = {
     "holdMinMomentumPct": 0.05,
     # Guardian: ensure hold logic evaluates even if TV briefly WAIT
     "holdAllowWaitSignal": True,
-    # P1: time-based fallback to prevent LIVE_CLOSE timeout
-    "liveCloseFallbackMinSec": 1800,
+    # P1: time-based fallback to prevent LIVE_CLOSE timeout (reduced from 1800->900 per backtest)
+    "liveCloseFallbackMinSec": 900,
     # P2: SL floor to prevent noise-whacks (local SL hits had min 0.43%)
     "slMinPct": 0.60,
-    # P4: SHORT-specific tuning (SHORT_vs_SHORT WR only 35%)
+    # P4: SHORT-specific tuning (SHORT wins 48.6%, conf floor 0.80 blocked 99% - lower to 0.65)
     "shortSlMult": 0.80,
-    "shortConfFloor": 0.80,
+    "shortConfFloor": 0.65,
     # P3: TV batch fetch rate-limit tuning (reduce 429 frequency)
     "tvBatchRateLimitPerMin": 4,       # lower than 6 to avoid burst 429
     "tvBatchRetryBackoff": 2.0,        # seconds to wait on 429 before next batch
     "tvStaleSec": 900,                 # re-fetch after 15min (was 300 in places)
+
+}
+_FORCE_DEFAULTS_V16: dict = {
+    # V16: backtest-driven tuning (2026-08-22) - V15 already has tuned values
+    # This version bump ensures config migration runs for users on < V16
 }
 
 
@@ -695,6 +700,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 15:
             for _fk, _fv in _FORCE_DEFAULTS_V15.items():
+                out[_fk] = _fv
+        if _stored_ver < 16:
+            for _fk, _fv in _FORCE_DEFAULTS_V16.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 
