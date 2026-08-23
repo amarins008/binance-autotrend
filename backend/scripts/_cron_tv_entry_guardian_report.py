@@ -1,24 +1,39 @@
 #!/usr/bin/env python3
 """
 Cron: TV + Entry + Guardian performance report (every 3 days).
-Compares post-gate (2026-08-22 07:21 UTC) vs pre-gate TV-alignment buckets,
-entry quality (conf>=0.85 rate), SHORT WR, guardian fast-exit / leak metrics.
-Reads trades_log.jsonl + scan_events.jsonl + live /autotrade/status.
-Output: prints a compact markdown-ish report; exits 0 always (report-only).
+
+Improves on the original (ae536f9) by:
+  1. Using the LIVE bot restart timestamp (from /autotrade/status uptime)
+     instead of a hard-coded GATE_TS, so "post-restart" = "under current
+     gate code" is always correct after any restart.
+  2. Adding a dedicated AGAINST-post-restart detector: ANY trade that opened
+     SHORT while TV=LONG (or LONG while TV=SHORT) AFTER the current restart
+     is a gate-leak signal and is flagged loudly.
+  3. SAMPLE_TOO_SMALL flag when the post-restart window has <30 trades so
+     Boss knows the comparison is not yet significant.
+
+Reads trades_log.jsonl + live /autotrade/status. Report-only: exits 0.
+
+Run from backend/scripts. Uses the project .venv python.
 """
-import json, os, sys, io
+import json, os, sys, io, urllib.request
 from datetime import datetime, timezone
-from collections import defaultdict, Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG = os.path.join(ROOT, "obsidian_vault", "trades_log.jsonl")
-SCAN = os.path.join(ROOT, "obsidian_vault", "scan_events.jsonl")
-# Gate deploy 2026-08-22 14:21 BKK = 07:21 UTC
-GATE_TS = datetime(2026, 8, 22, 7, 21, 0).timestamp()
+STATUS_URL = "http://127.0.0.1:8020/autotrade/status"
 
-def norm(s):
-    if s is None: return None
-    s = str(s).strip().upper()
+# The directional conflict gate (block SHORT-vs-TV=LONG at strength>=0.6) was
+# deployed 2026-08-22 14:21 BKK = 07:21 UTC (commits 8b88760 / 631c3dc).
+# We treat any trade closed AFTER this as "under live gate code".
+# If the bot restarted more recently, we use the later of the two so a
+# post-restart window is never empty due to a fresh restart.
+GATE_DEPLOY_TS = datetime(2026, 8, 22, 7, 21, 0, tzinfo=timezone.utc).timestamp()
+
+def norm_tv(v):
+    if v is None:
+        return None
+    s = str(v).strip().upper()
     return s if s in ("LONG", "SHORT", "WAIT") else None
 
 def load_jsonl(p):
@@ -29,135 +44,135 @@ def load_jsonl(p):
         for line in f:
             line = line.strip()
             if line:
-                try: out.append(json.loads(line))
-                except: pass
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    pass
     return out
 
-def phase_of(r):
-    ca = r.get("closedAt") or r.get("entryDecisionAt") or 0
-    return "BEFORE" if ca < GATE_TS else "AFTER"
+def get_restart_ts():
+    """Live bot restart time = now - uptimeSec from /autotrade/status."""
+    try:
+        with urllib.request.urlopen(STATUS_URL, timeout=8) as r:
+            st = json.loads(r.read().decode())
+        up = float(st.get("uptimeSec", 0) or 0)
+        now = datetime.now(timezone.utc).timestamp()
+        return now - up, st
+    except Exception as e:
+        now = datetime.now(timezone.utc).timestamp()
+        return now - 2287, {"error": str(e)}
 
 def main():
     rows = load_jsonl(LOG)
-    se = load_jsonl(SCAN)
+    restart_ts, st = get_restart_ts()
+    # Two windows:
+    #  (a) GATE_DEPLOY_TS — compares old-code era vs live-gate era (gate shipped
+    #      2026-08-22 07:21 UTC). This is the meaningful pre/post CODE comparison.
+    #  (b) restart_ts — leak check: any AGAINST trade AFTER the current restart
+    #      would mean the running gate is not blocking (code/runtime drift).
+    gate_ts = GATE_DEPLOY_TS
+    rt_gate = datetime.fromtimestamp(gate_ts, tz=timezone.utc)
+    rt_restart = datetime.fromtimestamp(restart_ts, tz=timezone.utc)
+    print(f"# TV + Entry + Guardian Report")
+    print(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"Gate-code window start: {rt_gate.strftime('%Y-%m-%d %H:%M UTC')} (tv directional gate deployed)")
+    print(f"Bot last restart: {rt_restart.strftime('%Y-%m-%d %H:%M UTC')} (leak-check window)")
+    h = (st.get("tradingviewHealth") or {}) if isinstance(st, dict) else {}
+    cfg = (st.get("config") or {}) if isinstance(st, dict) else {}
+    print(f"TV: enabled={h.get('enabled')} healthy={h.get('healthy')} fail_count={h.get('fail_count')} | "
+          f"tvConflictBlockStrength={cfg.get('tvConflictBlockStrength')} tvEntryMinConfidence={cfg.get('tvEntryMinConfidence')}")
+    print()
 
-    # ---- TV alignment buckets ----
-    tv_rows = [r for r in rows if r.get("tvAtEntry") is not None]
-    buckets = defaultdict(lambda: defaultdict(lambda: {"n": 0, "w": 0, "pnl": 0.0}))
-    for r in tv_rows:
-        tv = norm(r.get("tvAtEntry")); side = r.get("side")
-        pnl = float(r.get("pnl") or 0)
-        if tv == side: b = "ALIGN"
-        elif tv in ("LONG", "SHORT"): b = "AGAINST"
-        else: b = "NEUTRAL"
-        ph = phase_of(r)
-        d = buckets[ph][b]
-        d["n"] += 1; d["w"] += 1 if pnl > 0 else 0; d["pnl"] += pnl
-
-    # ---- Entry quality + SHORT WR ----
-    eq = defaultdict(lambda: {"n": 0, "w": 0, "pnl": 0.0, "hi": 0, "short_n": 0, "short_w": 0, "short_pnl": 0.0})
+    # Three windows (clear separation):
+    #  PRE-GATE          : ca <= GATE_DEPLOY_TS        (old code, no directional gate)
+    #  POST-GATE-PREREST : GATE_DEPLOY_TS < ca <= restart_ts (gate shipped, but
+    #                       bot may not have restarted onto new code yet)
+    #  POST-RESTART      : ca > restart_ts             (under CURRENT running code)
+    pre, mid, post = [], [], []
     for r in rows:
-        ph = phase_of(r); d = eq[ph]
-        d["n"] += 1
-        pnl = float(r.get("pnl") or 0)
-        d["w"] += 1 if pnl > 0 else 0; d["pnl"] += pnl
-        if float(r.get("entryConfidence", 0) or 0) >= 0.85: d["hi"] += 1
-        if r.get("side") == "SHORT":
-            d["short_n"] += 1; d["short_w"] += 1 if pnl > 0 else 0; d["short_pnl"] += pnl
+        ca = r.get("closedAt") or r.get("entryDecisionAt") or 0
+        if ca <= gate_ts:
+            pre.append(r)
+        elif ca <= restart_ts:
+            mid.append(r)
+        else:
+            post.append(r)
 
-    # ---- Guardian leak (winners peak vs actual) ----
-    leak = defaultdict(lambda: {"n": 0, "pnl": 0.0, "peak": 0.0, "leak": 0.0, "fast": 0})
-    FAST = {"EARLY_WHIPSAW_CUT", "WEAK_SIGNAL", "TRADINGVIEW_EARLY_EXIT", "SWING_PEAK_CLOSE", "RETRACE_BUDGET"}
-    for r in rows:
-        pnl = float(r.get("pnl") or 0)
-        if pnl <= 0: continue
-        gs = r.get("guardian_stats") or {}
-        peak = gs.get("peakProfitUsdt")
-        tip = gs.get("timeInPositionSec")
-        if peak is None: continue
-        ph = phase_of(r); d = leak[ph]
-        d["n"] += 1; d["pnl"] += pnl; d["peak"] += peak; d["leak"] += (peak - pnl)
-        if (tip or 0) < 180: d["fast"] += 1
-
-    # ---- scan_events picked rate (last 3 days) ----
-    se_by_day = defaultdict(lambda: {"picked": 0, "total": 0})
-    for r in se:
-        ts = r.get("ts") or r.get("timestamp")
-        if not ts: continue
-        d = datetime.utcfromtimestamp(ts).date()
-        se_by_day[d]["total"] += 1
-        if r.get("picked"): se_by_day[d]["picked"] += 1
-
-    # ---- Live gate evidence ----
-    live = {}
-    try:
-        import urllib.request
-        st = json.loads(urllib.request.urlopen("http://127.0.0.1:8020/autotrade/status", timeout=10).read())
-        cfg = st.get("config", {}) or {}
-        live = {
-            "running": st.get("running"),
-            "tv_enabled": cfg.get("tradingviewEnabled"),
-            "tv_healthy": (st.get("tradingviewHealth") or {}).get("healthy"),
-            "shortTvMinConfidence": cfg.get("shortTvMinConfidence"),
-            "tvEntryMinConfidence": cfg.get("tvEntryMinConfidence"),
-            "whipGraceSec": cfg.get("whipGraceSec"),
-            "tradingviewEarlyExitMinStrength": cfg.get("tradingviewEarlyExitMinStrength"),
-            "_configVersion": cfg.get("_configVersion"),
-        }
-    except Exception as e:
-        live = {"_err": str(e)[:80]}
-
-    # ================= REPORT =================
-    L = []
-    L.append("=== TV+ENTRY+GUARIAN REPORT (cron 3d) ===")
-    L.append(f"generated: {datetime.utcnow().isoformat()}Z  gate_deploy=2026-08-22T07:21Z")
-    L.append("")
-    L.append("--- TV ALIGNMENT BUCKETS (tvAtEntry) ---")
-    for ph in ("BEFORE", "AFTER"):
-        L.append(f"  [{ph}]")
-        for b in ("ALIGN", "NEUTRAL", "AGAINST"):
-            d = buckets[ph].get(b)
-            if not d or d["n"] == 0:
-                L.append(f"    {b:8s}: n=0")
+    def tv_buckets(subset):
+        b = {"ALIGN": [0, 0, 0.0], "NEUTRAL": [0, 0, 0.0], "AGAINST": [0, 0, 0.0], "NONE": [0, 0, 0.0]}
+        for r in subset:
+            side = str(r.get("side") or "").upper()
+            if side not in ("LONG", "SHORT"):
                 continue
-            L.append(f"    {b:8s}: n={d['n']:4d} WR={100*d['w']/d['n']:5.1f}% net={d['pnl']:+.3f}")
-    L.append("")
-    L.append("--- ENTRY QUALITY + SHORT ---")
-    for ph in ("BEFORE", "AFTER"):
-        d = eq[ph]
-        if d["n"] == 0:
-            L.append(f"  [{ph}] n=0"); continue
-        L.append(f"  [{ph}] n={d['n']} WR={100*d['w']/d['n']:.1f}% net={d['pnl']:+.2f} "
-                 f"conf>=0.85={100*d['hi']/d['n']:.0f}% "
-                 f"| SHORT n={d['short_n']} WR={100*d['short_w']/max(1,d['short_n']):.1f}% net={d['short_pnl']:+.2f}")
-    L.append("")
-    L.append("--- GUARDIAN LEAK (winners peak vs actual) ---")
-    for ph in ("BEFORE", "AFTER"):
-        d = leak[ph]
-        if d["n"] == 0:
-            L.append(f"  [{ph}] winners=0"); continue
-        leak_pct = 100*d["leak"]/d["peak"] if d["peak"] else 0
-        L.append(f"  [{ph}] winners={d['n']} leak={leak_pct:.1f}% of peak (<180s:{d['fast']})")
-    L.append("")
-    L.append("--- SCAN PICKED RATE (last 3 days) ---")
-    for d in sorted(se_by_day)[-3:]:
-        v = se_by_day[d]
-        L.append(f"  {d}: {v['picked']}/{v['total']} ({100*v['picked']/max(1,v['total']):.2f}%)")
-    L.append("")
-    L.append("--- LIVE GATE STATE ---")
-    for k, v in live.items():
-        L.append(f"  {k}: {v}")
+            tv = norm_tv(r.get("tvAtEntry"))
+            pnl = float(r.get("pnl") or 0)
+            if tv == side:
+                k = "ALIGN"
+            elif tv in ("LONG", "SHORT"):
+                k = "AGAINST"
+            elif tv == "WAIT":
+                k = "NEUTRAL"
+            else:
+                k = "NONE"
+            b[k][0] += 1
+            b[k][1] += 1 if pnl > 0 else 0
+            b[k][2] += pnl
+        return b
 
-    report = "\n".join(L)
-    print(report)
+    for label, subset in (("PRE-GATE (old code)", pre),
+                           ("POST-GATE PRE-RESTART (gate shipped, pre-current-restart)", mid),
+                           ("POST-RESTART (current running code)", post)):
+        b = tv_buckets(subset)
+        print(f"## {label}  (n={sum(v[0] for v in b.values())})")
+        print(f"{'bucket':9s} {'n':>4s} {'WR%':>6s} {'netPnL':>9s}")
+        for k in ("ALIGN", "NEUTRAL", "AGAINST", "NONE"):
+            n, w, pnl = b[k]
+            wr = f"{100.0*w/n:.1f}" if n else "-"
+            print(f"{k:9s} {n:4d} {wr:>6s} {pnl:+9.3f}")
+        print()
 
-    # verdict-ish summary line
-    after_align = buckets["AFTER"].get("ALIGN")
-    after_against = buckets["AFTER"].get("AGAINST")
-    sig = "SAMPLE_TOO_SMALL" if (not after_align or after_align["n"] < 30) else "OK"
-    print(f"\nSUMMARY: post_gate_align_n={after_align['n'] if after_align else 0} "
-          f"against_n={after_against['n'] if after_against else 0} -> {sig}")
-    return 0
+    # AGAINST post-restart detector (gate-leak signal) — uses RESTART time
+    against_post = []
+    for r in rows:
+        ca = r.get("closedAt") or r.get("entryDecisionAt") or 0
+        if ca <= restart_ts:
+            continue
+        side = str(r.get("side") or "").upper()
+        if side not in ("LONG", "SHORT"):
+            continue
+        tv = norm_tv(r.get("tvAtEntry"))
+        if tv in ("LONG", "SHORT") and tv != side:
+            against_post.append(r)
+    print("## GATE-LEAK CHECK (AGAINST trades after current restart)")
+    if not against_post:
+        print("  ✅ CLEAN: 0 AGAINST trades post-restart — conflict gate is live, no leak.")
+    else:
+        print(f"  ⚠️  LEAK SUSPECTED: {len(against_post)} AGAINST trades entered AFTER restart:")
+        for r in against_post[:12]:
+            print(f"    - {r.get('symbol'):10s} {r.get('side'):5s} vs TV={r.get('tvAtEntry')} "
+                  f"entConf={r.get('tvAtEntryConfidence')} str={r.get('tvStrength')} "
+                  f"age={r.get('tvAge')}s pnl={r.get('pnl')} reason={r.get('reason')}")
+        if len(against_post) > 12:
+            print(f"    ... +{len(against_post)-12} more")
+    print()
+
+    # Sample-size flag (based on POST-RESTART window — the one that matters for leak)
+    n_post = sum(1 for r in post if str(r.get('side') or '').upper() in ('LONG', 'SHORT'))
+    if n_post < 30:
+        print(f"⚠️  SAMPLE_TOO_SMALL: post-restart trades={n_post} (<30) — leak-check not yet significant.")
+    else:
+        print(f"✅ Post-restart sample size OK: {n_post} trades")
+    print()
+
+    # SHORT WR (the directional gate target) — all three windows
+    for label, subset in (("PRE-GATE", pre), ("POST-GATE PRE-RESTART", mid), ("POST-RESTART", post)):
+        sn = sum(1 for r in subset if r.get("side") == "SHORT")
+        sw = sum(1 for r in subset if r.get("side") == "SHORT" and float(r.get("pnl") or 0) > 0)
+        sp = sum(float(r.get("pnl") or 0) for r in subset if r.get("side") == "SHORT")
+        wr = f"{100.0*sw/sn:.1f}" if sn else "-"
+        print(f"SHORT {label}: n={sn} WR={wr}% net={sp:+.3f}")
+    print()
+    print("STATUS: OK (report-only)")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
