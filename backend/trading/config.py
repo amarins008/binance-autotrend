@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 16
+CONFIG_VERSION = 17
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -264,9 +264,21 @@ _FORCE_DEFAULTS_V15: dict = {
     "tvStaleSec": 900,                 # re-fetch after 15min (was 300 in places)
 
 }
-_FORCE_DEFAULTS_V16: dict = {
-    # V16: backtest-driven tuning (2026-08-22) - V15 already has tuned values
-    # This version bump ensures config migration runs for users on < V16
+_FORCE_DEFAULTS_V17: dict = {
+    # V17: allow small-capital sizing (capital 50 USDT, 3 concurrent trades).
+    # Lowers the hard floors so usdtAmount/tradeNotionalCapUsdt can go to 10
+    # and maxOpenPositions to 3 (capital-aware, not the old 20/6 minimums).
+    "usdtAmount": 16.0,
+    "tradeNotionalCapUsdt": 18.0,
+    "maxOpenPositions": 3,
+    "leverage": 10,
+    "takeProfitPct": 3.0,
+    "stopLossPct": 1.2,
+    "holdWinnerEnabled": True,
+    "holdMinProfitUsdt": 0.10,
+    "weakSignalMinHoldSec": 240,
+    "usdtTooSmallMultiplierMax": 1.0,
+    "usdtTooSmallAction": "skip",
 }
 
 
@@ -562,10 +574,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         out["autoScanTradeNotionalCapUsdt"] = cap_usdt
         out["tradeNotionalCapUsdt"] = min(
             cap_usdt,
-            max(20.0, float(out.get("tradeNotionalCapUsdt", cap_usdt) or cap_usdt)),
+            max(10.0, float(out.get("tradeNotionalCapUsdt", cap_usdt) or cap_usdt)),
         )
         try:
-            out["usdtAmount"] = max(20.0, min(cap_usdt, float(out.get("usdtAmount", cap_usdt) or cap_usdt)))
+            out["usdtAmount"] = max(10.0, min(cap_usdt, float(out.get("usdtAmount", cap_usdt) or cap_usdt)))
         except (TypeError, ValueError):
             out["usdtAmount"] = cap_usdt
         try:
@@ -587,7 +599,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         except (TypeError, ValueError):
             out["volSizeMaxMult"] = 1.15
         try:
-            out["maxOpenPositions"] = max(6, min(12, int(out.get("maxOpenPositions", 6) or 6)))
+            out["maxOpenPositions"] = max(3, min(12, int(out.get("maxOpenPositions", 6) or 6)))
         except (TypeError, ValueError):
             out["maxOpenPositions"] = 6
         try:
@@ -703,6 +715,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 16:
             for _fk, _fv in _FORCE_DEFAULTS_V16.items():
+                out[_fk] = _fv
+        if _stored_ver < 17:
+            for _fk, _fv in _FORCE_DEFAULTS_V17.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 
