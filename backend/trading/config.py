@@ -328,7 +328,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("strongFlipUltraConfRelax", 0.08)
     out.setdefault("minConfidence", ENTRY_MIN_CONFIDENCE_FLOOR)
     try:
-        out["minConfidence"] = max(ENTRY_MIN_CONFIDENCE_FLOOR, float(out["minConfidence"]))
+        # Boss directive: pin entry confidence floor to 0.82 (safe floor from the
+        # August 2026 review). Force, do not take max() — prevents a stored 0.84
+        # from persisting and over-filtering entries.
+        out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
     except (TypeError, ValueError):
         out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
     try:
