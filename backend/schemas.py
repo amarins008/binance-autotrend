@@ -235,7 +235,7 @@ class AutoTradeStartRequest(BaseModel):
     usdtTooSmallMultiplierMax: float = Field(default=10.0, ge=1.0, le=200.0)
     feeMinNetProfitUSDT: float = Field(default=0.15, ge=0.0, le=50.0)
     feeMinEdgeVsCostMultiple: float = Field(default=3.0, ge=1.0, le=5.0)
-    feeMinOrderUsdt: float = Field(default=20.0, ge=5.0, le=200.0)
+    feeMinOrderUsdt: float = Field(default=5.0, ge=5.0, le=200.0)
     feeAdaptiveNetEnabled: bool = True
     feeAdaptiveVolLowPct: float = Field(default=0.08, ge=0.01, le=3.0)
     feeAdaptiveVolHighPct: float = Field(default=0.35, ge=0.02, le=5.0)

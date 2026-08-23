@@ -264,6 +264,11 @@ _FORCE_DEFAULTS_V15: dict = {
     "tvStaleSec": 900,                 # re-fetch after 15min (was 300 in places)
 
 }
+_FORCE_DEFAULTS_V16: dict = {
+    # V16: transitional version — no new forced overrides beyond V15.
+    # (Placeholder so the migration loop in apply_autotrade_defaults can
+    # iterate V10..V17 without a NameError on _FORCE_DEFAULTS_V16.)
+}
 _FORCE_DEFAULTS_V17: dict = {
     # V17: allow small-capital sizing (capital 50 USDT, 3 concurrent trades).
     # Lowers the hard floors so usdtAmount/tradeNotionalCapUsdt can go to 10
@@ -278,7 +283,7 @@ _FORCE_DEFAULTS_V17: dict = {
     "holdMinProfitUsdt": 0.10,
     "weakSignalMinHoldSec": 240,
     "usdtTooSmallMultiplierMax": 1.0,
-    "usdtTooSmallAction": "skip",
+    "usdtTooSmallAction": "multiply",
     # Margin-aware sizing: auto-scale trade size to live account balance
     "marginBasedSizing": True,
     "marginRiskFraction": 0.33,
@@ -452,7 +457,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tpTargetMaxUsdt", 2.2)
     out.setdefault("feeMinNetProfitUSDT", 0.06)
     out.setdefault("feeMinEdgeVsCostMultiple", 1.35)
-    out.setdefault("feeMinOrderUsdt", 20.0)
+    out.setdefault("feeMinOrderUsdt", 5.0)
     out.setdefault("tradeNotionalCapUsdt", 80.0)
     out.setdefault("autoScanTradeNotionalCapUsdt", 80.0)
     out.setdefault("adaptiveSizing", True)

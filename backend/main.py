@@ -10147,7 +10147,26 @@ async def _autotrade_loop():
                     f"cap={trade_cap:.2f} USDT (mult={eff_cap.get('capMult', 1.0)})"
                 )
                 _agent_mark("portfolio_manager", "done", "capped position notional", f"{old_trade_usdt:.2f}->{trade_usdt:.2f} USDT")
-            min_order_usdt = max(20.0, float(cfg.get("feeMinOrderUsdt", 7.5) or 7.5))
+            # 2026-08-23: per-symbol minimum order notional.
+            # Floor = max(operator feeMinOrderUsdt [default 5.0], the exchange's
+            # MIN_NOTIONAL for THIS symbol). Each symbol has a different
+            # exchange minimum, so a single global floor (old hardcoded 20.0,
+            # or even 5.0) would still QTY_TOO_SMALL on coins whose minimum is
+            # higher. We read the live MIN_NOTIONAL per symbol via the cached
+            # _exchange_filters() and use it as the floor so every coin can
+            # trade continuously without manual per-symbol tuning.
+            # In SCAN mode cfg["symbol"] is "AUTO" (not a real coin) — skip the
+            # per-symbol lookup here (it would fetch minNotional=0 / raise) and
+            # let the QTY_TOO_SMALL fallback handle the real per-symbol minimum
+            # after the scanner has picked the actual coin.
+            _sym_min = 0.0
+            if str(cfg.get("symbol", "")).upper().strip() not in ("AUTO", "SCAN"):
+                try:
+                    _flt = await _exchange_filters(cfg["symbol"])
+                    _sym_min = float(_flt.get("minNotional", 0.0) or 0.0)
+                except Exception:
+                    _sym_min = 0.0
+            min_order_usdt = max(5.0, float(cfg.get("feeMinOrderUsdt", 5.0) or 5.0), _sym_min if _sym_min > 0 else 0.0)
             if trade_usdt < min_order_usdt:
                 action = str(cfg.get("usdtTooSmallAction", "multiply") or "multiply").lower()
                 if action == "skip":
@@ -10155,10 +10174,15 @@ async def _autotrade_loop():
                     _autotrade_skip("usdt_too_small", f"Skip: order notional too small {trade_usdt:.2f} < {min_order_usdt:.2f} USDT")
                     await asyncio.sleep(cfg["intervalSec"])
                     continue
-                trade_usdt = min_order_usdt
+                # multiply: raise this trade's notional to the symbol floor AND
+                # persist it on usdtAmount (capped at tradeNotionalCapUsdt so we
+                # never blow the small-capital budget) so the symbol trades
+                # continuously at its correct size instead of re-flooring each tick.
+                _cap = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+                trade_usdt = round(min(max(trade_usdt, min_order_usdt), _cap), 2)
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
                 AUTO_TRADE["config"] = copy.deepcopy(cfg)
-                _autotrade_log(f"Order floor: adjusted USDT → {trade_usdt:.2f} (min notional guard)")
+                _autotrade_log(f"Order floor ({cfg['symbol']}): adjusted USDT → {trade_usdt:.2f} (min_notional={_sym_min or 'n/a'} cap={_cap:.2f})")
             if trade_usdt > float(RISK["max_notional"]):
                 trade_usdt = float(RISK["max_notional"])
 
@@ -10527,14 +10551,40 @@ async def _autotrade_loop():
                     m_min = float(cfg.get("usdtTooSmallMultiplierMin", 5.0) or 5.0)
                     m_max = float(cfg.get("usdtTooSmallMultiplierMax", 10.0) or 10.0)
                     mult = max(1.0, min(m_max, m_min))
-                    new_amt = round(max(old_amt * mult, 20.0), 2)
-                    max_notional = float(RISK.get("max_notional", 0.0) or 0.0)
-                    if max_notional > 0:
-                        new_amt = min(new_amt, max_notional)
+                    # 2026-08-23: target the SYMBOL's own exchange MIN_NOTIONAL
+                    # (not a hardcoded 20.0) so each coin multiplies up to its
+                    # real minimum and trades continuously. Fall back to 20.0
+                    # only if the filter can't be fetched.
+                    _sym_min_fb = 20.0
+                    try:
+                        _flt = await _exchange_filters(cfg["symbol"])
+                        _got = float(_flt.get("minNotional", 0.0) or 0.0)
+                        if _got > 0:
+                            _sym_min_fb = _got
+                    except Exception:
+                        pass
+                    # Respect BOTH the operator trade-notional cap (small-capital
+                    # budget guard) and the server max_notional. The effective
+                    # ceiling is the tighter of the two.
+                    _op_cap = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+                    _srv_cap = float(RISK.get("max_notional", 0.0) or 0.0)
+                    _ceiling = min(_op_cap, _srv_cap) if _srv_cap > 0 else _op_cap
+                    if _sym_min_fb > _ceiling:
+                        # Symbol's exchange minimum exceeds the safe capital
+                        # ceiling — cannot trade this coin without blowing the
+                        # budget. Block it (do NOT raise usdtAmount past the cap).
+                        _autotrade_skip("usdt_too_small", f"Skip: {cfg['symbol']} exchange min {_sym_min_fb:.2f} > safe cap {_ceiling:.2f} USDT (budget guard)")
+                        AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
+                        continue
+                    new_amt = round(max(old_amt * mult, _sym_min_fb), 2)
+                    # Never cap below the symbol's minimum (that would re-trigger
+                    # QTY_TOO_SMALL in a loop). Only cap when above it.
+                    if _ceiling > _sym_min_fb:
+                        new_amt = min(new_amt, _ceiling)
                     if new_amt > old_amt + 0.009:
                         cfg["usdtAmount"] = new_amt
                         AUTO_TRADE["config"] = copy.deepcopy(cfg)
-                        _autotrade_skip("usdt_too_small", f"Skip: USDT ต่ำเกินขั้นต่ำ — auto multiply {old_amt:.2f} → {new_amt:.2f} (x{mult:.2f})")
+                        _autotrade_skip("usdt_too_small", f"Skip: USDT ต่ำเกินขั้นต่ำ — auto multiply {old_amt:.2f} → {new_amt:.2f} (x{mult:.2f}, sym_min={_sym_min_fb:.2f}, cap={_ceiling:.2f})")
                         AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
                     else:
                         _autotrade_skip("usdt_too_small", "Skip: USDT ต่ำเกินขั้นต่ำและไม่สามารถเพิ่มได้ (ติดเพดาน max notional)")
