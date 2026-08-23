@@ -341,7 +341,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("htfStrictEnabled", True)
     out.setdefault("htfMinStrength", 0.28)
     out.setdefault("requireVisionConsensus", False)
-    out.setdefault("maxOpenPositions", 6)  # Changed from 2 to 6 for better diversification
+    # Capital-aware default: 3 concurrent trades (Boss: 50 USDT capital).
+    # V17 forces this; kept as setdefault so older presets still land here,
+    # but the marketScan block below hard-clamps to 3 regardless of stored value.
+    out.setdefault("maxOpenPositions", 3)
     out.setdefault("maxSpreadBps", 16.0)
     out.setdefault("maxSlippageBps", 18.0)
     out.setdefault("noTradeWindows", [])
@@ -611,9 +614,11 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         except (TypeError, ValueError):
             out["volSizeMaxMult"] = 1.15
         try:
-            out["maxOpenPositions"] = max(3, min(12, int(out.get("maxOpenPositions", 6) or 6)))
+            # Capital-aware hard clamp: never exceed 3 concurrent trades on
+            # small capital (Boss directive). Overrides any stored value.
+            out["maxOpenPositions"] = 3
         except (TypeError, ValueError):
-            out["maxOpenPositions"] = 6
+            out["maxOpenPositions"] = 3
         try:
             out["scanTopLiquid"] = max(60, min(120, int(out.get("scanTopLiquid", 60) or 60)))
         except (TypeError, ValueError):
