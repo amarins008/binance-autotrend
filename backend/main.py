@@ -2595,6 +2595,24 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
     leverage_mult = 1.0
     confidence_shift = 0.0
     reason = "neutral_4_8"
+    # ── Target-profit-aware sizing (Boss: aim 0.5-1.0 USDT profit/trade per symbol) ──
+    # Compute the avg profit of winning trades and derive a multiplier that
+    # scales size so a typical win lands in [targetMin, targetMax] USDT.
+    _tgt_min = max(0.1, float(cfg.get("perSymbolTargetProfitMinUsdt", 0.5) or 0.5))
+    _tgt_max = max(_tgt_min + 0.1, float(cfg.get("perSymbolTargetProfitMaxUsdt", 1.0) or 1.0))
+    _win_pnls = [p for p in pnls if p > 0.0]
+    _avg_win = (sum(_win_pnls) / len(_win_pnls)) if _win_pnls else 0.0
+    _target_profit_mult = 1.0
+    if _avg_win > 0.01:
+        # desired avg win = midpoint of target band
+        _desired = (_tgt_min + _tgt_max) / 2.0
+        _target_profit_mult = max(0.3, min(2.5, _desired / _avg_win))
+    else:
+        # no wins yet -> modest boost so small winners can reach the floor
+        _target_profit_mult = 1.15
+    # Risk-based branch ONLY reduces size (drawdown/negative payoff). The
+    # target-profit mult (applied later) is the sole source of upside sizing,
+    # so a symbol already hitting 0.5-1.0 USDT wins is never over-boosted.
     if pnl_sum < 0.0 or avg_pnl < -0.03 or win_rate < 45.0:
         weakness = 0.0
         weakness += min(0.35, abs(min(pnl_sum, 0.0)) / max(1.2, trades_n * 0.22))
@@ -2605,13 +2623,11 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
         confidence_shift = min(0.06, 0.015 + (0.05 * weakness))
         reason = "reduce_after_symbol_drawdown"
     elif pnl_sum > 0.0 and win_rate >= 58.0 and avg_pnl > 0.03 and profit_factor >= 1.25:
-        strength = 0.0
-        strength += min(0.35, max(0.0, win_rate - 55.0) / 70.0)
-        strength += min(0.30, max(0.0, avg_pnl) / 0.35)
-        strength += min(0.20, max(0.0, profit_factor - 1.0) / 4.0)
-        size_mult = min(1.30, 1.0 + (0.55 * max(0.20, strength)))
-        leverage_mult = min(1.18, 1.0 + (0.30 * max(0.20, strength)))
-        confidence_shift = -min(0.035, 0.008 + (0.025 * strength))
+        # Strong edge: keep size_mult at 1.0 (no extra boost); target-profit
+        # mult handles upside. Only nudge confidence/leverage slightly.
+        size_mult = 1.0
+        leverage_mult = min(1.18, 1.0 + (0.30 * 0.20))
+        confidence_shift = -min(0.035, 0.008 + (0.025 * 0.20))
         reason = "boost_after_symbol_edge"
     elif win_rate >= 55.0 and pnl_sum <= 0.0:
         size_mult = 0.82
@@ -2619,6 +2635,12 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
         confidence_shift = 0.025
         reason = "high_winrate_negative_payoff"
 
+    # Combine risk-based size_mult with target-profit-aware mult (geometric mean
+    # so both constraints pull toward the safe zone; target-profit dominates when
+    # wins are systematically too small/large for the 0.5-1.0 USDT goal).
+    size_mult = float(size_mult) * float(_target_profit_mult)
+    size_mult = max(0.3, min(2.5, size_mult))
+    leverage_mult = max(0.55, min(1.18, float(leverage_mult)))
     lev_min, lev_max = _autotrade_leverage_bounds(cfg) if cfg else (1, _autotrade_leverage_cap())
     recommended_max = max(lev_min, min(25, int(round(float(lev_max) * float(leverage_mult)))))
     return {
@@ -2634,6 +2656,7 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
         "profitFactor": round(min(profit_factor, 999.0), 4),
         "quickLosses": quick_losses,
         "sizeMult": round(float(size_mult), 4),
+        "targetProfitMult": round(float(_target_profit_mult), 4),
         "leverageMult": round(float(leverage_mult), 4),
         "confidenceShift": round(float(confidence_shift), 4),
         "recommendedLeverageMax": int(recommended_max),
@@ -8112,8 +8135,10 @@ def _adaptive_trade_usdt(base_usdt: float, symbol: str, intel: dict, cfg: dict) 
         tune = pr.get("symbolRiskTune") if isinstance(pr.get("symbolRiskTune"), dict) else {}
         if bool(tune.get("active")) and int(tune.get("window", 0) or 0) >= 4:
             mult *= max(0.45, min(1.30, float(tune.get("sizeMult", 1.0) or 1.0)))
-    # Hard clamps so sizing remains stable.
-    mult = max(0.35, min(1.40, mult))
+    # Hard clamps so sizing remains stable. Upper bound raised to 2.5 to allow
+    # target-profit-aware sizing (per-symbol mult can reach 2.5 when a symbol's
+    # wins are far below the 0.5-1.0 USDT goal).
+    mult = max(0.30, min(2.5, mult))
     # Loss-streak cap: when the symbol's rolling window is bleeding, never
     # let per-symbol/risk-tune multipliers push size above 1.1x (ESPUSDT's
     # positionSizeMult 1.3 + SL hit produced the -1.16 USDT single trade).

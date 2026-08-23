@@ -284,6 +284,10 @@ _FORCE_DEFAULTS_V17: dict = {
     "marginRiskFraction": 0.33,
     "marginSizingMinUsdt": 5.0,
     "marginSizingMaxUsdt": 25.0,
+    # Per-symbol target-profit-aware multiplier: scale each symbol's size so a
+    # typical win lands in [0.5, 1.0] USDT (Boss directive).
+    "perSymbolTargetProfitMinUsdt": 0.5,
+    "perSymbolTargetProfitMaxUsdt": 1.0,
 }
 
 
