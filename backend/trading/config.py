@@ -126,7 +126,7 @@ _FORCE_DEFAULTS_V9: dict = {
     # session shift) is clamped to it as well. Prevents a bad day from
     # ratcheting the entry gate up to 0.92-0.93 where no candidate can ever
     # qualify — the bot goes quiet instead of protecting.
-    "supervisorMinConfidenceCeiling": 0.82,
+    "supervisorMinConfidenceCeiling": 0.72,
 }
 
 
@@ -171,13 +171,13 @@ _FORCE_DEFAULTS_V11: dict = {
         "hammer",
         "5m_hammer",
     ],
-    "tvConflictBlockStrength": 0.60,
+    "tvConflictBlockStrength": 0.45,
     # TV fresh and explicitly WAIT (neutral): entries against an undecided
     # TV are the NEUTRAL bucket (WR 50%, net -0.239 over 8 trades after
     # V13.3) — require extra confidence so we don't blind-enter while TV
     # has no edge. Lower than tvUnavailableMinConf only when TV says
     # nothing at all (n/a); a fresh WAIT is a deliberate non-confirmation.
-    "tvWaitMinConf": 0.88,
+    "tvWaitMinConf": 0.82,
 }
 
 _FORCE_DEFAULTS_V12: dict = {
@@ -186,7 +186,7 @@ _FORCE_DEFAULTS_V12: dict = {
     # -0.239 over 8 LIVE trades after V13.3 — blind-entries while TV has no
     # edge. Fresh WAIT now requires conf >= tvWaitMinConf (0.88) instead of
     # falling through to the generic n/a floor (0.85).
-    "tvWaitMinConf": 0.88,
+    "tvWaitMinConf": 0.82,
 }
 
 
@@ -214,7 +214,7 @@ _FORCE_DEFAULTS_V13: dict = {
     "regimeCalmWinStreakMin": 3,
     "regimeLowEdgeConfFloor": 0.03,
     "noTradeWindowsAutoEnabled": False,
-    "shortMinConfidence": 0.85,
+    "shortMinConfidence": 0.80,
     "shortBaseSizeMult": 0.55,
     "longTpBoostPct": 0.35,
     # 2026-08-20 capital-preservation: cap per-trade notional at 40 USDT so a
@@ -293,10 +293,11 @@ _FORCE_DEFAULTS_V17: dict = {
     # typical win lands in [0.5, 1.0] USDT (Boss directive).
     "perSymbolTargetProfitMinUsdt": 0.5,
     "perSymbolTargetProfitMaxUsdt": 1.0,
-    # Entry confidence floor (OWNERSHIP SPLIT 2026-08-14: Boss mandates the
-    # hard floor at 0.82 — never go below this. The prior 0.80 was a regression
-    # that opened the known-loss 0.80-0.82 band; corrected to 0.82).
-    "minConfidence": 0.82,
+    # Entry confidence floor (2026-08-23 review: Boss confirmed 0.80 to allow
+    # entries in low-confidence markets — median signal conf ~0.77, >=0.82 only
+    # 34% of signals. 0.80 keeps the lossy 0.80-0.82 band open intentionally
+    # for small-capital bot that needs trade frequency).
+    "minConfidence": 0.80,
 }
 
 
@@ -317,11 +318,9 @@ def merge_preset(cfg: dict | None, preset: str = "pro") -> dict:
 # Telemetry-backed entry safety boundary. The 0.70-0.80 confidence bucket was
 # materially loss-making in the August 2026 review. All config normalization
 # paths must preserve this floor; raise it only with out-of-sample evidence.
-# NOTE: Boss directive (OWNERSHIP SPLIT 2026-08-14) mandates the hard floor
-# at 0.82 — the 0.80 value below was a typo vs the code comment at apply()
-# ("pin entry confidence floor to 0.82"). 0.80 sits BELOW the mandated floor,
-# so every apply_autotrade_defaults() re-pin opened the lossy 0.80-0.82 band.
-ENTRY_MIN_CONFIDENCE_FLOOR = 0.82
+# NOTE: Boss confirmed 0.80 on 2026-08-23 (low-confidence market, small capital
+# needs trade frequency). This reverses the 0.82 mandate from 2026-08-14.
+ENTRY_MIN_CONFIDENCE_FLOOR = 0.72
 
 
 def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") -> dict:
@@ -397,7 +396,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("lateEntryMaxBbPctB", 0.90)
     out.setdefault("lateEntryMaxVwapDistancePct", 0.32)
     out.setdefault("skipFundingAgainst", 0.0)
-    out.setdefault("preReversalScoreBlock", 0.45)
+    out.setdefault("preReversalScoreBlock", 0.65)
     out.setdefault("preReversalScoreSoftener", 0.20)
     out.setdefault("holdWinners", True)
     out.setdefault("holdMinConfidence", 0.72)
@@ -514,7 +513,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
     out.setdefault("tradingviewMaxFailures", 10)
     out.setdefault("tradingviewNegativeCacheTtl", 120)  # Longer backoff after 429/empty
-    out.setdefault("tvUnavailableMinConf", 0.85)  # Conservative floor when TV signal is unavailable
+    out.setdefault("tvUnavailableMinConf", 0.80)  # Conservative floor when TV signal is unavailable
     out.setdefault("tvWaitMinConf", 0.88)  # Fresh explicit TV WAIT needs extra confidence (V13.6)
     out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
     out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)

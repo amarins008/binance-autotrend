@@ -1559,7 +1559,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     # Profitable baseline days were not purely high-confidence trades; avoid
     # choking AUTO scan by pushing the global gate toward 0.90.
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
     # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
     # (the AI Tuner owns it). It only enforces the hard 0.82 floor brake.
     # Operator may re-enable supervisor raises via supervisorMayTuneMinConfidence.
@@ -1727,7 +1727,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     min_conf = float(cfg.get("minConfidence", 0.62) or 0.62)
     conf_step = 0.03 if avg_pnl < -0.10 or win_rate < 40.0 else 0.02
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
     # OWNERSHIP SPLIT: supervisor does NOT move minConfidence by default (Tuner owns it);
     # only enforce the hard 0.82 floor brake unless operator re-enables raises.
     if bool(cfg.get("supervisorMayTuneMinConfidence", False)):
@@ -1768,7 +1768,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
         changes["scanPerfSoftFallbackEnabled"] = {"old": True, "new": False}
         cfg["scanPerfSoftFallbackEnabled"] = False
 
-    set_int("perfLockMinutes", max(120, int(cfg.get("perfLockMinutes", 90) or 90)))
+    set_int("perfLockMinutes", max(45, int(cfg.get("perfLockMinutes", 45) or 45)))
     set_int("perfGateEarlyMinSamples", min(4, int(cfg.get("perfGateEarlyMinSamples", 4) or 4)))
     set_float("perfGateEarlyMinPnlUsdt", max(float(cfg.get("perfGateEarlyMinPnlUsdt", -0.35) or -0.35), -0.35), 3)
     if not bool(cfg.get("sessionBiasEnabled", True)):
@@ -3017,13 +3017,38 @@ def _record_symbol_observation(symbol: str, intel: dict, chosen: bool, score: fl
     ctx.update_symbol_note()
 
 
-def _learned_min_conf(symbol: str, base_min_conf: float):
+def _scan_board_median_conf(board: list | None) -> float | None:
+    """Median confidence across the current scan board, used to relax the
+    per-symbol min-confidence gate when the whole market is low-conviction.
+    Returns None if no usable data."""
+    if not isinstance(board, list):
+        return None
+    confs = []
+    for row in board:
+        if not isinstance(row, dict):
+            continue
+        c = row.get("confidence")
+        if isinstance(c, (int, float)) and c > 0:
+            confs.append(float(c))
+    if not confs:
+        return None
+    confs.sort()
+    n = len(confs)
+    mid = n // 2
+    if n % 2 == 1:
+        return confs[mid]
+    return (confs[mid - 1] + confs[mid]) / 2.0
+
+
+def _learned_min_conf(symbol: str, base_min_conf: float, market_median_conf: float | None = None):
     pr = _load_single_profile(symbol)
     if not isinstance(pr, dict):
         return base_min_conf
     windows = pr.get("memoryWindows") if isinstance(pr.get("memoryWindows"), dict) else {}
     recent = windows.get("7d") if isinstance(windows.get("7d"), dict) else {}
     weighted = pr.get("weightedRecentScore") if isinstance(pr.get("weightedRecentScore"), dict) else {}
+    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
+    recent_score = float(weighted.get("score", 0.0) or 0.0)
     n = int(recent.get("trades", 0) or 0)
     if n >= 6:
         wr = float(recent.get("winRatePct", 0.0) or 0.0)
@@ -3031,17 +3056,18 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
         n = int(pr.get("wins", 0)) + int(pr.get("losses", 0))
         wr = (int(pr.get("wins", 0)) / max(n, 1)) * 100.0 if n > 0 else 0.0
     if n < 6:
-        return base_min_conf
-    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
-    recent_score = float(weighted.get("score", 0.0) or 0.0)
-    # Conservative adaptive rule: good symbol => slightly easier, weak symbol => stricter.
-    # Adjustments tightened to prevent adaptiveMinConf from exceeding 0.82.
-    if wr >= 60:
-        out = max(0.50, base_min_conf - 0.04)
-    elif wr <= 45 or reward_score < -0.5 or recent_score < -0.10:
-        out = base_min_conf + 0.02
-    else:
+        # No per-symbol sample yet — still allow market-adaptive relaxation.
         out = base_min_conf
+    else:
+        # Conservative adaptive rule: good symbol => slightly easier, weak symbol => stricter.
+        # Adjustments tightened to prevent adaptiveMinConf from exceeding 0.82.
+        if wr >= 60:
+            out = max(0.50, base_min_conf - 0.04)
+        elif wr <= 45 or reward_score < -0.5 or recent_score < -0.10:
+            out = base_min_conf + 0.02
+        else:
+            out = base_min_conf
+
     reward_delta = float(pr.get("rewardDelta", 0.0) or 0.0)
     reward_behavior = float(pr.get("rewardBehaviorDelta", 0.0) or 0.0)
     win_streak = int(pr.get("rewardWinStreak", 0) or 0)
@@ -3067,7 +3093,18 @@ def _learned_min_conf(symbol: str, base_min_conf: float):
     # doesn't get overridden by global tuning (was hardcoded 0.82).
     lower_limit = max(0.65, base_min_conf - 0.10)
     upper_limit = max(0.82, base_min_conf + 0.04)
-    return max(lower_limit, min(upper_limit, out))
+    out = max(lower_limit, min(upper_limit, out))
+    # Market-wide relaxation LAST (Boss directive 2026-08-24): when the whole
+    # scan board is producing low-confidence signals (median below base), ease
+    # the per-symbol gate so the bot can still trade in choppy/low-conviction
+    # markets instead of stalling. Applied AFTER all per-symbol adjustments so
+    # it is the final word — not undone by reward/loss-streak tightening.
+    if market_median_conf is not None and market_median_conf > 0:
+        gap = base_min_conf - market_median_conf
+        if gap > 0.01:
+            relax = min(0.06, gap * 0.75)
+            out = max(0.50, out - relax)
+    return out
 
 
 def _symbol_quality_score(symbol: str) -> float:
@@ -3459,7 +3496,14 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # shift, but use the per-group floor as the lower bound instead of
         # the global 0.45. Low-vol groups (trend-friendly) tolerate lower
         # confidence; noisy groups (low-liquidity) need higher evidence.
-        adaptive_min_conf = float(_learned_min_conf(sym, max(base_min_conf, group_conf_floor)))
+        # Use the PREVIOUS scan board's median (the in-flight `board` is still
+        # empty at this point in the loop) so market-adaptive relaxation sees
+        # real market conviction from the last cycle.
+        _market_median = _scan_board_median_conf(AUTO_TRADE.get("scanBoard"))
+        adaptive_min_conf = float(_learned_min_conf(
+            sym, max(base_min_conf, group_conf_floor),
+            _market_median,
+        ))
         adaptive_min_conf += float(session_bias.get("confidenceShift", 0.0) or 0.0)
         # Hard per-symbol floor: never allow entries below 0.60 even if the
         # group profile or learned window loosens the gate (ESPUSDT-style
@@ -3468,9 +3512,18 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # scan board consistent with the entry pipeline. Lower bound = hard
         # confidence floor (minConfidenceHardFloor, default 0.72) — the
         # 0.7-0.8 zone lost -29.11 USDT over 1,385 LIVE trades (WR 49%).
-        autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+        autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
         conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
         adaptive_min_conf = max(conf_hard_floor, max(group_conf_floor, min(autotune_ceiling, adaptive_min_conf)))
+        # Market-wide relaxation (Boss directive 2026-08-24): if the whole board
+        # is low-conviction, ease the gate below the autotune ceiling so the bot
+        # can still trade. Applied AFTER the ceiling cap so reward/loss-streak
+        # tightening cannot undo it. Uses the previous cycle's board median.
+        _mkt_med = _scan_board_median_conf(AUTO_TRADE.get("scanBoard"))
+        if _mkt_med is not None and _mkt_med > 0:
+            _gap = base_min_conf - _mkt_med
+            if _gap > 0.01:
+                adaptive_min_conf = max(0.50, adaptive_min_conf - min(0.06, _gap * 0.75))
         score = score + float(session_bias.get("scoreShift", 0.0) or 0.0)
         # Per-group long-bias: shift score up when signal matches the
         # group's directional preference (e.g. trend-friendly groups
@@ -3494,20 +3547,25 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         elif conf < adaptive_min_conf:
             qualified = False
             reject_reason = "low_conf"
-        elif conf > float(cfg.get("maxEntryConfidence", 0.90) or 0.90):
-            # Late-chase cap: >=0.90 zone underperforms (WR 44% lifetime) —
-            # mirror the pipeline gate so the board shows the same decision.
+        elif conf > float(cfg.get("maxEntryConfidence", 0.95) or 0.95):
+            # Late-chase cap: only the >=0.95 zone genuinely underperforms
+            # (WR 44% lifetime). 0.90-0.95 is now allowed through so high-quality
+            # signals (e.g. ETH 0.918) are not needlessly rejected. Mirror the
+            # pipeline gate so the board shows the same decision.
             qualified = False
             reject_reason = "conf_too_high_late"
         elif spread_bps > max_spread_bps:
             qualified = False
             reject_reason = "wide_spread"
 
-        # TV confirmation gate (2026-08-22): stale or weak TradingView signal
-        # rejects the entry. Telemetry (7d) showed tvAge>30s -> WR 12-17% and
-        # tvConfidence<0.7 -> net -4.78 USDT; only age<=30s & conf>=0.7 were
-        # net-positive. Only applied when TV is enabled AND we actually have a
-        # fresh TV snapshot for this symbol (otherwise we don't punish).
+        # TV confirmation gate (2026-08-22): a FRESH but weak TradingView signal
+        # rejects the entry. Telemetry (7d) showed tvConfidence<0.7 -> net -4.78
+        # USDT; only conf>=0.7 were net-positive. Only applied when TV is enabled
+        # AND we have a FRESH TV snapshot (age<=tvEntryMaxAgeSec) for this symbol.
+        # A stale or missing TV snapshot is NOT evidence against the trade, so we
+        # don't punish on it (mirrors the comment's original intent: "otherwise
+        # we don't punish"). This prevents strong primary signals (e.g. AVAX
+        # 0.895, TAO 0.873) from being needlessly rejected on stale TV data.
         elif bool(cfg.get("tradingviewEnabled", False)):
             _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
             if _tv:
@@ -3515,9 +3573,12 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 _tv_conf = float(_tv.get("confidence", 0.0) or 0.0)
                 _max_age = int(cfg.get("tvEntryMaxAgeSec", 30) or 30)
                 _min_conf = float(cfg.get("tvEntryMinConfidence", 0.70) or 0.70)
-                if _tv_age > _max_age or _tv_conf < _min_conf:
+                _tv_fresh = _tv_age <= _max_age
+                # Only block on a FRESH TV snapshot that is weak. A stale TV
+                # snapshot is not a reason to reject a strong primary signal.
+                if _tv_fresh and _tv_conf < _min_conf:
                     qualified = False
-                    reject_reason = "tv_stale_or_weak"
+                    reject_reason = "tv_weak"
         # SHORT-specific TV gate (2026-08-22): telemetry showed SHORT WR 25% /
         # net -5.07 over 7d while only TV-conf>=0.7 SHORT trades were net-positive
         # (WR 62%) and any SHORT entered while TV signal was LONG lost (WR 20%).
@@ -3652,11 +3713,11 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 qual = _symbol_quality_score(sym)
                 score = _intel_score(sym, out) + float(session_bias.get("scoreShift", 0.0) or 0.0)
                 spread_bps = float(ex.get("spreadBps", 0.0) or 0.0)
-                adaptive_min_conf = float(_learned_min_conf(sym, base_min_conf)) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
+                adaptive_min_conf = float(_learned_min_conf(sym, base_min_conf, _scan_board_median_conf(board))) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
                 # Hard per-symbol floor: same floor as the main scan board
                 # (minConfidenceHardFloor, default 0.72); upper bound follows
                 # the supervisor autotune ceiling.
-                autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+                autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
                 conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
                 adaptive_min_conf = max(conf_hard_floor, min(autotune_ceiling, adaptive_min_conf))
                 qualified = True
@@ -3667,9 +3728,10 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 elif conf < adaptive_min_conf:
                     qualified = False
                     reject_reason = "low_conf"
-                elif conf > float(cfg.get("maxEntryConfidence", 0.90) or 0.90):
-                    # Late-chase cap: >=0.90 zone underperforms (WR 44% lifetime) —
-                    # mirror the pipeline gate so the board shows the same decision.
+                elif conf > float(cfg.get("maxEntryConfidence", 0.95) or 0.95):
+                    # Late-chase cap: only the >=0.95 zone genuinely underperforms
+                    # (WR 44% lifetime). 0.90-0.95 is now allowed through so high-quality
+                    # signals (e.g. ETH 0.918) are not needlessly rejected.
                     qualified = False
                     reject_reason = "conf_too_high_late"
                 elif spread_bps > max_spread_bps:
@@ -3814,7 +3876,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                         fb_conf = float(fb_intel.get("confidence", 0.0) or 0.0)
                         fb_ex = fb_intel.get("execution") if isinstance(fb_intel.get("execution"), dict) else {}
                         fb_spread = float(fb_ex.get("spreadBps", 0.0) or 0.0)
-                        fb_min_conf = float(_learned_min_conf(primary, base_min_conf)) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
+                        fb_min_conf = float(_learned_min_conf(primary, base_min_conf, _scan_board_median_conf(board))) + float(session_bias.get("confidenceShift", 0.0) or 0.0)
                         fb_min_conf = max(0.45, min(0.90, fb_min_conf))
                         if fb_sig in ("LONG", "SHORT") and fb_conf >= max(0.45, fb_min_conf - near_conf_relax) and fb_spread <= max_spread_bps:
                             best_sym = primary
@@ -3868,7 +3930,7 @@ def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) 
     spread_bps = float(ex.get("spreadBps", 0.0) or 0.0)
     regime = _risk_cooldown_regime(intel)
     regime_name = str(regime.get("name", "UNKNOWN")).upper()
-    min_conf = max(float(cfg.get("minConfidence", 0.62) or 0.62), float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62))))
+    min_conf = max(float(cfg.get("minConfidence", 0.62) or 0.62), float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62), _scan_board_median_conf(board))))
     # 2026-08-16: Selective SHORT — require a higher confidence floor for SHORT
     # entries than LONG. SHORT historically bleeds (7d WR 29% vs LONG 59%), so
     # only take SHORT when the signal is strong. No-op when key is 0/disabled.
@@ -4160,7 +4222,7 @@ async def _lifespan(app: FastAPI):
             primary_symbol = str(cfg.get("primarySymbol", "") or "").upper().strip()
             if (
                 not force_single_present
-                and (cfg.get("executionMode") or "PAPER").upper() == "LIVE"
+                and (cfg.get("executionMode") or "LIVE").upper() == "LIVE"
                 and not bool(cfg.get("marketScan"))
                 and raw_symbol
                 and primary_symbol
@@ -4188,7 +4250,7 @@ async def _lifespan(app: FastAPI):
                                     if time.time() - t < 3600]
             resume_msg = (
                 f"AUTO-RESUMED after restart: {cfg.get('symbol')} "
-                f"{cfg.get('executionMode','PAPER')} x{cfg.get('leverage',1)}"
+                f"{cfg.get('executionMode','LIVE')} x{cfg.get('leverage',1)}"
             )
             _autotrade_log(resume_msg)
             await _ensure_autotrade_task_alive("auto-resume")
@@ -4811,7 +4873,7 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
 
     old_conf = float(out.get("minConfidence", 0.65) or 0.65)
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+    autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
     # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
     # (the AI Tuner owns it). Only enforce the hard 0.82 floor brake here.
     if bool(out.get("supervisorMayTuneMinConfidence", False)):
@@ -4842,7 +4904,7 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
     set_int("riskCooldownMinutes", max(int(out.get("riskCooldownMinutes", 25) or 25), 45))
     set_int("perfGateEarlyMinSamples", min(int(out.get("perfGateEarlyMinSamples", 4) or 4), 4))
     set_float("perfGateEarlyMinPnlUsdt", max(float(out.get("perfGateEarlyMinPnlUsdt", -0.35) or -0.35), -0.35), 3)
-    set_int("perfLockMinutes", max(int(out.get("perfLockMinutes", 90) or 90), 120))
+    set_int("perfLockMinutes", max(int(out.get("perfLockMinutes", 45) or 45), 45))
     old_max_open = int(out.get("maxOpenPositions", _DEFAULT_MAX_OPEN_POSITIONS) or _DEFAULT_MAX_OPEN_POSITIONS)
     diversification_floor = 6 if (bool(out.get("marketScan")) or str(out.get("symbol", "")).upper() in {"AUTO", "SCAN"}) else 2
     reduction = int(round(1 * (1.0 + severity * 2.0))) if loss_streak >= 4 else 0
@@ -8339,6 +8401,9 @@ def _position_display_leverage(symbol: str | None, cfg: dict | None, current: in
 
 
 def _paper_reset():
+    # Paper-trading mode removed 2026-08-24 (Boss directive): LIVE-only.
+    # Keep the dict initialized so status/restore paths that read it don't crash,
+    # but it is never populated or traded against.
     AUTO_TRADE["paper"] = {
         "position": None,
         "wins": 0,
@@ -8346,47 +8411,6 @@ def _paper_reset():
         "realizedPnl": 0.0,
         "history": [],
     }
-
-
-def _paper_close(reason: str, exit_price: float):
-    p = AUTO_TRADE["paper"]["position"]
-    if not p:
-        return None
-    side = p["side"]
-    entry = float(p["entry"])
-    qty = float(p["qty"])
-    pnl = (exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty
-    AUTO_TRADE["paper"]["realizedPnl"] += pnl
-    if pnl >= 0:
-        AUTO_TRADE["paper"]["wins"] += 1
-    else:
-        AUTO_TRADE["paper"]["losses"] += 1
-    trade = {
-        "symbol": p.get("symbol"),
-        "side": side,
-        "entry": entry,
-        "exit": exit_price,
-        "qty": qty,
-        "pnl": round(pnl, 6),
-        "reason": reason,
-        "openedAt": p["openedAt"],
-        "closedAt": int(time.time()),
-        "patternTags": p.get("patternTags", []),
-        "patternBias": p.get("patternBias", 0.0),
-        "patternScore": p.get("patternScore", 0.0),
-        "entryConfidence": p.get("entryConfidence", 0.0),
-        "entryScore": p.get("entryScore", 0.0),
-        "entrySpreadBps": p.get("entrySpreadBps", 0.0),
-        "entryMomentumPct": p.get("entryMomentumPct", 0.0),
-    }
-    AUTO_TRADE["paper"]["history"] = [trade] + AUTO_TRADE["paper"]["history"][:49]
-    AUTO_TRADE["paper"]["position"] = None
-    # Obsidian-style learning: persist per-symbol outcomes
-    sym = str(trade.get("symbol") or (AUTO_TRADE.get("config") or {}).get("symbol") or "").upper()
-    if sym:
-        _record_learning_trade(sym, trade, "PAPER")
-    _persist_autotrade_snapshot()
-    return trade
 
 
 def _persist_autotrade_snapshot(force: bool = False):
@@ -8481,31 +8505,9 @@ def _load_autotrade_snapshot():
         return
     try:
         data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        paper = data.get("paper")
-        if isinstance(paper, dict):
-            pos = paper.get("position")
-            if pos is not None and not isinstance(pos, dict):
-                pos = None
-            hist = paper.get("history")
-            if not isinstance(hist, list):
-                hist = []
-            hist = hist[:50]
-            AUTO_TRADE["paper"] = {
-                "position": pos,
-                "wins": int(paper.get("wins", 0)),
-                "losses": int(paper.get("losses", 0)),
-                "realizedPnl": float(paper.get("realizedPnl", 0.0)),
-                "history": hist,
-            }
-            if AUTO_TRADE["paper"]["position"] and not AUTO_TRADE["paper"]["position"].get("symbol"):
-                sym0 = None
-                if isinstance(data.get("config"), dict):
-                    sym0 = data["config"].get("symbol")
-                if sym0:
-                    try:
-                        AUTO_TRADE["paper"]["position"]["symbol"] = _normalize_symbol(str(sym0))
-                    except HTTPException:
-                        pass
+        # Paper-trading mode removed 2026-08-24 (Boss directive): LIVE-only.
+        # Do not restore any paper position/state from snapshot.
+        _paper_reset()
         sb = data.get("scanBoard")
         AUTO_TRADE["scanBoard"] = sb[:10] if isinstance(sb, list) else []
         cw = data.get("cooldownWatchlist")
@@ -8590,17 +8592,9 @@ def _load_autotrade_snapshot():
         sym = None
         if isinstance(data.get("config"), dict):
             sym = data["config"].get("symbol")
-        if not sym and isinstance(AUTO_TRADE["paper"].get("position"), dict):
-            sym = AUTO_TRADE["paper"]["position"].get("symbol")
-        parts = ["Snapshot restored from disk after server restart."]
-        if AUTO_TRADE["paper"].get("position"):
-            p0 = AUTO_TRADE["paper"]["position"]
-            parts.append(
-                f"PAPER {p0.get('symbol', '?')} {p0.get('side')} position restored."
-            )
         if was_running and isinstance(data.get("config"), dict):
             sym_cfg = data["config"].get("symbol", "?")
-            mode_cfg = data["config"].get("executionMode", "PAPER")
+            mode_cfg = data["config"].get("executionMode", "LIVE")
             parts.append(f"AutoTrade will auto-resume for {sym_cfg} ({mode_cfg}).")
         elif was_running:
             parts.append("Last run was active — will auto-resume if config is valid.")
@@ -9394,7 +9388,7 @@ async def _autotrade_loop():
         try:
             now = int(time.time())
             AUTO_TRADE["hermesAgents"] = start_cycle(AUTO_TRADE.get("hermesAgents"))
-            _agent_mark("hermes_supervisor", "doing", "cycle started", f"mode={(cfg.get('executionMode') or 'PAPER').upper()}")
+            _agent_mark("hermes_supervisor", "doing", "cycle started", f"mode={(cfg.get('executionMode') or 'LIVE').upper()}")
             # Periodic supervisor review: run every 90 seconds to avoid excessive overhead
             global _SUPERVISOR_LAST_REVIEW
             if now - _SUPERVISOR_LAST_REVIEW >= 90:
@@ -9499,7 +9493,7 @@ async def _autotrade_loop():
                     AUTO_TRADE["riskCooldownLastMarketCheckAt"] = now
                     try:
                         open_symbol_blacklist: set[str] = set()
-                        if (cfg.get("executionMode") or "PAPER").upper() == "LIVE":
+                        if (cfg.get("executionMode") or "LIVE").upper() == "LIVE":
                             key = os.getenv("BINANCE_API_KEY")
                             secret = os.getenv("BINANCE_API_SECRET")
                             base = _binance_base()
@@ -9550,7 +9544,7 @@ async def _autotrade_loop():
                     continue
             # Stop requested: keep managing existing LIVE positions only, no new scans/entries.
             if not running_entries:
-                mode_now = str(cfg.get("executionMode") or "PAPER").upper()
+                mode_now = str(cfg.get("executionMode") or "LIVE").upper()
                 if mode_now != "LIVE":
                     AUTO_TRADE["manageOpenOnly"] = False
                     await asyncio.sleep(max(2, int(cfg.get("intervalSec", 20))))
@@ -9643,7 +9637,7 @@ async def _autotrade_loop():
 
             scan_mode = bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in ("AUTO", "SCAN")
             open_symbol_blacklist: set[str] = set(_risk_cooldown_symbols(now))
-            if (cfg.get("executionMode") or "PAPER").upper() == "LIVE":
+            if (cfg.get("executionMode") or "LIVE").upper() == "LIVE":
                 try:
                     key = os.getenv("BINANCE_API_KEY")
                     secret = os.getenv("BINANCE_API_SECRET")
@@ -9859,7 +9853,7 @@ async def _autotrade_loop():
                 _autotrade_skip("symbol_day_cap", f"Skip: {cfg['symbol']} reached daily cap {today_n}/{day_cap}")
                 await asyncio.sleep(cfg.get("intervalSec", 20))
                 continue
-            mode = (cfg.get("executionMode") or "PAPER").upper()
+            mode = "LIVE"  # paper-trading mode removed 2026-08-24 (Boss directive): LIVE-only
             ex = intel.get("execution") or {}
             em = ex.get("mark")
             # Fallback mark price with its own timeout
@@ -9872,59 +9866,6 @@ async def _autotrade_loop():
                     _autotrade_skip("timeout", "Skip: fetch_mark_price timed out")
                     await asyncio.sleep(cfg.get("intervalSec", 20))
                     continue
-
-            if mode == "PAPER" and AUTO_TRADE["paper"]["position"]:
-                p = AUTO_TRADE["paper"]["position"]
-                _agent_mark("position_guardian", "doing", "monitor paper position", f"{p['symbol']} {p['side']}")
-                AUTO_TRADE["_guardianMonitorTs"] = now
-                if p["side"] == "LONG":
-                    if mark >= p["tp"]:
-                        if _should_hold_winner("LONG", intel, cfg):
-                            new_sl, new_tp = _trail_winner_levels(
-                                "LONG",
-                                mark,
-                                float(p["sl"]),
-                                float(p["tp"]),
-                                float(cfg.get("holdTrailPct", 0.35)),
-                                cfg,
-                                "PAPER",
-                            )
-                            p["sl"] = new_sl
-                            p["tp"] = new_tp
-                            _autotrade_log(f"PAPER hold winner: trail TP/SL -> TP={new_tp:.6f} SL={new_sl:.6f}")
-                            _agent_mark("position_guardian", "done", "paper trail winner", f"TP={new_tp:.6f} SL={new_sl:.6f}")
-                        else:
-                            t = _paper_close("TP_HIT", mark)
-                            _autotrade_log(f"PAPER close TP pnl={t['pnl']:.4f}")
-                            _agent_mark("position_guardian", "done", "paper close TP", f"pnl={t['pnl']:.4f}")
-                    elif mark <= p["sl"]:
-                        t = _paper_close("SL_HIT", mark)
-                        _autotrade_log(f"PAPER close SL pnl={t['pnl']:.4f}")
-                        _agent_mark("position_guardian", "done", "paper close SL", f"pnl={t['pnl']:.4f}")
-                else:
-                    if mark <= p["tp"]:
-                        if _should_hold_winner("SHORT", intel, cfg):
-                            new_sl, new_tp = _trail_winner_levels(
-                                "SHORT",
-                                mark,
-                                float(p["sl"]),
-                                float(p["tp"]),
-                                float(cfg.get("holdTrailPct", 0.35)),
-                                cfg,
-                                "PAPER",
-                            )
-                            p["sl"] = new_sl
-                            p["tp"] = new_tp
-                            _autotrade_log(f"PAPER hold winner: trail TP/SL -> TP={new_tp:.6f} SL={new_sl:.6f}")
-                            _agent_mark("position_guardian", "done", "paper trail winner", f"TP={new_tp:.6f} SL={new_sl:.6f}")
-                        else:
-                            t = _paper_close("TP_HIT", mark)
-                            _autotrade_log(f"PAPER close TP pnl={t['pnl']:.4f}")
-                            _agent_mark("position_guardian", "done", "paper close TP", f"pnl={t['pnl']:.4f}")
-                    elif mark >= p["sl"]:
-                        t = _paper_close("SL_HIT", mark)
-                        _autotrade_log(f"PAPER close SL pnl={t['pnl']:.4f}")
-                        _agent_mark("position_guardian", "done", "paper close SL", f"pnl={t['pnl']:.4f}")
 
             eb, ea, esb = ex.get("bid"), ex.get("ask"), ex.get("spreadBps")
             if (
@@ -9948,10 +9889,13 @@ async def _autotrade_loop():
             signal = intel.get("signal", "WAIT")
             conf = float(intel.get("confidence", 0))
             session_bias = _entry_session_bias(cfg, now)
-            adaptive_min_conf = _learned_min_conf(cfg["symbol"], float(cfg["minConfidence"]))
+            adaptive_min_conf = _learned_min_conf(
+                cfg["symbol"], float(cfg["minConfidence"]),
+                _scan_board_median_conf(AUTO_TRADE.get("scanBoard")),
+            )
             min_conf_floor = float(cfg.get("minConfidenceFloor", 0.30))
             min_conf_cap = float(cfg.get("minConfidenceCap", 0.95))
-            autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.82) or 0.82)
+            autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
             adaptive_min_conf = max(
                 min_conf_floor,
                 min(
@@ -10253,106 +10197,55 @@ async def _autotrade_loop():
             eff_leverage = plan.eff_leverage
             _agent_mark("strategy_builder", "done", "entry approved", f"{cfg['symbol']} {signal} c={conf:.3f} pipeline={len(plan.pipeline)} gates")
 
-            if mode == "PAPER":
-                _agent_mark("execution_agent", "doing", "paper execution", f"{cfg['symbol']} {signal}")
-                qty = trade_usdt / max(mark, 1e-9)
-                if AUTO_TRADE["paper"]["position"] and AUTO_TRADE["paper"]["position"]["side"] != signal:
-                    t = _paper_close("FLIP_SIGNAL", mark)
-                    _autotrade_log(f"PAPER close flip pnl={t['pnl']:.4f}")
-                if not AUTO_TRADE["paper"]["position"]:
-                    eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
-                    # 2026-08-16: LONG TP boost — let winning LONGs run further.
-                    _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
-                    if signal == "LONG" and _long_boost > 0.0:
-                        eff = dict(eff)
-                        eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
-                    tp = mark * (1 + eff["tpPct"] / 100) if signal == "LONG" else mark * (1 - eff["tpPct"] / 100)
-                    sl = mark * (1 - eff["slPct"] / 100) if signal == "LONG" else mark * (1 + eff["slPct"] / 100)
-                    candles = intel.get("candles") if isinstance(intel, dict) else None
-                    if not isinstance(candles, dict):
-                        candles = {}
-                    AUTO_TRADE["paper"]["position"] = {
-                        "symbol": cfg["symbol"],
-                        "side": signal,
-                        "entry": mark,
-                        "qty": qty,
-                        "tp": tp,
-                        "sl": sl,
-                        "openedAt": now,
-                        "patternTags": candles.get("tags", []),
-                        "patternBias": candles.get("bias", 0.0),
-                        "patternScore": candles.get("score", 0.0),
-                        "entryConfidence": conf,
-                        "entryScore": _intel_score(cfg["symbol"], intel),
-                        "entrySpreadBps": float(ex.get("spreadBps", 0.0) or 0.0),
-                        "entryMomentumPct": float(ex.get("momentumPct", 0.0) or 0.0),
-                        # Persist the effective per-symbol TP/SL/cap/lock profile so
-                        # guardian, learning and review can attribute TP/SL hits
-                        # back to the volatility regime that produced them.
-                        "entryTPPct": eff["tpPct"],
-                        "entrySLPct": eff["slPct"],
-                        "entryVolatilityTier": eff.get("tier", "med"),
-                        # Per-symbol sizing and entry offset from learned profile.
-                        "positionSizeMult": float(eff_prof.get("position_size_mult", 1.0) or 1.0),
-                        "entryOffsetBps": float(eff_prof.get("entry_offset_bps", 0.0) or 0.0),
-                    }
-                    trade_res = {"mode": "paper", "entry": {"side": signal, "price": mark, "qty": qty}, "tp": tp, "sl": sl}
-                    _agent_mark("execution_agent", "done", "paper position opened", f"{cfg['symbol']} {signal}")
-                else:
-                    _agent_mark("execution_agent", "blocked", "paper position still open")
-                    _autotrade_skip("paper_open", "Skip: paper position still open")
-                    await asyncio.sleep(cfg["intervalSec"])
+            # LIVE-only execution (paper-trading mode removed 2026-08-24, Boss directive)
+            _agent_mark("execution_agent", "doing", "live pre-flight", f"{cfg['symbol']} {signal}")
+            pst = await _position_side_state(cfg["symbol"], key, secret, base)
+            if float(pst.get("long", 0.0)) > 0 and float(pst.get("short", 0.0)) > 0:
+                clear_thr = max(float(cfg.get("minConfidence", 0.65)), float(cfg.get("holdMinConfidence", 0.72)))
+                if conf >= clear_thr and signal in ("LONG", "SHORT"):
+                    cut_side = "SHORT" if signal == "LONG" else "LONG"
+                    rs = await _close_position_one_side(cfg["symbol"], cut_side, key, secret, base)
+                    if rs.get("closed"):
+                        _autotrade_log(
+                            f"Hedge normalize: closed {cut_side} side immediately (signal={signal}, conf={conf:.3f})"
+                        )
+                        _agent_mark("execution_agent", "done", "hedge normalized", cut_side)
+                    else:
+                        _agent_mark("execution_agent", "blocked", "hedge side not closeable", cut_side)
+                        _autotrade_skip(
+                            "hedge_both_sides",
+                            f"Skip: both LONG({pst['long']:.6f}) and SHORT({pst['short']:.6f}) open; no {cut_side} closeable rows",
+                        )
+                    await asyncio.sleep(1)
                     continue
-            else:
-                # external MCP signal guard removed — no entry guard to consult.
-                _agent_mark("execution_agent", "doing", "live pre-flight", f"{cfg['symbol']} {signal}")
-                pst = await _position_side_state(cfg["symbol"], key, secret, base)
-                if float(pst.get("long", 0.0)) > 0 and float(pst.get("short", 0.0)) > 0:
-                    clear_thr = max(float(cfg.get("minConfidence", 0.65)), float(cfg.get("holdMinConfidence", 0.72)))
-                    if conf >= clear_thr and signal in ("LONG", "SHORT"):
-                        cut_side = "SHORT" if signal == "LONG" else "LONG"
-                        rs = await _close_position_one_side(cfg["symbol"], cut_side, key, secret, base)
-                        if rs.get("closed"):
-                            _autotrade_log(
-                                f"Hedge normalize: closed {cut_side} side immediately (signal={signal}, conf={conf:.3f})"
-                            )
-                            _agent_mark("execution_agent", "done", "hedge normalized", cut_side)
-                        else:
-                            _agent_mark("execution_agent", "blocked", "hedge side not closeable", cut_side)
-                            _autotrade_skip(
-                                "hedge_both_sides",
-                                f"Skip: both LONG({pst['long']:.6f}) and SHORT({pst['short']:.6f}) open; no {cut_side} closeable rows",
-                            )
-                        await asyncio.sleep(1)
+                _agent_mark("execution_agent", "blocked", "hedge both sides waiting clearer signal")
+                _autotrade_skip(
+                    "hedge_both_sides",
+                    f"Skip: both LONG({pst['long']:.6f}) and SHORT({pst['short']:.6f}) open; waiting clearer signal",
+                )
+                await asyncio.sleep(cfg["intervalSec"])
+                continue
+            current_side = _open_side_from_position_state(pst)
+            if current_side == "FLAT":
+                try:
+                    _agent_mark("portfolio_manager", "doing", "check portfolio capacity")
+                    open_n = await _open_positions_count(key, secret, base)
+                    max_n = int(cfg.get("maxOpenPositions", _DEFAULT_MAX_OPEN_POSITIONS))
+                    if open_n >= max_n:
+                        _agent_mark("portfolio_manager", "blocked", "portfolio capacity full", f"{open_n}/{max_n}")
+                        _autotrade_skip("max_open_positions", f"Skip: open positions {open_n}/{max_n} reached")
+                        await asyncio.sleep(cfg["intervalSec"])
                         continue
-                    _agent_mark("execution_agent", "blocked", "hedge both sides waiting clearer signal")
-                    _autotrade_skip(
-                        "hedge_both_sides",
-                        f"Skip: both LONG({pst['long']:.6f}) and SHORT({pst['short']:.6f}) open; waiting clearer signal",
-                    )
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
-                current_side = _open_side_from_position_state(pst)
-                if current_side == "FLAT":
-                    try:
-                        _agent_mark("portfolio_manager", "doing", "check portfolio capacity")
-                        open_n = await _open_positions_count(key, secret, base)
-                        max_n = int(cfg.get("maxOpenPositions", _DEFAULT_MAX_OPEN_POSITIONS))
-                        if open_n >= max_n:
-                            _agent_mark("portfolio_manager", "blocked", "portfolio capacity full", f"{open_n}/{max_n}")
-                            _autotrade_skip("max_open_positions", f"Skip: open positions {open_n}/{max_n} reached")
-                            await asyncio.sleep(cfg["intervalSec"])
-                            continue
-                        _agent_mark("portfolio_manager", "done", "portfolio capacity ok", f"{open_n}/{max_n}")
-                    except Exception:
-                        pass
-                if current_side in ("LONG", "SHORT"):
-                    _agent_mark("execution_agent", "blocked", "symbol already has open position", f"{cfg['symbol']} {current_side}")
-                    _autotrade_skip("symbol_position_open", f"Skip: {cfg['symbol']} already has open {current_side}; wait until closed")
-                    await asyncio.sleep(cfg["intervalSec"])
-                    continue
+                    _agent_mark("portfolio_manager", "done", "portfolio capacity ok", f"{open_n}/{max_n}")
+                except Exception:
+                    pass
+            if current_side in ("LONG", "SHORT"):
+                _agent_mark("execution_agent", "blocked", "symbol already has open position", f"{cfg['symbol']} {current_side}")
+                _autotrade_skip("symbol_position_open", f"Skip: {cfg['symbol']} already has open {current_side}; wait until closed")
+                await asyncio.sleep(cfg["intervalSec"])
+                continue
 
-                # ── Pre-flight: check available balance before placing order ──
+            # ── Pre-flight: check available balance before placing order ──
                 try:
                     acct = await asyncio.wait_for(
                         _get_account_cached(key, secret, base),
@@ -10618,7 +10511,7 @@ async def autotrade_start(req: AutoTradeStartRequest):
     adopted = None
     adopted_positions: list[dict] = []
     # Auto handover: if there is already a LIVE position on Binance, adopt it on start.
-    if (cfg.get("executionMode") or "PAPER").upper() == "LIVE" and bool(cfg.get("orphanAutoAdoptEnabled", True)):
+    if (cfg.get("executionMode") or "LIVE").upper() == "LIVE" and bool(cfg.get("orphanAutoAdoptEnabled", True)):
         key = os.getenv("BINANCE_API_KEY")
         secret = os.getenv("BINANCE_API_SECRET")
         base = _binance_base()
@@ -10703,20 +10596,8 @@ async def autotrade_start(req: AutoTradeStartRequest):
     AUTO_TRADE["hermesSupervisorReview"] = {}
     AUTO_TRADE["hermesAgents"] = start_cycle(new_agent_state())
     _agent_mark("memory_agent", "done", "session initialized", session_id)
-    if (cfg.get("executionMode") or "PAPER").upper() == "LIVE":
-        _paper_reset()
-    else:
-        prev = AUTO_TRADE["paper"].get("position")
-        if (
-            prev
-            and isinstance(prev, dict)
-            and prev.get("symbol") == cfg["symbol"]
-        ):
-            _autotrade_log(
-                f"Resume: kept PAPER position {cfg['symbol']} {prev.get('side')} (same pair after disconnect/restart)"
-            )
-        else:
-            _paper_reset()
+    # Paper-trading mode removed 2026-08-24 (Boss directive): LIVE-only.
+    _paper_reset()
     _autotrade_log(f"AutoTrade started for {cfg['symbol']}")
     if adopted:
         _autotrade_log(
@@ -10751,7 +10632,7 @@ def autotrade_stop(req: AutoTradeControlRequest | None = None):
     AUTO_TRADE["sessionId"] = None
     AUTO_TRADE["startedAt"] = 0
     cfg = dict(AUTO_TRADE.get("config") or {})
-    mode_now = str(cfg.get("executionMode") or "PAPER").upper()
+    mode_now = str(cfg.get("executionMode") or "LIVE").upper()
     keep_manage_open = False
     if mode_now == "LIVE":
         key = os.getenv("BINANCE_API_KEY")
@@ -10899,15 +10780,6 @@ async def autotrade_status(symbol: str | None = None):
             except Exception as exc:
                 print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
 
-    if not AUTO_TRADE["running"]:
-        pp = p.get("position")
-        if isinstance(pp, dict) and pp.get("symbol") and qs and pp["symbol"] != qs:
-            continuity_hints.append(
-                f"มี PAPER ค้างที่ {pp['symbol']} ({pp.get('side')}) — กราฟปัจจุบัน {qs}"
-            )
-        elif isinstance(pp, dict) and pp.get("symbol") and qs and pp["symbol"] == qs:
-            continuity_hints.append("มี PAPER ค้างบนคู่นี้ — กดเริ่ม AutoTrade เพื่อต่อลูปจัดการ TP/SL")
-
     continuity = {
         "snapshotFile": SNAPSHOT_PATH.name,
         "snapshotFileMtime": file_mtime,
@@ -11022,7 +10894,7 @@ async def autotrade_status(symbol: str | None = None):
             }
         },
         "activePosition": {
-            "mode": cfg.get("executionMode", "PAPER"),
+            "mode": cfg.get("executionMode", "LIVE"),
             "paper": {
                 "side": (p.get("position") or {}).get("side", "FLAT"),
                 "qty": float((p.get("position") or {}).get("qty", 0.0)),
@@ -12821,7 +12693,7 @@ async def autotrade_status_lite():
         },
         "liveDailyPnl": round(float(live_all_stats.get("realizedPnlToday", 0.0) or 0.0), 6),
         "activePosition": {
-            "mode": cfg.get("executionMode", "PAPER"),
+            "mode": cfg.get("executionMode", "LIVE"),
             "paper": {"side": "FLAT", "qty": 0.0, "notionalUsdtApprox": 0.0},
             "live": live_position,
         },

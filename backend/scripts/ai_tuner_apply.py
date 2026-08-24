@@ -30,10 +30,10 @@ VAULT = os.path.join(BACKEND, "obsidian_vault")
 API = "http://127.0.0.1:8020"
 AUDIT = os.path.join(VAULT, "shared", "ai_tuner_audit.jsonl")
 
-# Telemetry-backed safety boundary. The 0.70-0.80 entry-confidence band was
-# materially loss-making; autonomous tuning may tighten this gate but cannot
-# lower it without an explicit code review and out-of-sample evidence.
-MIN_CONFIDENCE_FLOOR = 0.82
+# Telemetry-backed safety boundary. Boss confirmed 0.80 on 2026-08-23 (low-confidence
+# market, small capital needs trade frequency). The tuner must not push minConfidence
+# above 0.80 — this reverses the 0.82 mandate from 2026-08-14 per Boss directive.
+MIN_CONFIDENCE_FLOOR = 0.80
 
 # Anti-thrash: do not re-apply minConfidence more often than this (hours) unless
 # the requested value moves >= 0.03. Prevents the tuner from swinging the gate.

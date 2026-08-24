@@ -428,12 +428,16 @@ class TradingViewClient:
 
     def _fetch_from_tradingview(self, symbol: str, internal_signal: str, internal_confidence: float) -> Optional[TVSignalResult]:
         try:
-            handler = TA_Handler(
+            # Use the direct scanner client (tradingview_ta v3.3.0 endpoints are
+            # dead: symbol-search -> 403, technicals JS -> 404). ScannerClient
+            # mirrors the .summary / .oscillators interface the code below expects.
+            from trading.tradingview_scanner import ScannerClient
+            handler = ScannerClient(
                 symbol=symbol,
                 screener="CRYPTO",
                 exchange="BINANCE",
                 interval=Interval.INTERVAL_1_HOUR,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             analysis = handler.get_analysis()

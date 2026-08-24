@@ -72,7 +72,7 @@ PRO_STANDALONE_PRESET: dict = {
     "perfGateMinSamples": 8,
     "perfGateMinWinRatePct": 40,
     "perfGateMinPnlUsdt": -0.5,
-    "perfLockMinutes": 90,
+    "perfLockMinutes": 45,
     "learningRewardEnabled": True,
     "learningBehaviorRewardEnabled": True,
     "memoryPrimaryDays": 7,
