@@ -72,12 +72,12 @@ _FORCE_DEFAULTS_V6: dict = {
     "profitLockTriggerUsdt": 0.30,
     "profitLockMaxGivebackUsdt": 0.18,
     "holdMinConfidence": 0.72,
-    # TV aggressive caching to avoid 429
-    "tradingviewCacheTtl": 300,
-    "tradingviewRateLimit": 6,
+    # TV aggressive caching to avoid 429 (lowered rate + longer cache after Aug 2026 429 storm)
+    "tradingviewCacheTtl": 600,
+    "tradingviewRateLimit": 2,
     "tradingviewTimeout": 10.0,
     "tradingviewMaxFailures": 10,
-    "tradingviewNegativeCacheTtl": 60,  # short negative cache: keep failed symbols quiet after a 429/empty
+    "tradingviewNegativeCacheTtl": 120,  # longer backoff after a 429/empty
     "tvStaleEntrySec": 300,
     # TV entry confirmation gate (2026-08-22): reject entries whose TradingView
     # snapshot is stale (>tvEntryMaxAgeSec) or weak (<tvEntryMinConfidence).
@@ -147,7 +147,7 @@ _FORCE_DEFAULTS_V10: dict = {
     #    late entries at reversal tops:
     "minConfidenceFloor": 0.72,            # entry-path adaptive floor
     "minConfidenceHardFloor": 0.72,        # scan-board floor (was hardcoded 0.60)
-    "maxEntryConfidence": 0.90,            # late-chase cap
+    "maxEntryConfidence": 0.95,            # late-chase cap (raised 0.90->0.95 so 0.90-0.95 zone, e.g. ETH 0.918, is not needlessly rejected; >=0.95 still gated by WR-guard)
     # 3) momentum gate 0.065 was blocking every candidate (lastSkip weak_momentum
     #    0.010-0.016 for hours) — relax to keep entries flowing:
     "minMomentumStrength": 0.03,
@@ -259,7 +259,7 @@ _FORCE_DEFAULTS_V15: dict = {
     "shortSlMult": 0.80,
     "shortConfFloor": 0.65,
     # P3: TV batch fetch rate-limit tuning (reduce 429 frequency)
-    "tvBatchRateLimitPerMin": 4,       # lower than 6 to avoid burst 429
+    "tvBatchRateLimitPerMin": 2,       # lowered from 4 to avoid burst 429
     "tvBatchRetryBackoff": 2.0,        # seconds to wait on 429 before next batch
     "tvStaleSec": 900,                 # re-fetch after 15min (was 300 in places)
 
@@ -293,8 +293,9 @@ _FORCE_DEFAULTS_V17: dict = {
     # typical win lands in [0.5, 1.0] USDT (Boss directive).
     "perSymbolTargetProfitMinUsdt": 0.5,
     "perSymbolTargetProfitMaxUsdt": 1.0,
-    # Entry confidence floor (Boss: allow slightly more entries; 0.82 is the
-    # safe floor from the August 2026 review — never go below this).
+    # Entry confidence floor (OWNERSHIP SPLIT 2026-08-14: Boss mandates the
+    # hard floor at 0.82 — never go below this. The prior 0.80 was a regression
+    # that opened the known-loss 0.80-0.82 band; corrected to 0.82).
     "minConfidence": 0.82,
 }
 
@@ -316,6 +317,10 @@ def merge_preset(cfg: dict | None, preset: str = "pro") -> dict:
 # Telemetry-backed entry safety boundary. The 0.70-0.80 confidence bucket was
 # materially loss-making in the August 2026 review. All config normalization
 # paths must preserve this floor; raise it only with out-of-sample evidence.
+# NOTE: Boss directive (OWNERSHIP SPLIT 2026-08-14) mandates the hard floor
+# at 0.82 — the 0.80 value below was a typo vs the code comment at apply()
+# ("pin entry confidence floor to 0.82"). 0.80 sits BELOW the mandated floor,
+# so every apply_autotrade_defaults() re-pin opened the lossy 0.80-0.82 band.
 ENTRY_MIN_CONFIDENCE_FLOOR = 0.82
 
 
@@ -333,10 +338,14 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("strongFlipUltraConfRelax", 0.08)
     out.setdefault("minConfidence", ENTRY_MIN_CONFIDENCE_FLOOR)
     try:
-        # Boss directive: pin entry confidence floor to 0.82 (safe floor from the
-        # August 2026 review). Force, do not take max() — prevents a stored 0.84
-        # from persisting and over-filtering entries.
-        out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
+        # Boss directive: enforce a hard entry-confidence floor (0.82, see
+        # ENTRY_MIN_CONFIDENCE_FLOOR). Use max() so a higher tuner-validated
+        # value (e.g. 0.84, justified by out-of-sample evidence) is PRESERVED
+        # rather than clobbered, while never allowing anything below the floor.
+        out["minConfidence"] = max(
+            ENTRY_MIN_CONFIDENCE_FLOOR,
+            float(out.get("minConfidence") or ENTRY_MIN_CONFIDENCE_FLOOR),
+        )
     except (TypeError, ValueError):
         out["minConfidence"] = ENTRY_MIN_CONFIDENCE_FLOOR
     try:
@@ -499,22 +508,22 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tradingviewApiKey", "")  # TradingView API key
     out.setdefault("tradingviewApiSecret", "")  # TradingView API secret
     out.setdefault("tradingviewWebhookUrl", "")  # TradingView webhook URL
-    out.setdefault("tradingviewCacheTtl", 300)  # Cache TTL in seconds
-    out.setdefault("tradingviewRateLimit", 6)  # Rate limit per minute
+    out.setdefault("tradingviewCacheTtl", 600)  # Cache TTL in seconds (longer to avoid 429)
+    out.setdefault("tradingviewRateLimit", 2)  # Rate limit per minute (lowered from 6)
     out.setdefault("tradingviewTimeout", 10.0)  # API timeout in seconds
     out.setdefault("tradingviewConfidenceBoost", 0.08)  # Confidence boost on confirmation
     out.setdefault("tradingviewMaxFailures", 10)
-    out.setdefault("tradingviewNegativeCacheTtl", 60)  # Max failures before auto-disable
+    out.setdefault("tradingviewNegativeCacheTtl", 120)  # Longer backoff after 429/empty
     out.setdefault("tvUnavailableMinConf", 0.85)  # Conservative floor when TV signal is unavailable
     out.setdefault("tvWaitMinConf", 0.88)  # Fresh explicit TV WAIT needs extra confidence (V13.6)
     out.setdefault("tvStaleEntrySec", 300)  # TV signal age limit for entry boost (seconds)
     out.setdefault("tvExhaustionPenalty", 0.03)  # Penalty per exhausted oscillator (RSI/STOCH/CCI)
     # TradingView position management (global defaults)
-    out.setdefault("tradingviewTpExtensionEnabled", False)  # Enable TP extension based on TradingView
+    out.setdefault("tradingviewTpExtensionEnabled", True)  # Enable TP extension based on TradingView
     out.setdefault("tradingviewTpExtensionMinStrength", 0.7)  # Min strength for TP extension
     out.setdefault("tradingviewTpExtensionBasePct", 0.2)  # Base TP extension percentage
     out.setdefault("tradingviewTpExtensionMaxPct", 0.5)  # Max TP extension percentage
-    out.setdefault("tradingviewSlTrailingEnabled", False)  # Enable SL trailing based on TradingView
+    out.setdefault("tradingviewSlTrailingEnabled", True)  # Enable SL trailing based on TradingView
     out.setdefault("tradingviewSlTrailingMinStrength", 0.6)  # Min strength for SL trailing
     out.setdefault("tradingviewSlTrailingBasePct", 0.15)  # Base SL trailing percentage
     out.setdefault("tradingviewSlTrailingMaxPct", 0.3)  # Max SL trailing percentage
@@ -568,7 +577,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("perfGateMinSamples", 8)
     out.setdefault("perfGateMinWinRatePct", 40)
     out.setdefault("perfGateMinPnlUsdt", -0.5)
-    out.setdefault("perfLockMinutes", 90)
+    out.setdefault("perfLockMinutes", 45)
     out.setdefault("learningRewardEnabled", True)
     out.setdefault("learningBehaviorRewardEnabled", True)
     out.setdefault("memoryPrimaryDays", 7)
