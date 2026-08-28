@@ -354,9 +354,35 @@ def _append_trade_log(entry: dict):
     target = SCAN_EVENTS_PATH if is_scan else TRADES_LOG_PATH
     if is_scan:
         _rotate_scan_events_if_needed()
-    try:
-        with target.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    written = False
+    last_err = None
+    # Retry a few times — the E: drive is often locked by cloud-sync
+    # (OneDrive/Google Drive) which makes the append fail intermittently.
+    for attempt in range(4):
+        try:
+            with target.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            written = True
+            break
+        except Exception as exc:
+            last_err = exc
+            import time as _t
+            _t.sleep(0.3 * (attempt + 1))
+    if not written:
+        # Fallback: write to a local (non-cloud-synced) backup path so the
+        # trade is NEVER silently lost even if E: is locked.
+        try:
+            import os
+            backup_dir = Path(os.environ.get("LOCALAPPDATA", "C:/tmp")) / "hermes" / "binance_trades_backup"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup = backup_dir / target.name
+            with backup.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            print(f"[Trade Log] E: write failed ({last_err}); wrote to backup {backup}")
+            written = True
+        except Exception as bexc:
+            print(f"[Trade Log] ERROR writing {target} AND backup failed: {last_err} | backup: {bexc}")
+    if written:
         print(f"[Trade Log] Written to {target.name}: mode={entry.get('mode')}, pnl={entry.get('pnl')}, symbol={entry.get('symbol')}")
         if not is_scan and "pnl" in entry:
             _LIVE_STATS_VERSION += 1
@@ -368,8 +394,6 @@ def _append_trade_log(entry: dict):
             # flap between healthy and stale under heavy
             # trade flow (see also _aggregate_live_trade_stats_from_log).
             _SESSION_BIAS_CACHE["builtAt"] = 0.0
-    except Exception as exc:
-        print(f"[Trade Log] ERROR writing {target}: {exc}")
 
 
 def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
@@ -2932,8 +2956,10 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         _append_trade_log(trade_log_entry)
         ctx.record_trade(trade_log_entry)
         append_trade_memory(VAULT_DIR, trade_log_entry, mode)
-    except Exception:
-        pass
+    except Exception as e:
+        # NEVER swallow silently — a write failure here (e.g. cloud-sync lock
+        # on E:) must be visible so we know trades are being lost.
+        print(f"[Record Trade] {sym}: FAILED to record trade: {e}")
     ctx._dirty_profile = True
     ctx.commit()
     ctx.update_symbol_note(trade)
@@ -3392,12 +3418,16 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
             return f"perf_lock_{raw}"
         return str(reason or "")
 
-    def _soft_perf_fallback_reason(reason: str, perf: dict) -> str:
+    def _soft_perf_fallback_reason(reason: str, perf: dict, confidence: float = 0.0) -> str:
         canonical = _canonical_perf_lock_reason(reason, perf)
         active_lock = str(reason or "").startswith("perf_lock(")
         trades = int((perf or {}).get("trades", 0) or 0)
         win_rate = float((perf or {}).get("winRatePct", 0.0) or 0.0)
         pnl = float((perf or {}).get("pnl", 0.0) or 0.0)
+        # High-confidence bypass (>=0.90) for ANY symbol — prevents missing
+        # genuinely good entries while a weak symbol is in a perf cooldown.
+        if confidence >= 0.90:
+            return "perf_lock_high_conf"
         if not active_lock and canonical in soft_perf_reasons:
             return canonical
         if active_lock and trades >= 8 and (win_rate >= 40.0 or pnl >= -0.35):
@@ -3405,13 +3435,13 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         return ""
 
     def _soft_perf_fallback_ok(reason: str, signal: str, confidence: float, min_conf: float, spread: float, perf: dict) -> tuple[bool, str]:
-        fallback_reason = _soft_perf_fallback_reason(reason, perf)
+        fallback_reason = _soft_perf_fallback_reason(reason, perf, confidence)
         ok = (
             soft_perf_enabled
             and bool(fallback_reason)
             and fallback_reason not in ("perf_lock_early", "perf_lock_reward")
             and signal in ("LONG", "SHORT")
-            and confidence >= min(0.92, min_conf + soft_perf_conf_lift)
+            and confidence >= min(0.90, min_conf + soft_perf_conf_lift)
             and spread <= max_spread_bps
         )
         return ok, fallback_reason
@@ -8587,6 +8617,9 @@ def _load_autotrade_snapshot():
         if restored_key == today_date_key:
             DAILY_REALIZED_PNL = saved_daily_pnl
             _DAILY_PNL_DATE_KEY = today_date_key
+        # 2026-08-27 fix: parts=[] was missing — caused "name 'parts' is not defined"
+        # on every snapshot load, leaving AUTO_TRADE in a fresh state with no resume info.
+        parts = []
         saved = int(data.get("savedAt", 0) or 0)
         was_running = bool(data.get("running"))
         sym = None
@@ -10111,6 +10144,19 @@ async def _autotrade_loop():
                 except Exception:
                     _sym_min = 0.0
             min_order_usdt = max(5.0, float(cfg.get("feeMinOrderUsdt", 5.0) or 5.0), _sym_min if _sym_min > 0 else 0.0)
+            # 2026-08-27 fix: if the symbol's exchange MIN_NOTIONAL is higher than
+            # the operator's tradeNotionalCapUsdt, capping trade_usdt below the min
+            # would let the order be sent to Binance and rejected with QTY_TOO_SMALL,
+            # causing an infinite "place -> reject -> restart" loop. Skip the symbol
+            # immediately so the cycle advances to the next candidate instead.
+            _trade_cap_usdt = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+            if _sym_min > 0 and _sym_min > _trade_cap_usdt:
+                _autotrade_skip(
+                    "usdt_too_small",
+                    f"Skip: {cfg['symbol']} exchange min {_sym_min:.2f} > tradeNotionalCapUsdt {_trade_cap_usdt:.2f} (cap guard)",
+                )
+                AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
+                continue
             if trade_usdt < min_order_usdt:
                 action = str(cfg.get("usdtTooSmallAction", "multiply") or "multiply").lower()
                 if action == "skip":
@@ -10306,6 +10352,13 @@ async def _autotrade_loop():
                         trailing_stop_pct=cfg.get("trailingStopPct", 0.0),
                     )
 
+                # 2026-08-27 fix: initialize trade_res to None so UnboundLocalError
+                # never fires if the place block raises before the assignment (e.g.
+                # QTY_TOO_SMALL, MIN_NOTIONAL, BinanceAPIException). Also catch any
+                # non-TimeoutError so we never leave the function in a half-state
+                # and we still bubble up to the outer except for the QTY_TOO_SMALL
+                # auto-multiply handler.
+                trade_res = None
                 place_timeout = max(20.0, float(cfg.get("intervalSec", 20)) * 1.5)
                 try:
                     _agent_mark("execution_agent", "doing", "place live order", f"{cfg['symbol']} {signal}")
@@ -10314,6 +10367,16 @@ async def _autotrade_loop():
                     _agent_mark("execution_agent", "doing", "retry live order after timeout")
                     _autotrade_log("Retry: place order timed out once, retrying immediately")
                     trade_res = await asyncio.wait_for(_do_place(), timeout=place_timeout + 8.0)
+                except Exception as _place_err:
+                    # Log the place error, mark agent blocked, and re-raise so the
+                    # outer except (QTY_TOO_SMALL / margin / etc) can still apply
+                    # its recovery policy. Without this the exception would bubble
+                    # up after the inner try/except already exited cleanly and
+                    # AUTO_TRADE["lastDecision"] assignment would later throw
+                    # UnboundLocalError on `trade_res`.
+                    _agent_mark("execution_agent", "blocked", "place order error", f"{type(_place_err).__name__}: {str(_place_err)[:60]}")
+                    _autotrade_log(f"Place order error ({cfg['symbol']} {signal}): {type(_place_err).__name__}: {str(_place_err)[:80]}")
+                    raise
                 _agent_mark("execution_agent", "done", "live order completed", f"{cfg['symbol']} {signal}")
             AUTO_TRADE["lastTradeAt"] = now
             AUTO_TRADE["trades"].append(now)

@@ -146,7 +146,9 @@ _FORCE_DEFAULTS_V10: dict = {
     #    Raise the hard floor to cut the 0.7-0.8 hole; cap the top to stop
     #    late entries at reversal tops:
     "minConfidenceFloor": 0.72,            # entry-path adaptive floor
-    "minConfidenceHardFloor": 0.72,        # scan-board floor (was hardcoded 0.60)
+    "minConfidenceHardFloor": 0.72,
+    "scanPerfSoftFallbackEnabled": True,     # allow high-conf (>=0.90) symbols to bypass perf_lock
+        # scan-board floor (was hardcoded 0.60)
     "maxEntryConfidence": 0.95,            # late-chase cap (raised 0.90->0.95 so 0.90-0.95 zone, e.g. ETH 0.918, is not needlessly rejected; >=0.95 still gated by WR-guard)
     # 3) momentum gate 0.065 was blocking every candidate (lastSkip weak_momentum
     #    0.010-0.016 for hours) — relax to keep entries flowing:

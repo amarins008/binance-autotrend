@@ -30,10 +30,14 @@ VAULT = os.path.join(BACKEND, "obsidian_vault")
 API = "http://127.0.0.1:8020"
 AUDIT = os.path.join(VAULT, "shared", "ai_tuner_audit.jsonl")
 
-# Telemetry-backed safety boundary. Boss confirmed 0.80 on 2026-08-23 (low-confidence
-# market, small capital needs trade frequency). The tuner must not push minConfidence
-# above 0.80 — this reverses the 0.82 mandate from 2026-08-14 per Boss directive.
-MIN_CONFIDENCE_FLOOR = 0.80
+# OWNERSHIP SPLIT (2026-08-14) RULE #1 hard floor: minConfidence must NEVER be
+# pushed below 0.82. The tuner clamps any minConfidence write to this floor so it
+# cannot accidentally drop the gate (a cron verification run on 2026-08-25 did exactly
+# that — pushed 0.70 -> clamped to 0.80 -> live went BELOW 0.82; fixed & restored).
+# Boss's 2026-08-23 "0.80" note was superseded by the 0.82 mandate enforcement; the
+# required floor here is 0.82 and must not be lowered without explicit out-of-sample
+# evidence AND owner sign-off.
+MIN_CONFIDENCE_FLOOR = 0.82
 
 # Anti-thrash: do not re-apply minConfidence more often than this (hours) unless
 # the requested value moves >= 0.03. Prevents the tuner from swinging the gate.
