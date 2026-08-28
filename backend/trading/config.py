@@ -378,12 +378,12 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("leverageMax", 25)
     out.setdefault("leverageAutoEnabled", True)
     out.setdefault("adaptiveLeverageEnabled", True)
-    out.setdefault("adaptiveLeverageMax", 25)
+    # Respect an explicit operator-set adaptiveLeverageMax (e.g. 15) — do NOT
+    # silently lift it up to leverageMax. Only clamp to the 25x hard ceiling.
+    if "adaptiveLeverageMax" not in out or out.get("adaptiveLeverageMax") in (None, ""):
+        out["adaptiveLeverageMax"] = 25
     try:
-        lev_max = int(out.get("leverageMax", 25) or 25)
-        adaptive_max = int(out.get("adaptiveLeverageMax", lev_max) or lev_max)
-        if adaptive_max < lev_max:
-            out["adaptiveLeverageMax"] = min(25, lev_max)
+        out["adaptiveLeverageMax"] = max(1, min(25, int(out.get("adaptiveLeverageMax", 25) or 25)))
     except (TypeError, ValueError):
         out["adaptiveLeverageMax"] = 25
     out.setdefault("marginType", "CROSSED")
