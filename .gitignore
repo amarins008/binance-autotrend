@@ -21,3 +21,6 @@ backend/obsidian_vault/
 
 # Local verification verdicts (ephemeral evidence)
 Temp/
+
+# Temp backup of removed test/garbage symbol dirs (not part of repo)
+_garbage_symbols_backup/

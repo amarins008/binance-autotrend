@@ -89,12 +89,18 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self._cors()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self._cors()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            # Client (watchdog / curl / dashboard) dropped the connection mid-response.
+            # This is a client-side event, NOT a launcher bug — swallow it so the
+            # launcher process survives instead of crashing and taking 8021 down.
+            pass
 
     def do_OPTIONS(self):
         self.send_response(204)
