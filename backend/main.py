@@ -4371,6 +4371,9 @@ _TV_SELFHEAL_SOFT_ATTEMPTS = 0
 _TV_SELFHEAL_HARD_DONE = False
 
 
+_consecutive_balance_skips = [0]  # module-level; reset on funded placement / alert
+
+
 def _tv_notify(message: str) -> None:
     """Best-effort real-time alert for TV self-heal events.
 
@@ -10301,16 +10304,22 @@ async def _autotrade_loop():
                     cfg["_liveAvailableBalance"] = avail
                     required = trade_usdt / max(eff_leverage, 1)
                     if avail < required * 1.05:  # 5% buffer
-                        # Auto-reduce amount to fit available balance
-                        safe_amt = round(avail * eff_leverage * 0.9, 2)
-                        if safe_amt < 1.0:
-                            _agent_mark("risk_manager", "blocked", "insufficient balance", f"{avail:.2f} USDT")
-                            _autotrade_skip("balance", f"Skip: insufficient balance {avail:.2f} USDT available")
-                            await asyncio.sleep(cfg["intervalSec"])
-                            continue
-                        old_amt = trade_usdt
-                        trade_usdt = safe_amt
-                        _autotrade_log(f"Balance check: reduced USDT {old_amt} → {safe_amt} (avail={avail:.2f})")
+                        # Boss directive: do NOT auto-reduce — SKIP this symbol and let
+                        # scan mode try the next one. Count consecutive balance-skips so we
+                        # can alert once when NO symbol can be funded.
+                        _agent_mark("risk_manager", "blocked", "insufficient balance", f"{avail:.2f} USDT")
+                        _autotrade_skip("balance", f"Skip: insufficient margin {avail:.2f} USDT < required {required*1.05:.2f} USDT — try next symbol")
+                        _consecutive_balance_skips[0] += 1
+                        _autotrade_log(f"Margin guard: skipped {cfg.get('symbol')} (avail={avail:.2f}, need={required*1.05:.2f}) [consecutive={_consecutive_balance_skips[0]}])")
+                        _alert_thr = int(cfg.get("marginAlertAfterSkips", 5) or 5)
+                        if _consecutive_balance_skips[0] >= _alert_thr:
+                            try:
+                                _tv_notify(f"Margin insufficient for ALL symbols: {avail:.2f} USDT left but ~{required*1.05:.2f} USDT/trade needed ({_consecutive_balance_skips[0]} symbols skipped in a row) — top up capital or lower leverage/cap")
+                            except Exception:
+                                pass
+                            _consecutive_balance_skips[0] = 0
+                        await asyncio.sleep(cfg["intervalSec"])
+                        continue
                     # Auto-fix CROSSED → ISOLATED if cross balance is low
                     # Only switch if no open position (Binance -4048 if position exists)
                     if cfg.get("marginType") == "CROSSED":
@@ -10332,6 +10341,8 @@ async def _autotrade_loop():
                                 pass  # skip switch if can't check position
                 except Exception:
                     pass  # balance check is best-effort; proceed anyway
+                else:
+                    _consecutive_balance_skips[0] = 0  # a funded symbol passed -> reset alert counter
 
                 # external MCP signal guard removed — no second guard to consult.
                 eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
