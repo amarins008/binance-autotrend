@@ -3626,9 +3626,17 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                     qualified = False
                     reject_reason = "short_tv_conflict_long"
                 # Require higher TV confidence for SHORT than the generic floor
+                # Boss 2026-08-28: if the technical SHORT signal is strong & clear
+                # (conf >= shortStrongMinConfidence), relax the TV gate so we still
+                # enter SHORT on a decisive down-signal even without TV confirmation.
                 elif _tv_c < _short_min_conf:
-                    qualified = False
-                    reject_reason = "short_tv_low_conf"
+                    _strong_short_min = float(cfg.get("shortStrongMinConfidence", 0.80) or 0.80)
+                    if sig == "SHORT" and conf >= _strong_short_min:
+                        # strong clear down-signal -> allow despite low TV conf
+                        pass
+                    else:
+                        qualified = False
+                        reject_reason = "short_tv_low_conf"
         perf_ok, perf_reason, perf = _symbol_perf_gate(cfg, sym)
         soft_perf_eligible = False
         soft_perf_reason = ""
