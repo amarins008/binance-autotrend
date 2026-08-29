@@ -1,4 +1,4 @@
-﻿"""PRO standalone preset — institutional-style discipline."""
+"""PRO standalone preset — institutional-style discipline."""
 
 PRO_STANDALONE_PRESET: dict = {
     "symbol": "AUTO",
@@ -126,4 +126,3 @@ PLAYBOOK: dict = {
         "Profit lock on giveback after max seen PnL",
     ],
 }
-

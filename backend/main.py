@@ -4479,9 +4479,15 @@ def _track_autotrade_task(task: asyncio.Task, reason: str) -> asyncio.Task:
             exc = e
         if exc is not None:
             _autotrade_log(f"AutoTrade task stopped unexpectedly ({reason}): {_format_loop_error(exc)}")
+            _log_full_traceback(exc)
 
     task.add_done_callback(_done)
     return task
+
+
+def _log_full_traceback(exc: Exception) -> None:
+    import traceback as _tb
+    _autotrade_log("FULL TRACEBACK: " + "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))[:1500])
 
 
 async def _ensure_autotrade_task_alive(reason: str = "watchdog") -> bool:
@@ -9575,6 +9581,9 @@ async def _autotrade_loop():
                             _autotrade_skip("risk_cooldown", f"Skip: risk cooldown {remain}s · adaptive check timeout; retrying")
                             await _refresh_risk_cooldown_watchlist(cfg, set(), now, f"{remain}s remaining; adaptive timeout")
                         else:
+                            import traceback as _tb
+                            _full_err = "".join(_tb.format_exception(type(e), e, e.__traceback__))[:600]
+                            _autotrade_log(f"ADAPTIVE_CHECK_FAILED: {_full_err}")
                             _agent_mark("risk_manager", "blocked", "adaptive cooldown check failed", err_text)
                             _autotrade_skip("risk_cooldown", f"Skip: risk cooldown {remain}s · adaptive check failed")
                         _persist_autotrade_snapshot()
@@ -10403,8 +10412,12 @@ async def _autotrade_loop():
             AUTO_TRADE["lastSkip"] = None
             _autotrade_log(f"{mode} trade executed: {signal} {cfg['symbol']} {trade_usdt} USDT")
             _sym_decision = str(cfg["symbol"]).upper()
-            AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
-            AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
+            if "trade_res" in locals():
+                AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
+                AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "trade": trade_res, "symbol": _sym_decision, "side": signal, "ts": now}
+            else:
+                AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": None, "symbol": _sym_decision, "side": signal, "ts": now}
+                AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "trade": None, "symbol": _sym_decision, "side": signal, "ts": now}
             _agent_mark("memory_agent", "done", "decision stored", f"{mode} {cfg['symbol']} {signal}")
         except asyncio.TimeoutError:
             # Network timeout — not a logic error, use softer backoff
