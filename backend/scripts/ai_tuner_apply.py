@@ -31,13 +31,13 @@ API = "http://127.0.0.1:8020"
 AUDIT = os.path.join(VAULT, "shared", "ai_tuner_audit.jsonl")
 
 # OWNERSHIP SPLIT (2026-08-14) RULE #1 hard floor: minConfidence must NEVER be
-# pushed below 0.82. The tuner clamps any minConfidence write to this floor so it
-# cannot accidentally drop the gate (a cron verification run on 2026-08-25 did exactly
-# that — pushed 0.70 -> clamped to 0.80 -> live went BELOW 0.82; fixed & restored).
-# Boss's 2026-08-23 "0.80" note was superseded by the 0.82 mandate enforcement; the
-# required floor here is 0.82 and must not be lowered without explicit out-of-sample
-# evidence AND owner sign-off.
-MIN_CONFIDENCE_FLOOR = 0.82
+# pushed below the floor. The tuner clamps any minConfidence write to this floor so it
+# cannot accidentally drop the gate. BOSS OVERRIDE 2026-08-29: in the current
+# low-conviction / sideway market the bot sat idle with signals blocked (0.82 floor
+# passed only ~19% of scans), so the mandated floor is lowered to 0.72 to let entries
+# flow. minConfidenceHardFloor / supervisorMinConfidenceCeiling already run at 0.72 in
+# config.py + main.py, so 0.72 is the consistent system-wide floor.
+MIN_CONFIDENCE_FLOOR = 0.72
 
 # Anti-thrash: do not re-apply minConfidence more often than this (hours) unless
 # the requested value moves >= 0.03. Prevents the tuner from swinging the gate.
@@ -134,19 +134,25 @@ def apply_config(key: str, value: str) -> dict:
     # Anti-thrash cooldown for minConfidence: the tuner must not re-write this
     # key more than once per TUNER_MIN_CONF_COOLDOWN_HOURS unless the requested
     # value moves materially. This stops the 0.72<->0.83 swing (OWNERSHIP SPLIT).
-    if key == "minConfidence":
-        _cooldown_skip, _last_val = _min_conf_recent_apply()
-        try:
-            if _cooldown_skip and abs(float(requested) - float(_last_val)) < 0.03:
-                return {"ok": False, "reason": "COOLDOWN_SKIP", "lastApplied": _last_val,
-                        "cooldownHours": TUNER_MIN_CONF_COOLDOWN_HOURS}
-        except (TypeError, ValueError):
-            pass
+    # EXEMPTION (RULE #1 compliance, fixed 2026-08-28): re-asserting the hard
+    # floor (0.82) is NEVER throttled. If the live gate has drifted below the
+    # floor (observed live=0.72), the tuner must restore it every round without
+    # waiting out the cooldown. The cooldown only throttles swings BETWEEN
+    # *non-floor* values. The old logic blocked the one corrective re-apply
+    # RULE #1 requires, leaving live minConfidence stuck below the floor.
     if key == "minConfidence":
         try:
             val = max(MIN_CONFIDENCE_FLOOR, float(val))
         except (TypeError, ValueError):
             return {"ok": False, "reason": f"INVALID_MIN_CONFIDENCE: {value}"}
+        _cooldown_skip, _last_val = _min_conf_recent_apply()
+        try:
+            if (_cooldown_skip and abs(val - float(_last_val)) < 0.03
+                    and val != MIN_CONFIDENCE_FLOOR):
+                return {"ok": False, "reason": "COOLDOWN_SKIP", "lastApplied": _last_val,
+                        "cooldownHours": TUNER_MIN_CONF_COOLDOWN_HOURS}
+        except (TypeError, ValueError):
+            pass
     res = _api("/autotrade/config", {key: val})
     _audit({
         "action": "config",

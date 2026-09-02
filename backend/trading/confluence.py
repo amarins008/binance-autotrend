@@ -76,18 +76,20 @@ def evaluate_confluence(
                         )
                         tv_age_sec = time.time() - tv_result.timestamp
                     else:
-                        notes.append(f"TV stale ({tv_age_sec:.0f}s > {stale_limit:.0f}s) — boost zeroed")
-                    if tv_age_sec > stale_limit:
-                        tv_boost = 0.0
-                    else:
+                        notes.append(f"TV stale ({tv_age_sec:.0f}s > {stale_limit:.0f}s) — treat as unavailable")
+                        tv_result = None  # stale + no refresh → treat as unavailable
+                    if tv_result is not None and (time.time() - tv_result.timestamp) <= stale_limit:
                         tv_boost = tv_client.confirm_signal(tv_result, pre_signal)
+                    else:
+                        tv_boost = 0.0
                 else:
                     tv_boost = tv_client.confirm_signal(tv_result, pre_signal)
                 # Hard conflict sentinel from confirm_signal: TV strongly
                 # disagrees (strength >= 0.75) — block the entry entirely
                 # instead of just shaving confidence. Covers both the fresh
                 # and the refreshed-on-entry paths above.
-                if tv_boost <= -900.0:
+                from trading.tv_constants import TV_SENTINEL_CHECK_THRESHOLD
+                if tv_boost <= TV_SENTINEL_CHECK_THRESHOLD:
                     notes.append(
                         f"TV hard conflict BLOCK: TV={tv_result.signal.value} "
                         f"vs {pre_signal} strength={tv_strength_val:.2f}"
@@ -189,7 +191,15 @@ def evaluate_confluence(
                 
                 # Store current signal for future comparison
                 tv_client._track_signal_history(symbol, tv_result)
-                
+
+                # Cap total negative TV boost: TV is a secondary signal; combined
+                # penalties (exhaustion + conflict + MA weakness + momentum) can
+                # stack to -0.22 which overpowers the primary internal analysis.
+                _tv_boost_floor = float(cfg.get("tvBoostFloorUsdt", -0.10) or -0.10)
+                if tv_boost < _tv_boost_floor:
+                    notes.append(f"TV boost capped: {tv_boost:.3f} → {_tv_boost_floor:.3f}")
+                    tv_boost = _tv_boost_floor
+
                 notes.append(f"TradingView confirmation: {tv_result.signal.value} (+{tv_boost:.3f})")
         except Exception:
             # Fallback to internal only on any error

@@ -161,11 +161,18 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     # pass). Entries against strong TV are the #1 loser pattern (DEXEUSDT /
     # KAITOUSDT / GIGGLEUSDT opened against TV 0.69-1.0 -> SL in seconds), so
     # re-check the same TV snapshot here at a configurable strength.
+    # NOTE: intel_analyze already applied the TV gate and may have set
+    # tv.blocked=True + final_signal=WAIT. If so, skip redundant re-check
+    # to avoid applying a different tvConflictBlockStrength threshold.
     tv_info = inp.intel.get("tv") if isinstance(inp.intel.get("tv"), dict) else {}
+    tv_already_blocked = bool(tv_info.get("blocked", False))
     tv_sig = str(tv_info.get("signal", "") or "").upper().strip()
     tv_strength = float(tv_info.get("strength", 0.0) or 0.0)
-    if tv_sig in ("LONG", "SHORT") and tv_sig != signal:
-        tv_block_strength = float(cfg.get("tvConflictBlockStrength", 0.60) or 0.60)
+    if tv_already_blocked:
+        _step(pipeline, "tv_conflict", True, f"TV already blocked by intel_analyze")
+    elif tv_sig in ("LONG", "SHORT") and tv_sig != signal:
+        from trading.tv_constants import TV_CONFLICT_BLOCK_STRENGTH_DEFAULT
+        tv_block_strength = float(cfg.get("tvConflictBlockStrength", TV_CONFLICT_BLOCK_STRENGTH_DEFAULT) or TV_CONFLICT_BLOCK_STRENGTH_DEFAULT)
         if tv_strength >= tv_block_strength:
             return EntryPlan(
                 False,
@@ -179,32 +186,35 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     elif tv_sig in ("LONG", "SHORT") and tv_sig == signal:
         _step(pipeline, "tv_conflict", True, f"TV align {tv_sig} {tv_strength:.2f}")
     else:
-        # TV unavailable (no signal / WAIT / ERROR / TV disabled): conservative
-        # mode — only high-confidence entries pass so we don't blind-trade
-        # against a strong TV signal we can't see (LINK 06:26 / ENA 10:35
-        # opened against TV 0.82/0.94 while TV was silently disabled; both
-        # PREEMPTIVE_LOSS_EXIT). Configurable via tvUnavailableMinConf.
-        tv_unavail_min_conf = float(cfg.get("tvUnavailableMinConf", 0.85) or 0.85)
-        # Fresh WAIT is a deliberate non-confirmation, not "no data": the
-        # NEUTRAL bucket (entry while TV is undecided) was WR 50% net -0.239
-        # after V13.3 — require extra confidence via tvWaitMinConf.
+        # TV unavailable / WAIT / ERROR — route to the correct gate based
+        # on the snapshot's status field (populated by intel_analyze).
+        # status="ok" + signal=WAIT → deliberate non-confirmation → tvWaitMinConf
+        # status="unavailable" / "error" → TV data absent → tvUnavailableMinConf
+        from trading.tv_constants import TV_UNAVAILABLE_MIN_CONF_DEFAULT, TV_WAIT_MIN_CONF_DEFAULT
+        tv_unavail_min_conf = float(cfg.get("tvUnavailableMinConf", TV_UNAVAILABLE_MIN_CONF_DEFAULT) or TV_UNAVAILABLE_MIN_CONF_DEFAULT)
         _tv_age = int(tv_info.get("age", 0) or 0)
-        _tv_wait_stale = int(cfg.get("tvStaleEntrySec", 300) or 300)
-        if tv_sig == "WAIT":
-            # WAIT (any age) is a deliberate non-confirmation — gate with
-            # tvWaitMinConf, never fall back to the weaker tvUnavailableMinConf
-            # for stale WAIT (stale = even less trustworthy, not more).
-            tv_wait_min_conf = float(cfg.get("tvWaitMinConf", 0.88) or 0.88)
+        _tv_status = str(tv_info.get("status", "") or "").lower()
+        if tv_sig == "WAIT" and _tv_status == "ok":
+            # WAIT from a working TV = deliberate non-confirmation → tvWaitMinConf.
+            # SHORT-specific gate: SHORT with TV=WAIT has historically poor
+            # performance (WR 28%, net -1.02 USDT over 25 trades). Require
+            # higher confidence for SHORT when TV explicitly says WAIT.
+            from trading.tv_constants import TV_STALE_ENTRY_SEC_DEFAULT
+            _tv_wait_stale = int(cfg.get("tvStaleEntrySec", TV_STALE_ENTRY_SEC_DEFAULT) or TV_STALE_ENTRY_SEC_DEFAULT)
+            tv_wait_min_conf = float(cfg.get("tvWaitMinConf", TV_WAIT_MIN_CONF_DEFAULT) or TV_WAIT_MIN_CONF_DEFAULT)
+            if signal == "SHORT":
+                tv_short_wait_min_conf = float(cfg.get("tvShortWaitMinConf", 0.88) or 0.88)
+                tv_wait_min_conf = max(tv_wait_min_conf, tv_short_wait_min_conf)
             if conf < tv_wait_min_conf:
                 return EntryPlan(
                     False,
                     "tv_wait_low_conf",
-                    f"Skip: TV WAIT (age {_tv_age}s) requires conf >= {tv_wait_min_conf:.2f}, got {conf:.3f}",
+                    f"Skip: TV WAIT {signal} (age {_tv_age}s) requires conf >= {tv_wait_min_conf:.2f}, got {conf:.3f}",
                     signal,
                     conf,
                     pipeline=pipeline,
                 )
-            _step(pipeline, "tv_conflict", True, f"TV WAIT (age {_tv_age}s) conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
+            _step(pipeline, "tv_conflict", True, f"TV WAIT {signal} (age {_tv_age}s) conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
         elif conf < tv_unavail_min_conf:
             return EntryPlan(
                 False,
@@ -215,7 +225,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                 pipeline=pipeline,
             )
         else:
-            _step(pipeline, "tv_conflict", True, f"TV n/a ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
+            _step(pipeline, "tv_conflict", True, f"TV {_tv_status or 'none'} ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
 
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion
@@ -252,7 +262,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     mom_strength = float(momentum.get("strength", 0.0) or 0.0)
     
     # Require minimum momentum strength for entries
-    min_mom_strength = float(cfg.get("minMomentumStrength", 0.08) or 0.08)
+    min_mom_strength = float(cfg.get("minMomentumStrength", 0.005) or 0.005)
     if not _step(
         pipeline,
         "momentum_strength",

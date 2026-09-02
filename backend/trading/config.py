@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 17
+CONFIG_VERSION = 22
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -152,7 +152,10 @@ _FORCE_DEFAULTS_V10: dict = {
     "maxEntryConfidence": 0.95,            # late-chase cap (raised 0.90->0.95 so 0.90-0.95 zone, e.g. ETH 0.918, is not needlessly rejected; >=0.95 still gated by WR-guard)
     # 3) momentum gate 0.065 was blocking every candidate (lastSkip weak_momentum
     #    0.010-0.016 for hours) — relax to keep entries flowing:
-    "minMomentumStrength": 0.03,
+    # V18: lowered to 0.005 so low-momentum consolidation markets can trade.
+    # Formula: strength = (mom_abs/5.0) * min(vol_ratio,2.0)
+    # 0.005 ≈ 0.05% momentum with avg volume — allows entry in quiet markets.
+    "minMomentumStrength": 0.005,
 }
 
 
@@ -167,7 +170,8 @@ _FORCE_DEFAULTS_V11: dict = {
     "blockedEntryPatterns": [
         "bearish_engulfing",
         "5m_bearish_engulfing",
-        "15m_bearish_engulfing",
+        # 15m_bearish_engulfing REMOVED: 171 trades, WR 46.2%, PnL +0.59 (profitable)
+        # SHORT+15m_bearish_engulfing especially: WR 51.5%, PnL +4.47
         "doji",
         "15m_doji",
         "hammer",
@@ -299,7 +303,85 @@ _FORCE_DEFAULTS_V17: dict = {
     # entries in low-confidence markets — median signal conf ~0.77, >=0.82 only
     # 34% of signals. 0.80 keeps the lossy 0.80-0.82 band open intentionally
     # for small-capital bot that needs trade frequency).
-    "minConfidence": 0.80,
+    "minConfidence": 0.72,
+}
+_FORCE_DEFAULTS_V18: dict = {
+    # V18: lower momentum gate + TV-WAIT SHORT gate (2026-08-31).
+    # momentum 0.005 ≈ 0.05% with avg volume — allows quiet-market entries.
+    "minMomentumStrength": 0.005,
+    # SHORT entries when TV=WAIT need higher confidence (historical WR 28%).
+    "tvShortWaitMinConf": 0.88,
+}
+_FORCE_DEFAULTS_V19: dict = {
+    # V19: remove 15m_bearish_engulfing from blocked patterns.
+    # Historical: 171 trades, WR 46.2%, PnL +0.59 (profitable).
+    # SHORT+15m_bearish_engulfing: WR 51.5%, PnL +4.47.
+    # V21.1: remove `hammer` (no timeframe) — WR 40.3%, PnL -1.51 but
+    #   LONG hammer is profitable (+0.134, WR 43.8%). Keep only 5m_hammer.
+    "blockedEntryPatterns": [
+        "bearish_engulfing",
+        "5m_bearish_engulfing",
+        "doji",
+        "15m_doji",
+        "5m_hammer",
+    ],
+}
+_FORCE_DEFAULTS_V20: dict = {
+    # V20: TP/SL USDT-target 0.5-1.0 USDT (2026-09-01).
+    # User directive: TP ~0.5-1.0 USDT, SL proportional.
+    # With notional ~250 USDT (50*5x), 0.40% = 1.0 USDT.
+    # slToTpRatio=0.70 → SL ~0.70 USDT (covers 0.48 USDT fees).
+    "takeProfitPct": 0.40,          # base TP%; overridden by risk.py USDT-target
+    "stopLossPct": 0.28,            # base SL%; overridden by risk.py USDT-target
+    "tpTargetMinUsdt": 0.45,        # TP floor in USDT
+    "tpTargetMaxUsdt": 1.00,        # TP ceiling in USDT
+    "slToTpRatio": 0.70,            # SL = TP × 0.70 (was 0.50)
+    "tpSlTargetUsdtEnabled": True,  # ensure USDT-target system active
+    # Lower floors to allow tighter stops:
+    "supervisorStopLossFloor": 0.15,  # was 0.80 — too tight for 0.5-1.0 USDT
+    "supervisorTpTargetMinCeiling": 0.60,  # hard cap — prevent supervisor from raising TP target above 0.60
+    "supervisorTpTargetMaxCeiling": 1.20,  # hard cap — prevent supervisor from raising above 1.20
+    # Fee floor: allow tighter TP without fee-floor rejection
+    "feeMinNetProfitUSDT": 0.03,     # was 0.06-0.08
+    # Guardian alignment with 0.5-1.0 USDT TP:
+    "profitLockTriggerUsdt": 0.25,   # arm lock at ~25% of mid TP
+    "profitLockKeepUsdt": 0.50,      # keep ~50% of mid TP
+    "profitLockMaxGivebackUsdt": 0.10,  # max giveback 0.10 USDT
+    "holdMinProfitUsdt": 0.12,       # hold winners above 0.12 USDT
+}
+
+
+_FORCE_DEFAULTS_V21: dict = {
+    # V21: Tiered TP extension + tiered reversal (2026-09-01).
+    # Strong follow: tiered TP extension and SL trailing.
+    # very_strong: conf>=0.88, gap>=2.0, mom>=0.2% → wider TP, tighter SL
+    # strong:      conf>=0.80, gap>=1.2, mom>=0.1% → moderate extension
+    # moderate:    default (old behavior)
+    "tpExtendVeryStrongConf": 0.88,
+    "tpExtendVeryStrongGap": 2.0,
+    "tpExtendVeryStrongMom": 0.20,
+    "tpExtendStrongConf": 0.80,
+    "tpExtendStrongGap": 1.2,
+    "tpExtendStrongMom": 0.10,
+    "tpExtendStepPctVeryStrong": 0.60,
+    "tpExtendStepPctStrong": 0.40,
+    "holdTrailPctVeryStrong": 0.15,
+    "holdTrailPctStrong": 0.20,
+    # Reversal: tiered exit (close vs tighten).
+    # tighten: conf>=0.72, gap>=0.8 → tighten SL, don't close
+    # close:   conf>=0.90, gap>=1.5, structure=2+ → close immediately
+    "reversalTightenMinConf": 0.72,
+    "reversalTightenMinGap": 0.8,
+    "reversalTightenTrailPct": 0.10,
+}
+
+
+_FORCE_DEFAULTS_V22: dict = {
+    # V22: Signal confirmation gate (2026-09-01).
+    # Require N consecutive cycles with same signal before entry.
+    # Prevents signal oscillation (signal flipping every 7-8s).
+    "signalConfirmEnabled": True,
+    "signalConfirmMinCycles": 2,
 }
 
 
@@ -356,7 +438,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         )
     except (TypeError, ValueError):
         out["minConfidenceHardFloor"] = ENTRY_MIN_CONFIDENCE_FLOOR
-    out.setdefault("htfStrictEnabled", True)
+    out.setdefault("htfStrictEnabled", False)
     out.setdefault("htfMinStrength", 0.28)
     out.setdefault("requireVisionConsensus", False)
     # Capital-aware default: 3 concurrent trades (Boss: 50 USDT capital).
@@ -371,7 +453,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("stopLossPct", 1.0)
     out.setdefault("minRiskRewardRatio", 1.5)
     out.setdefault("atrTpSlEnabled", True)
-    out.setdefault("ema200StrictEnabled", True)
+    out.setdefault("ema200StrictEnabled", False)
     out.setdefault("usdtAmount", 25.0)
     out.setdefault("leverage", 15)
     out.setdefault("leverageMin", 3)
@@ -398,8 +480,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("lateEntryMaxBbPctB", 0.90)
     out.setdefault("lateEntryMaxVwapDistancePct", 0.32)
     out.setdefault("skipFundingAgainst", 0.0)
-    out.setdefault("preReversalScoreBlock", 0.65)
-    out.setdefault("preReversalScoreSoftener", 0.20)
+    out.setdefault("preReversalScoreBlock", 0.72)
+    out.setdefault("preReversalScoreSoftener", 0.22)
     out.setdefault("holdWinners", True)
     out.setdefault("holdMinConfidence", 0.72)
     out.setdefault("holdTrailPct", 0.32)
@@ -461,11 +543,12 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("slCandleAdaptiveEnabled", True)
     out.setdefault("slCandleLookback", 5)
     out.setdefault("candlePatternLookback", 5)
-    out.setdefault("slToTpRatio", 0.5)
+    out.setdefault("slToTpRatio", 0.70)
     out.setdefault("tpSlTargetUsdtEnabled", True)
-    out.setdefault("tpTargetMinUsdt", 0.55)
-    out.setdefault("tpTargetMaxUsdt", 2.2)
-    out.setdefault("feeMinNetProfitUSDT", 0.06)
+    out.setdefault("tpTargetMinUsdt", 0.45)
+    out.setdefault("tpTargetMaxUsdt", 1.00)
+    out.setdefault("slToTpRatio", 0.70)
+    out.setdefault("feeMinNetProfitUSDT", 0.03)
     out.setdefault("feeMinEdgeVsCostMultiple", 1.35)
     out.setdefault("feeMinOrderUsdt", 5.0)
     out.setdefault("tradeNotionalCapUsdt", 80.0)
@@ -490,8 +573,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("sessionUSOverlapMultiplier", 1.2)  # US overlap size multiplier
     out.setdefault("sessionUSAfternoonMultiplier", 1.05)  # US afternoon size multiplier
     out.setdefault("sessionAsianEveningMultiplier", 0.9)  # Asian evening size multiplier
-    out.setdefault("minMomentumStrength", 0.065)  # Minimum momentum strength required for entries
-    out.setdefault("momentumDirectionConfirmation", True)  # Require momentum direction to match signal
+    out.setdefault("minMomentumStrength", 0.005)  # Minimum momentum strength required for entries
+    out.setdefault("momentumDirectionConfirmation", False)  # Require momentum direction to match signal
     out.setdefault("divergenceFilterEnabled", True)  # Enable divergence detection filter
     out.setdefault("volumeSpikeThreshold", 3.0)  # Volume spike threshold (multiple of average)
     out.setdefault("wickRejectionThreshold", 0.4)  # Wick size threshold for rejection detection
@@ -753,6 +836,21 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 17:
             for _fk, _fv in _FORCE_DEFAULTS_V17.items():
+                out[_fk] = _fv
+        if _stored_ver < 18:
+            for _fk, _fv in _FORCE_DEFAULTS_V18.items():
+                out[_fk] = _fv
+        if _stored_ver < 19:
+            for _fk, _fv in _FORCE_DEFAULTS_V19.items():
+                out[_fk] = _fv
+        if _stored_ver < 20:
+            for _fk, _fv in _FORCE_DEFAULTS_V20.items():
+                out[_fk] = _fv
+        if _stored_ver < 21:
+            for _fk, _fv in _FORCE_DEFAULTS_V21.items():
+                out[_fk] = _fv
+        if _stored_ver < 22:
+            for _fk, _fv in _FORCE_DEFAULTS_V22.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

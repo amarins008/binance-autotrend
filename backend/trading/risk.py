@@ -23,7 +23,11 @@ def effective_min_net_profit_usdt(
     taker_fee_bps: float = 4.0,
     extra_cost_bps: float = 2.0,
 ) -> float:
-    base_floor = float(cfg.get("feeMinNetProfitUSDT", default_min_net) or default_min_net)
+    # When feeMinNetProfitUSDT is set to 0 or below, skip fee gate entirely.
+    _raw_fee_floor = cfg.get("feeMinNetProfitUSDT")
+    if _raw_fee_floor is not None and float(_raw_fee_floor) <= 0.0:
+        return 0.0
+    base_floor = float(_raw_fee_floor if _raw_fee_floor is not None else default_min_net)
     mul = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.2) or 1.2))
     usdt = float(cfg.get("usdtAmount", 0.0) or 0.0)
     _, est_cost, _ = estimate_trade_edge_usdt(
@@ -111,8 +115,13 @@ def effective_tpsl_pct_for_trade(
             pass
     tp_u = max(tp_min_u, min(tp_max_u, target_u))
     sl_u = tp_u * rr
-    tp_pct = max(0.1, (tp_u / amt) * 100.0)
-    sl_pct = max(0.1, (sl_u / amt) * 100.0)
+    # tp_u is USDT profit target; convert to % of entry price.
+    # PnL = entry × pct/100 × notional, so pct = (tp_u / notional) × 100.
+    # notional = amt × leverage (default 5x).
+    _leverage = max(1, float(cfg.get('leverage', 5) or 5))
+    _notional = amt * _leverage
+    tp_pct = max(0.1, (tp_u / max(_notional, 1e-9)) * 100.0)
+    sl_pct = max(0.1, (sl_u / max(_notional, 1e-9)) * 100.0)
     sl_from_candles = None
     if bool(cfg.get("slCandleAdaptiveEnabled", True)) and pullback_allowance_pct is not None:
         try:

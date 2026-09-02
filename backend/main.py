@@ -1583,7 +1583,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     # Profitable baseline days were not purely high-confidence trades; avoid
     # choking AUTO scan by pushing the global gate toward 0.90.
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
     # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
     # (the AI Tuner owns it). It only enforces the hard 0.82 floor brake.
     # Operator may re-enable supervisor raises via supervisorMayTuneMinConfidence.
@@ -1751,7 +1751,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     min_conf = float(cfg.get("minConfidence", 0.62) or 0.62)
     conf_step = 0.03 if avg_pnl < -0.10 or win_rate < 40.0 else 0.02
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+    autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
     # OWNERSHIP SPLIT: supervisor does NOT move minConfidence by default (Tuner owns it);
     # only enforce the hard 0.82 floor brake unless operator re-enables raises.
     if bool(cfg.get("supervisorMayTuneMinConfidence", False)):
@@ -3542,7 +3542,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # scan board consistent with the entry pipeline. Lower bound = hard
         # confidence floor (minConfidenceHardFloor, default 0.72) — the
         # 0.7-0.8 zone lost -29.11 USDT over 1,385 LIVE trades (WR 49%).
-        autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+        autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
         conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
         adaptive_min_conf = max(conf_hard_floor, max(group_conf_floor, min(autotune_ceiling, adaptive_min_conf)))
         # Market-wide relaxation (Boss directive 2026-08-24): if the whole board
@@ -3621,14 +3621,26 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 _tv_sig = str(_tv.get("signal", "")).upper()
                 _tv_c = float(_tv.get("confidence", 0.0) or 0.0)
                 _short_min_conf = float(cfg.get("shortTvMinConfidence", 0.70) or 0.70)
-                # Block SHORT when TV explicitly points LONG (conflicting signal)
-                if _tv_sig == "LONG":
+                # Block SHORT when TV points LONG with meaningful strength.
+                # A weak TV LONG (strength < 0.45) should not block a strong
+                # SHORT — TV oscillators can flicker BUY/SELL at low strength.
+                _tv_strength = float(_tv.get("strength", 0.0) or 0.0)
+                _short_tv_block_min_strength = float(cfg.get("shortTvBlockMinStrength", 0.45) or 0.45)
+                if _tv_sig == "LONG" and _tv_strength >= _short_tv_block_min_strength:
                     qualified = False
                     reject_reason = "short_tv_conflict_long"
                 # Require higher TV confidence for SHORT than the generic floor
                 # Boss 2026-08-28: if the technical SHORT signal is strong & clear
                 # (conf >= shortStrongMinConfidence), relax the TV gate so we still
                 # enter SHORT on a decisive down-signal even without TV confirmation.
+                elif _tv_sig == "WAIT":
+                    # SHORT + TV=WAIT: require higher internal confidence.
+                    # SHORT with TV=WAIT has WR 28% historically — TV's non-
+                    # confirmation is meaningful for SHORT (bearish) signals.
+                    _tv_short_wait_min = float(cfg.get("tvShortWaitMinConf", 0.88) or 0.88)
+                    if conf < _tv_short_wait_min:
+                        qualified = False
+                        reject_reason = "short_tv_wait_low_conf"
                 elif _tv_c < _short_min_conf:
                     _strong_short_min = float(cfg.get("shortStrongMinConfidence", 0.80) or 0.80)
                     if sig == "SHORT" and conf >= _strong_short_min:
@@ -3755,7 +3767,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 # Hard per-symbol floor: same floor as the main scan board
                 # (minConfidenceHardFloor, default 0.72); upper bound follows
                 # the supervisor autotune ceiling.
-                autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+                autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
                 conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
                 adaptive_min_conf = max(conf_hard_floor, min(autotune_ceiling, adaptive_min_conf))
                 qualified = True
@@ -4378,6 +4390,10 @@ _TV_SELFHEAL_LAST_CHECK = 0
 _TV_SELFHEAL_SOFT_ATTEMPTS = 0
 _TV_SELFHEAL_HARD_DONE = False
 
+# ── Signal confirmation gate: require N consecutive matching cycles ──
+# Key: symbol, Value: list of (timestamp, signal) tuples
+_SIGNAL_HISTORY: dict[str, list[tuple[int, str]]] = {}
+
 
 _consecutive_balance_skips = [0]  # module-level; reset on funded placement / alert
 
@@ -4920,7 +4936,7 @@ def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: 
 
     old_conf = float(out.get("minConfidence", 0.65) or 0.65)
     # Hard ceiling: never tighten minConfidence beyond the autotune ceiling.
-    autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+    autotune_ceiling = float(out.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
     # OWNERSHIP SPLIT: by default the supervisor does NOT move minConfidence
     # (the AI Tuner owns it). Only enforce the hard 0.82 floor brake here.
     if bool(out.get("supervisorMayTuneMinConfidence", False)):
@@ -5903,9 +5919,11 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                         notes.append(f"TV refreshed on entry (was {_tv_age:.0f}s old)")
                         _tv_age = time.time() - _tv_res.timestamp
                     else:
-                        notes.append(f"TV stale ({_tv_age:.0f}s > {_tv_stale:.0f}s) — no refresh")
-                _tv_boost = _tv_client.confirm_signal(_tv_res, final_signal)
+                        notes.append(f"TV stale ({_tv_age:.0f}s > {_tv_stale:.0f}s) — treat as unavailable")
+                        _tv_res = None  # stale + no refresh → treat as unavailable
+                _tv_boost = _tv_client.confirm_signal(_tv_res, final_signal) if _tv_res else 0.0
                 _tv_strength = float((_tv_res.metadata or {}).get("strength", 0.0) or 0.0)
+                _tv_blocked_by_intel = False
                 # Redundant directional-conflict guard (2026-08-15): if TV and
                 # the internal signal are OPPOSITE sides (LONG vs SHORT) and TV
                 # strength clears tvConflictBlockStrength, block regardless of
@@ -5925,12 +5943,15 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                     )
                     final_signal = "WAIT"
                     confidence = min(confidence, 0.40)
-                if _tv_boost <= -900.0:
+                    _tv_blocked_by_intel = True
+                from trading.tv_constants import TV_SENTINEL_CHECK_THRESHOLD
+                if _tv_boost <= TV_SENTINEL_CHECK_THRESHOLD:
                     notes.append(
                         f"TV hard conflict BLOCK: TV={_tv_res.signal.value} vs {final_signal} strength={_tv_strength:.2f}"
                     )
                     final_signal = "WAIT"
                     confidence = min(confidence, 0.40)
+                    _tv_blocked_by_intel = True
                 elif _tv_boost != 0.0:
                     notes.append(
                         f"TV {'align' if _tv_boost > 0 else 'conflict'} "
@@ -5958,18 +5979,25 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # pipeline TV-conflict gate, entry snapshot, dashboards) read the SAME
     # signal the intel gate evaluated — not a stale disk read.
     _tv_snap = {}
-    if bool(_live_cfg.get("tradingviewEnabled", False)) and _tv_res is not None:
-        _tv_sig_value = str(getattr(_tv_res, "signal", None) or "")
-        if _tv_sig_value.startswith("TVSignal."):
-            _tv_sig_value = _tv_sig_value.split(".", 1)[1]
-        _tv_snap = {
-            "signal": _tv_sig_value,
-            "confidence": float(getattr(_tv_res, "confidence", 0.0) or 0.0),
-            "strength": float((getattr(_tv_res, "metadata", None) or {}).get("strength", 0.0) or 0.0),
-            "age": int(max(0.0, time.time() - getattr(_tv_res, "timestamp", time.time()))),
-        }
-        if _tv_snap.get("signal") == "ERROR":
-            _tv_snap = {"signal": "ERROR", "strength": 0.0, "age": 0}
+    if bool(_live_cfg.get("tradingviewEnabled", False)):
+        if _tv_res is not None:
+            _tv_sig_value = str(getattr(_tv_res, "signal", None) or "")
+            if _tv_sig_value.startswith("TVSignal."):
+                _tv_sig_value = _tv_sig_value.split(".", 1)[1]
+            _tv_snap = {
+                "signal": _tv_sig_value,
+                "confidence": float(getattr(_tv_res, "confidence", 0.0) or 0.0),
+                "strength": float((getattr(_tv_res, "metadata", None) or {}).get("strength", 0.0) or 0.0),
+                "age": int(max(0.0, time.time() - getattr(_tv_res, "timestamp", time.time()))),
+                "blocked": bool(_tv_blocked_by_intel),
+                "status": "ok",
+            }
+            if _tv_snap.get("signal") == "ERROR":
+                _tv_snap = {"signal": "ERROR", "strength": 0.0, "age": 0, "status": "error"}
+        else:
+            # TV enabled but no result (disabled, stale, error, rate-limited)
+            # status=unavailable lets pipeline distinguish "no TV" from "TV WAIT"
+            _tv_snap = {"signal": "", "confidence": 0.0, "strength": 0.0, "age": 9999, "status": "unavailable"}
     result = {
         "symbol": symbol,
         "signal": final_signal,
@@ -9941,6 +9969,37 @@ async def _autotrade_loop():
                 spread_bps = ((ask - bid) / max(mid, 1e-9)) * 10000
             signal = intel.get("signal", "WAIT")
             conf = float(intel.get("confidence", 0))
+
+            # ── Signal confirmation gate: require N consecutive matching cycles ──
+            _sc_enabled = bool(cfg.get("signalConfirmEnabled", True))
+            _sc_min_cycles = max(1, int(cfg.get("signalConfirmMinCycles", 2) or 2))
+            if _sc_enabled and signal in ("LONG", "SHORT"):
+                _sym_key = str(cfg.get("symbol", "")).upper()
+                _hist = _SIGNAL_HISTORY.setdefault(_sym_key, [])
+                _hist.append((now, str(signal).upper()))
+                # Keep only last 5 entries
+                if len(_hist) > 5:
+                    _SIGNAL_HISTORY[_sym_key] = _hist[-5:]
+                    _hist = _SIGNAL_HISTORY[_sym_key]
+                # Count consecutive matching signals from the end
+                _consecutive = 0
+                for _h_ts, _h_sig in reversed(_hist):
+                    if _h_sig == signal:
+                        _consecutive += 1
+                    else:
+                        break
+                if _consecutive < _sc_min_cycles:
+                    _autotrade_skip(
+                        "signal_not_confirmed",
+                        f"Skip: {cfg['symbol']} {signal} confirmed {_consecutive}/{_sc_min_cycles} cycles",
+                    )
+                    await asyncio.sleep(cfg.get("intervalSec", 20))
+                    continue
+            elif _sc_enabled and signal == "WAIT":
+                # Reset history on WAIT — next non-WAIT signal starts fresh
+                _sym_key = str(cfg.get("symbol", "")).upper()
+                _SIGNAL_HISTORY.pop(_sym_key, None)
+
             session_bias = _entry_session_bias(cfg, now)
             adaptive_min_conf = _learned_min_conf(
                 cfg["symbol"], float(cfg["minConfidence"]),
@@ -9948,7 +10007,7 @@ async def _autotrade_loop():
             )
             min_conf_floor = float(cfg.get("minConfidenceFloor", 0.30))
             min_conf_cap = float(cfg.get("minConfidenceCap", 0.95))
-            autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.80) or 0.80)
+            autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
             adaptive_min_conf = max(
                 min_conf_floor,
                 min(

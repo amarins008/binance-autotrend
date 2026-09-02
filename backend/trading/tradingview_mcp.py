@@ -717,6 +717,9 @@ class TradingViewClient:
                 if resp.status_code == 429:
                     backoff = float(self._cfg.get("tvBatchRetryBackoff", 2.0) or 2.0)
                     time.sleep(backoff)
+                    # Set a short global cooldown so individual get_signal() calls
+                    # don't also get429'd on the same scanner endpoint.
+                    self._disabled_until = time.time() + min(30, backoff * 2)
                 self._health_status["last_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 self._update_health(False)
                 return {}
@@ -795,12 +798,16 @@ class TradingViewClient:
             except Exception:
                 pass
             if strength >= block_strength:
-                return -999.0  # hard block sentinel (opposite side)
+                from trading.tv_constants import TV_HARD_CONFLICT_SENTINEL
+                return TV_HARD_CONFLICT_SENTINEL  # hard block sentinel (opposite side)
             if strength >= 0.45:
                 return -1.5 * boost * tv_result.confidence  # ~-0.072 @ conf 0.6
             return -0.5 * boost * tv_result.confidence
 
-        return boost * 0.3
+        # TV WAIT = explicit non-confirmation. Return 0 (neutral) so confluence
+        # scoring treats TV as absent rather than giving a misleading +0.024
+        # micro-boost that can't overcome the pipeline's tvWaitMinConf gate.
+        return 0.0
 
     def get_position_guidance(self, symbol: str, side: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         if not self.is_enabled():

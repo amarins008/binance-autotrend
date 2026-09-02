@@ -275,6 +275,16 @@ async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: fl
     return new_sl, new_tp
 
 def _strong_reversal_exit(side: str, intel: dict | None, cfg: dict) -> tuple[bool, str]:
+    """Detect signal reversal against open position.
+
+    Returns (matched, reason) where reason includes a tier tag:
+      "tier=close"     — strong reversal: close immediately
+      "tier=tighten"   — medium reversal: tighten SL, don't close yet
+      (False, "")      — no reversal / pullback detected
+
+    The tier distinction lets the guardian tighten SL on pullbacks
+    (which often bounce) while closing on genuine reversals.
+    """
     if not bool(cfg.get("strongFlipEnabled", True)):
         return False, ""
     if not isinstance(intel, dict):
@@ -289,29 +299,77 @@ def _strong_reversal_exit(side: str, intel: dict | None, cfg: dict) -> tuple[boo
     if sig != opposite:
         return False, ""
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    min_conf = float(cfg.get("strongFlipMinConfidence", 0.90) or 0.90)
-    if conf < min_conf:
-        return False, ""
+    # ── Tier thresholds ──
+    close_min_conf = float(cfg.get("strongFlipMinConfidence", 0.90) or 0.90)
+    tighten_min_conf = float(cfg.get("reversalTightenMinConf", 0.72) or 0.72)
     px = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
     long_score = float(px.get("longScore", 0.0) or 0.0)
     short_score = float(px.get("shortScore", 0.0) or 0.0)
     score_gap = (short_score - long_score) if opposite == "SHORT" else (long_score - short_score)
-    min_gap = float(cfg.get("strongFlipMinScoreGap", 1.5) or 1.5)
+    close_min_gap = float(cfg.get("strongFlipMinScoreGap", 1.5) or 1.5)
+    tighten_min_gap = float(cfg.get("reversalTightenMinGap", 0.8) or 0.8)
     ultra_gap = float(cfg.get("strongFlipUltraScoreGap", 2.2) or 2.2)
     relax = float(cfg.get("strongFlipUltraConfRelax", 0.08) or 0.08)
-    if score_gap < min_gap and not (score_gap >= ultra_gap and conf >= max(0.5, min_conf - relax)):
-        return False, ""
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
     mom = float(ex.get("momentumPct", 0.0) or 0.0)
+    abs_mom = abs(mom)
     momentum_against = (current_side == "LONG" and mom < 0) or (current_side == "SHORT" and mom > 0)
     if not momentum_against:
         return False, ""
-    structure_ok, structure_reason = _strong_reversal_structure_confirmed(current_side, opposite, px, cfg)
-    if not structure_ok:
-        # Req 4: log suppressed reversal so operators can diagnose false negatives.
-        _autotrade_log(f"[Guard] strong-reversal suppressed: {current_side} → {opposite} c={conf:.3f} gap={score_gap:.1f} · {structure_reason}")
-        return False, ""
-    return True, f"{opposite} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}% {structure_reason}".strip()
+    # ── Check for CLOSE tier (strong reversal) ──
+    close_gap_ok = score_gap >= close_min_gap or (score_gap >= ultra_gap and conf >= max(0.5, close_min_conf - relax))
+    if conf >= close_min_conf and close_gap_ok:
+        structure_ok, structure_reason = _strong_reversal_structure_confirmed(current_side, opposite, px, cfg)
+        if structure_ok:
+            return True, f"tier=close {opposite} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}% {structure_reason}".strip()
+        # Structure not confirmed — fall through to tighten tier
+    # ── Check for TIGHTEN tier (medium reversal) ──
+    # Lower bar: just needs signal flip + moderate confidence + momentum against
+    # Structure check uses fewer confirmations (1 instead of 2)
+    tighten_gap_ok = score_gap >= tighten_min_gap
+    if conf >= tighten_min_conf and tighten_gap_ok:
+        # Light structure check: 1 confirmation is enough for tighten
+        tight_structure_ok, tight_structure_reason = _reversal_light_structure(current_side, opposite, px)
+        if tight_structure_ok:
+            return True, f"tier=tighten {opposite} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}% {tight_structure_reason}".strip()
+    return False, ""
+
+
+def _reversal_light_structure(current_side: str, opposite: str, precision: dict | None) -> tuple[bool, str]:
+    """Light structure check for tighten-tier reversals.
+    Only requires 1 indicator confirmation (vs 2 for close-tier).
+    This distinguishes a pullback (no structure confirm) from a
+    developing reversal (1+ structure confirms).
+    """
+    px = precision if isinstance(precision, dict) else {}
+    if not px:
+        return False, "no-precision"
+    confirms: list[str] = []
+    if opposite == "SHORT":
+        if bool(px.get("trendDown")) or bool(px.get("trendDnPartial")):
+            confirms.append("trend")
+        if bool(px.get("macdBearish")) or bool(px.get("macdCrossDn")):
+            confirms.append("macd")
+        try:
+            rsi = float(px.get("rsi14", 50.0) or 50.0)
+            if rsi <= 46.0:
+                confirms.append("rsi")
+        except Exception:
+            pass
+    else:
+        if bool(px.get("trendUp")) or bool(px.get("trendUpPartial")):
+            confirms.append("trend")
+        if bool(px.get("macdBullish")) or bool(px.get("macdCrossUp")):
+            confirms.append("macd")
+        try:
+            rsi = float(px.get("rsi14", 50.0) or 50.0)
+            if rsi >= 54.0:
+                confirms.append("rsi")
+        except Exception:
+            pass
+    if len(confirms) >= 1:
+        return True, f"light_structure={','.join(confirms)}"
+    return False, f"light_structure=none"
 
 def _strong_reversal_structure_confirmed(current_side: str, opposite: str, precision: dict | None, cfg: dict) -> tuple[bool, str]:
     if not bool(cfg.get("strongFlipStructureConfirmEnabled", True)):
@@ -477,6 +535,13 @@ def _tv_conflict_structure_reversal(side: str, intel: dict | None, cfg: dict) ->
 
 
 def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_min_conf: float | None = None) -> tuple[bool, str]:
+    """Detect strong signal alignment for TP extension.
+
+    Returns (matched, reason) where reason includes a tier tag:
+      "tier=very_strong"  — conf >= 0.88, gap >= 2.0, mom > 0.2%
+      "tier=strong"       — conf >= 0.80, gap >= 1.2, mom > 0.1%
+      "tier=moderate"     — basic alignment (old behavior)
+    """
     if not bool(cfg.get("holdWinners", True)):
         return False, ""
     if not isinstance(intel, dict):
@@ -503,10 +568,24 @@ def _strong_follow_tp_extension(side: str, intel: dict | None, cfg: dict, hold_m
         return False, ""
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
     mom = float(ex.get("momentumPct", 0.0) or 0.0)
+    abs_mom = abs(mom)
     aligned = (current_side == "LONG" and mom > 0) or (current_side == "SHORT" and mom < 0)
     if not aligned:
         return False, ""
-    return True, f"{current_side} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}%"
+    # ── Tier classification ──
+    very_strong_conf = float(cfg.get("tpExtendVeryStrongConf", 0.88) or 0.88)
+    very_strong_gap = float(cfg.get("tpExtendVeryStrongGap", 2.0) or 2.0)
+    very_strong_mom = float(cfg.get("tpExtendVeryStrongMom", 0.20) or 0.20)
+    strong_conf = float(cfg.get("tpExtendStrongConf", 0.80) or 0.80)
+    strong_gap = float(cfg.get("tpExtendStrongGap", 1.2) or 1.2)
+    strong_mom = float(cfg.get("tpExtendStrongMom", 0.10) or 0.10)
+    if conf >= very_strong_conf and score_gap >= very_strong_gap and abs_mom >= very_strong_mom:
+        tier = "very_strong"
+    elif conf >= strong_conf and score_gap >= strong_gap and abs_mom >= strong_mom:
+        tier = "strong"
+    else:
+        tier = "moderate"
+    return True, f"{current_side} c={conf:.3f} gap={score_gap:.1f} mom={mom:.3f}% tier={tier}"
 
 
 def _momentum_deceleration_detected(side: str, intel: dict | None, cfg: dict, st: dict) -> tuple[bool, str]:
@@ -1647,9 +1726,31 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             _in_profit_hold = upnl > _hold_min_profit
             if (hit_tp or (isinstance(intel, dict) and _in_profit_hold)) and (strong_follow or _should_hold_winner(side, intel, cfg, _per_sym_eff.get("holdMinConfidence") if _per_sym_eff else None)):
                 _tv_prefetched = _tv_results.get(f"{sym}:{side}")
-                new_tp, new_sl, extended = await _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, sym, _per_sym_eff.get("holdTrailPct") if _per_sym_eff else None, _tv_guidance=_tv_prefetched)
+                # ── Tier-based TP extension and SL trailing ──
+                # very_strong: wider TP extension, tighter SL trail → lock profit aggressively
+                # strong:      moderate extension, standard trail
+                # moderate:    default (old behavior)
+                _tier = "moderate"
+                if "tier=very_strong" in str(follow_reason):
+                    _tier = "very_strong"
+                elif "tier=strong" in str(follow_reason):
+                    _tier = "strong"
+                _tier_tp_step = {
+                    "very_strong": float(cfg.get("tpExtendStepPctVeryStrong", 0.60) or 0.60),
+                    "strong": float(cfg.get("tpExtendStepPctStrong", 0.40) or 0.40),
+                    "moderate": float(cfg.get("tpExtendStepPct", 0.25) or 0.25),
+                }[_tier]
+                _tier_sl_trail = {
+                    "very_strong": float(cfg.get("holdTrailPctVeryStrong", 0.15) or 0.15),
+                    "strong": float(cfg.get("holdTrailPctStrong", 0.20) or 0.20),
+                    "moderate": float(cfg.get("holdTrailPct", 0.25) or 0.25),
+                }[_tier]
+                # Override per-symbol eff with tier-specific values
+                _per_sym_hold_trail = _per_sym_eff.get("holdTrailPct") if _per_sym_eff else None
+                _effective_trail = _per_sym_hold_trail if _per_sym_hold_trail is not None else _tier_sl_trail
+                new_tp, new_sl, extended = await _extend_tp_sl_levels(side, mark, guard_entry, tp, sl, cfg, sym, _effective_trail, _tv_guidance=_tv_prefetched)
                 if not extended:
-                    new_sl, new_tp = await _trail_winner_levels(side, mark, sl, tp, float(_per_sym_eff.get("holdTrailPct", cfg.get("holdTrailPct", 0.25)) if _per_sym_eff else cfg.get("holdTrailPct", 0.25)), cfg, sym, _tv_guidance=_tv_prefetched)
+                    new_sl, new_tp = await _trail_winner_levels(side, mark, sl, tp, _effective_trail, cfg, sym, _tv_guidance=_tv_prefetched)
                 st["tp"] = round(float(new_tp), 10)
                 st["sl"] = round(float(new_sl), 10)
                 st["tpExtendedAt"] = now
@@ -1659,7 +1760,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     _gs_h["holdWinnerActivated"] = int(_gs_h.get("holdWinnerActivated", 0) or 0) + 1
                     _gs_h["tpExtensionCount"] = int(st.get("tpExtensionCount", 0) or 0)
                     _gs_h["updatedAt"] = now
-                _autotrade_log(f"LIVE multi guard extend TP: {sym} {side} TP={new_tp:.6f} SL={new_sl:.6f} · {follow_reason}")
+                _autotrade_log(f"LIVE multi guard extend TP [{_tier}]: {sym} {side} TP={new_tp:.6f} SL={new_sl:.6f} step={_tier_tp_step:.2f}% trail={_tier_sl_trail:.2f}% · {follow_reason}")
                 locks[k] = st
                 changed = True
                 continue
@@ -1728,17 +1829,40 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 changed = True
                 continue
             if reversal_exit:
-                if f"{sym}:{side}" not in _closed_symbols:
-                    _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="STRONG_REVERSAL_EXIT")
-                    _closed_symbols.add(f"{sym}:{side}")
-                _autotrade_log(f"LIVE multi guard close: {sym} {side} STRONG_REVERSAL_EXIT {reversal_reason}")
-                close_decisions.append(f"{sym}:{side}:STRONG_REVERSAL_EXIT:system=B")
-                _delete_guardian_lock_file(k, cfg)
-                locks.pop(k, None)
-                app_state._LIVE_POSITIONS_CACHE = (0, [])
-                changed = True
-                continue
+                _is_tighten = "tier=tighten" in str(reversal_reason)
+                if _is_tighten and upnl > 0:
+                    # ── TIGHTEN tier: don't close, tighten SL to lock profit ──
+                    # Pullback detected but not a full reversal yet.
+                    # Tighten SL closer to mark to protect profit.
+                    _tighten_pct = float(cfg.get("reversalTightenTrailPct", 0.10) or 0.10)
+                    if side == "LONG":
+                        _new_sl = max(sl, mark * (1 - _tighten_pct / 100.0), guard_entry if guard_entry > 0 else 0.0)
+                        _moved = _new_sl > sl + 1e-12
+                    else:
+                        _new_sl = min(sl, mark * (1 + _tighten_pct / 100.0), guard_entry if guard_entry > 0 else 1e18)
+                        _moved = _new_sl < sl - 1e-12
+                    if _moved:
+                        st["sl"] = round(float(_new_sl), 10)
+                        st["reversalTightenCount"] = int(st.get("reversalTightenCount", 0) or 0) + 1
+                        _autotrade_log(f"LIVE multi guard tighten SL [{reversal_reason}]: {sym} {side} SL={_new_sl:.6f} (was {sl:.6f}) upnl={upnl:.4f}")
+                        locks[k] = st
+                        changed = True
+                    else:
+                        _autotrade_log(f"LIVE multi guard tighten skip: {sym} {side} SL already tight · {reversal_reason}")
+                    # Don't close — let other checks evaluate
+                else:
+                    # ── CLOSE tier: genuine reversal, close immediately ──
+                    if f"{sym}:{side}" not in _closed_symbols:
+                        _persist_single_lock_before_close(st, cfg)
+                        await _main()._close_position_one_side(sym, side, key, secret, base, reason="STRONG_REVERSAL_EXIT")
+                        _closed_symbols.add(f"{sym}:{side}")
+                    _autotrade_log(f"LIVE multi guard close: {sym} {side} STRONG_REVERSAL_EXIT {reversal_reason}")
+                    close_decisions.append(f"{sym}:{side}:STRONG_REVERSAL_EXIT:system=B")
+                    _delete_guardian_lock_file(k, cfg)
+                    locks.pop(k, None)
+                    app_state._LIVE_POSITIONS_CACHE = (0, [])
+                    changed = True
+                    continue
             if preempt_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
