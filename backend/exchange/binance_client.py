@@ -11,6 +11,8 @@ import time
 import httpx
 from fastapi import HTTPException
 
+from exceptions import ExchangeError
+from logger import get_logger, log_exception
 from services import app_state
 from services.cache_registry import (
     DATA_GET_CONNECT_TIMEOUT_SEC,
@@ -27,6 +29,8 @@ CONNECTOR_MODE = os.getenv("CONNECTOR_MODE", "auto").lower()
 
 _HTTP: httpx.AsyncClient | None = None
 _DATA_HTTP: httpx.AsyncClient | None = None
+
+_log = get_logger("exchange.binance_client")
 
 
 class BinanceClient:
@@ -160,12 +164,14 @@ async def _data_get(path: str) -> httpx.Response:
             _record_data_provider_health(False, e, path)
             # Stop retrying once we are on the final attempt, or on non-transient errors.
             if attempt + 1 >= DATA_GET_MAX_ATTEMPTS or not _is_retryable_http_exc(e):
-                raise
+                if not isinstance(e, (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError, asyncio.TimeoutError)):
+                    log_exception(_log, e, {"path": path, "symbol": path.split("symbol=")[-1][:16] if "symbol=" in path else ""})
+                raise ExchangeError(f"market data fetch failed: {e}") from e
             await asyncio.sleep(0.35 * (attempt + 1))
 
     if last_err is not None:
-        raise last_err
-    raise RuntimeError("data_get failed")
+        raise ExchangeError(f"market data fetch failed after {DATA_GET_MAX_ATTEMPTS} attempts: {last_err}") from last_err
+    raise ExchangeError("market data fetch failed")
 
 def _binance_base():
     # Default to mainnet (false) so LIVE mode never accidentally hits testnet.

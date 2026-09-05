@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+import re
 import time
+from decimal import Decimal, ROUND_DOWN
 
 import httpx
 from fastapi import HTTPException
@@ -13,9 +16,21 @@ from exchange.binance_client import (
     _binance_base,
     _data_get,
     _exchange_filters,
+    _get_um_client,
+    _signed_request,
 )
 from services import app_state
 from services.config_paths import TRADES_LOG_PATH
+from trading.state_ops import (
+    autotrade_log as _autotrade_log,
+    entry_snapshot_from_intel as _entry_snapshot_from_intel,
+    last_decision_intel as _last_decision_intel,
+)
+from trading.risk import _effective_tp_sl, calc_tp_sl_prices as _calc_tp_sl_prices
+from trading.learning import (
+    _record_learning_trade,
+    _record_learning_trade_async,
+)
 
 AUTO_TRADE = app_state.AUTO_TRADE
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
@@ -24,62 +39,107 @@ DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "1.8"))
 DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "0.8"))
 
 
-def _main():
-    import main as m
-    return m
+def _normalize_symbol(symbol: str):
+    sym = symbol.upper().replace("/", "")
+    if not re.fullmatch(r"[A-Z0-9]{6,20}", sym):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+    if not (sym.endswith("USDT") or sym.endswith("BUSD")):
+        raise HTTPException(status_code=400, detail="Only USDT/BUSD futures symbols are allowed")
+    return sym
 
 
-def _get_um_client(*args, **kwargs):
-    return _main()._get_um_client(*args, **kwargs)
+def _guardrails(mark_price: float, quantity: float, leverage: int):
+    if app_state.RISK["kill_switch"]:
+        raise HTTPException(status_code=403, detail="Kill-switch enabled")
+    if app_state.DAILY_REALIZED_PNL <= -abs(app_state.RISK["max_daily_loss"]):
+        raise HTTPException(status_code=403, detail="Max daily loss reached")
+    if leverage > app_state.RISK["max_leverage"]:
+        raise HTTPException(status_code=403, detail=f"Leverage {leverage} > limit {app_state.RISK['max_leverage']}")
+    notional = mark_price * quantity
+    if notional > app_state.RISK["max_notional"]:
+        raise HTTPException(status_code=403, detail=f"Notional {notional:.2f} > limit {app_state.RISK['max_notional']}")
 
 
-async def _signed_request(*args, **kwargs):
-    return await _main()._signed_request(*args, **kwargs)
+def _floor_to_step(value: float, step: float):
+    if step <= 0:
+        return value
+    n = math.floor(value / step)
+    return n * step
 
 
-# Lazy delegates to main during incremental refactor
+def _format_qty_by_step(value: float, step_str: str):
+    step_dec = Decimal(step_str)
+    val_dec = Decimal(str(value))
+    q = val_dec.quantize(step_dec, rounding=ROUND_DOWN)
+    s = format(q, "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
 
-def _normalize_symbol(*args, **kwargs):
-    return _main()._normalize_symbol(*args, **kwargs)
 
-def _autotrade_log(*args, **kwargs):
-    return _main()._autotrade_log(*args, **kwargs)
+def _round_to_tick(value: float, tick: float):
+    if tick <= 0:
+        return value
+    n = round(value / tick)
+    return n * tick
 
-def _guardrails(*args, **kwargs):
-    return _main()._guardrails(*args, **kwargs)
 
-def _floor_to_step(*args, **kwargs):
-    return _main()._floor_to_step(*args, **kwargs)
+def _format_price_by_tick(value: float, tick_str: str):
+    tick_dec = Decimal(tick_str)
+    val_dec = Decimal(str(value))
+    q = val_dec.quantize(tick_dec, rounding=ROUND_DOWN)
+    s = format(q, "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
 
-def _format_qty_by_step(*args, **kwargs):
-    return _main()._format_qty_by_step(*args, **kwargs)
 
-def _round_to_tick(*args, **kwargs):
-    return _main()._round_to_tick(*args, **kwargs)
+def _qty_retry_candidates(qty: float, step_str: str, qty_precision: int, min_qty: float):
+    # Some futures symbols reject otherwise valid step-size quantities unless precision is coarser.
+    dec = Decimal(str(qty))
+    cands: list[str] = []
+    base = _format_qty_by_step(qty, step_str)
+    cands.append(base)
+    start_p = max(0, min(8, int(qty_precision)))
+    for p in range(start_p, -1, -1):
+        q = dec.quantize(Decimal(10) ** -p, rounding=ROUND_DOWN)
+        s = format(q, "f")
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        if not s:
+            continue
+        try:
+            fv = float(s)
+        except Exception:
+            continue
+        if fv < float(min_qty):
+            continue
+        cands.append(s)
+    # stable unique
+    out: list[str] = []
+    seen = set()
+    for x in cands:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
 
-def _format_price_by_tick(*args, **kwargs):
-    return _main()._format_price_by_tick(*args, **kwargs)
 
-def _calc_tp_sl_prices(*args, **kwargs):
-    return _main()._calc_tp_sl_prices(*args, **kwargs)
+def _live_lock_key(symbol: str, side: str) -> str:
+    return f"{str(symbol).upper()}:{str(side).upper()}"
 
-def _qty_retry_candidates(*args, **kwargs):
-    return _main()._qty_retry_candidates(*args, **kwargs)
 
-def _entry_snapshot_for_position(*args, **kwargs):
-    return _main()._entry_snapshot_for_position(*args, **kwargs)
+def _entry_snapshot_for_position(symbol: str, side: str) -> dict:
+    sym = str(symbol or "").upper().strip()
+    sd = str(side or "").upper().strip()
+    locks = AUTO_TRADE.get("liveProfitLocks")
+    if isinstance(locks, dict):
+        lock = locks.get(_live_lock_key(sym, sd))
+        if isinstance(lock, dict) and isinstance(lock.get("entrySnapshot"), dict):
+            return dict(lock.get("entrySnapshot") or {})
+    return _entry_snapshot_from_intel(sym, sd, _last_decision_intel(sym, max_age_sec=30))
 
-def _entry_snapshot_from_intel(*args, **kwargs):
-    return _main()._entry_snapshot_from_intel(*args, **kwargs)
-
-def _last_decision_intel(*args, **kwargs):
-    return _main()._last_decision_intel(*args, **kwargs)
-
-def _record_learning_trade(*args, **kwargs):
-    return _main()._record_learning_trade(*args, **kwargs)
-
-async def _record_learning_trade_async(*args, **kwargs):
-    return await _main()._record_learning_trade_async(*args, **kwargs)
 
 async def fetch_mark_price(symbol: str):
     symbol = _normalize_symbol(symbol)
@@ -476,8 +536,8 @@ async def _cancel_all_open_orders(symbol: str, key: str, secret: str, base: str)
         print(f"[Cancel Orders] {symbol} algo warning: {exc}")
 
 async def _close_position(symbol: str, key: str, secret: str, base: str):
-    hedge_mode = await _main()._is_hedge_mode(key, secret, base)
-    close_mark = await _main().fetch_mark_price(symbol)
+    hedge_mode = await _is_hedge_mode(key, secret, base)
+    close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
     if client:
         pos = await asyncio.to_thread(client.get_position_risk, symbol=symbol)
@@ -540,18 +600,17 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
     target = side_to_close.upper()
     if target not in ("LONG", "SHORT"):
         raise HTTPException(status_code=400, detail="side_to_close must be LONG or SHORT")
-    hedge_mode = await _main()._is_hedge_mode(key, secret, base)
-    close_mark = await _main().fetch_mark_price(symbol)
+    hedge_mode = await _is_hedge_mode(key, secret, base)
+    close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
     if client:
         pos = await asyncio.to_thread(client.get_position_risk, symbol=symbol)
     else:
         pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {"symbol": symbol})
     rows = pos if isinstance(pos, list) else ([pos] if isinstance(pos, dict) else [])
+    await _cancel_all_open_orders(symbol, key, secret, base)
     closed = []
     learned = []
-    # Cancel all open orders first to avoid Binance -4067 when changing position side
-    await _cancel_all_open_orders(symbol, key, secret, base)
     for p in rows:
         amt = float(p.get("positionAmt", 0) or 0)
         if amt == 0:
@@ -567,17 +626,20 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
         else:
             payload["reduceOnly"] = "true"
         if client:
-            closed.append(await asyncio.to_thread(client.new_order, **payload))
+            order_resp = await asyncio.to_thread(client.new_order, **payload)
         else:
-            closed.append(await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload))
+            order_resp = await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload)
+        closed.append(order_resp)
         entry = float(p.get("entryPrice", 0) or 0)
         if entry > 0 and qty > 0:
-            pnl = (close_mark - entry) * qty if ps == "LONG" else (entry - close_mark) * qty
+            fill_px = _extract_fill_price(order_resp)
+            exit_px = fill_px if fill_px and fill_px > 0 else close_mark
+            pnl = (exit_px - entry) * qty if ps == "LONG" else (entry - exit_px) * qty
             entry_snapshot = _entry_snapshot_for_position(symbol, ps)
             learned.append({
                 "side": ps,
                 "entry": entry,
-                "exit": close_mark,
+                "exit": exit_px,
                 "qty": qty,
                 "pnl": round(float(pnl), 6),
                 "reason": reason,
@@ -592,10 +654,10 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
             })
     for t in learned:
-        await _record_learning_trade_async(symbol, t, "LIVE")
+        _record_learning_trade(symbol, t, "LIVE")
     return {"closed": closed}
 
-async def place_futures_order(symbol: str, side: str, quantity: float | None = None, usdt_amount: float | None = None, leverage: int | None = None, margin_type: str | None = None, tp_pct: float | None = None, sl_pct: float | None = None, trailing_stop_pct: float = 0.0, mark_price: float | None = None):
+async def place_futures_order(symbol: str, side: str, quantity: float | None = None, usdt_amount: float | None = None, leverage: int | None = None, margin_type: str | None = None, tp_pct: float | None = None, sl_pct: float | None = None, trailing_stop_pct: float = 0.0):
     symbol = _normalize_symbol(symbol)
     leverage = leverage or DEFAULT_LEVERAGE
     margin_type = (margin_type or DEFAULT_MARGIN_TYPE).upper()
@@ -606,14 +668,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
     secret = os.getenv("BINANCE_API_SECRET")
     base = _binance_base()
 
-    # --- Early-return for WAIT / CLOSE (no quantity needed) ---
-    if side == "WAIT":
-        return {"mode": "noop", "message": "WAIT action does not place an order."}
-
-    if side == "CLOSE":
-        return {"mode": "live", "response": await _close_position(symbol, key, secret, base)}
-
-    mark = mark_price if mark_price is not None else await _main().fetch_mark_price(symbol)
+    mark = await fetch_mark_price(symbol)
     if quantity is None and usdt_amount is None:
         raise HTTPException(status_code=400, detail="Please provide quantity or usdtAmount")
     if quantity is None and usdt_amount is not None:
@@ -639,24 +694,17 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
                 "inputUsdtAmount": usdt_amount,
             },
         )
-    # Binance minNotional filter (e.g. 20 USDT on some symbols)
-    min_notional = float(filters.get("minNotional", 0) or 0)
-    if min_notional > 0 and (qty * mark) < min_notional:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "NOTIONAL_TOO_SMALL",
-                "message": f"Order notional too small for {symbol}",
-                "minNotional": min_notional,
-                "actualNotional": round(qty * mark, 4),
-                "inputUsdtAmount": usdt_amount,
-            },
-        )
 
     if not key or not secret:
         return {"mode": "mock", "symbol": symbol, "side": side, "quantity": qty, "usdtAmount": usdt_amount, "leverage": leverage, "marginType": margin_type, "tpPct": tp_pct, "slPct": sl_pct, "trailingStopPct": trailing_stop_pct}
 
-    hedge_mode = await _main()._is_hedge_mode(key, secret, base)
+    if side == "WAIT":
+        return {"mode": "noop", "message": "WAIT action does not place an order."}
+
+    if side == "CLOSE":
+        return {"mode": "live", "response": await _close_position(symbol, key, secret, base)}
+
+    hedge_mode = await _is_hedge_mode(key, secret, base)
     position_side = "LONG" if side == "LONG" else "SHORT"
     order_side = "BUY" if side == "LONG" else "SELL" if side == "SHORT" else None
     if not order_side:
@@ -667,8 +715,6 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
     client = _get_um_client(key, secret, base)
     entry = None
     last_err = None
-    # Cancel all open orders first to avoid Binance -4067 when changing position side
-    await _cancel_all_open_orders(symbol, key, secret, base)
     qty_candidates = _qty_retry_candidates(qty, filters.get("stepSizeStr", "0.001"), int(filters.get("qtyPrecision", 3)), float(filters.get("minQty", 0.0)))
     for qtry in qty_candidates:
         try:
@@ -693,34 +739,22 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         except Exception as e:
             last_err = e
             txt = str(e)
-            # Retry on precision errors (try coarser qty)
             if ("-1111" in txt) or ("Precision is over the maximum" in txt):
-                continue
-            # Retry on transient network / exchange errors
-            transient_codes = ("-1003", "-1006", "-1007", "-1008", "-1013", "-1014", "-1021", "-1022")
-            if any(code in txt for code in transient_codes) or isinstance(e, (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError)):
-                _autotrade_log(f"Entry transient error for {symbol}: {type(e).__name__}; will retry with next qty candidate")
                 continue
             raise
     if entry is None and last_err is not None:
         raise last_err
 
-    # Use actually executed qty for TP/SL (handles partial fills)
-    filled_qty = qty
-    if isinstance(entry, dict):
-        exec_qty = entry.get("executedQty")
-        if exec_qty is not None:
-            try:
-                parsed = float(exec_qty)
-                if parsed > 0:
-                    filled_qty = parsed
-            except (TypeError, ValueError):
-                pass
-
     protective = None
     entry_snapshot = _entry_snapshot_from_intel(symbol, side, _last_decision_intel(symbol))
     try:
-        protective = await _place_tp_sl(symbol, side, filled_qty, mark, tp_pct, sl_pct, key, secret, base, filters["tickSize"], filters.get("tickSizeStr", "0.0001"), hedge_mode, position_side)
+        from trading.symbol_autotuner import snapshot_active_params
+        _eff_at_open = _effective_tp_sl(symbol, AUTO_TRADE.get("config") or {}, _last_decision_intel(symbol))
+        entry_snapshot["params_at_entry"] = snapshot_active_params(symbol, _eff_at_open)
+    except Exception:
+        pass
+    try:
+        protective = await _place_tp_sl(symbol, side, qty, mark, tp_pct, sl_pct, key, secret, base, filters["tickSize"], filters.get("tickSizeStr", "0.0001"), hedge_mode, position_side)
     except Exception as e:
         protective = {"warning": str(e)}
     if isinstance(protective, dict) and protective.get("warning"):
@@ -737,7 +771,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
             "lockUsdt": _existing_lock.get("lockUsdt", 0.0),
             "symbol": symbol,
             "side": side,
-            "qty": round(float(filled_qty), 10),
+            "qty": round(float(qty), 10),
             "leverage": int(leverage),
             "entryMark": round(float(mark), 10),
             "tp": round(float(tp_price), 10),
@@ -750,17 +784,4 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         AUTO_TRADE["liveProfitLocks"] = locks
         _autotrade_log(f"LIVE profit lock seeded for {symbol} {side} TP={tp_price:.6f} SL={sl_price:.6f}")
     trailing = await _place_trailing_stop(symbol, side, key, secret, base, trailing_stop_pct)
-    # Execution quality: track real fill vs expected mark price
-    fill_px = _extract_fill_price(entry)
-    exec_quality = {}
-    if fill_px and mark > 0:
-        actual_slippage_bps = abs((fill_px - mark) / max(mark, 1e-9)) * 10000.0
-        exec_quality = {
-            "expectedMark": round(float(mark), 10),
-            "fillPrice": round(float(fill_px), 10),
-            "slippageBps": round(float(actual_slippage_bps), 4),
-            "qty": float(qty),
-            "timestamp": int(time.time()),
-        }
-        _autotrade_log(f"Execution quality {symbol} {side}: mark={mark:.6f} fill={fill_px:.6f} slippage={actual_slippage_bps:.2f} bps")
-    return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": None, "trailing": trailing, "entrySnapshot": entry_snapshot, "execQuality": exec_quality}
+    return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": None, "trailing": trailing, "entrySnapshot": entry_snapshot}

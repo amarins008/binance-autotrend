@@ -37,8 +37,12 @@ def _round1(v: float | None) -> float | int:
 
 def collect() -> dict:
     """Snapshot of infra subsystems. Cheap to call (no IO, no deep scans)."""
-    # Lazy imports — services can be imported by main without circulars.
-    from services import cache_registry
+    # Resolve cache/memory collaborators through the DI container so this module
+    # depends on interfaces instead of importing module globals directly.
+    from container import get as _svc
+    cache_registry = _svc("cache_registry")
+    memory_monitor_mod = _svc("memory")
+    cache_mod = _svc("cache")
     from exchange.binance_client import (
         get_server_time_offset_ms,
         get_server_time_sync_age_sec,
@@ -109,12 +113,31 @@ def collect() -> dict:
         "lastError": str(dph.get("lastError", "") or "")[:200],
     }
 
+    # --- Process memory ---
+    try:
+        mem = memory_monitor_mod.periodic_memory_snapshot() or {}
+        memory_block: dict[str, Any] = {
+            "rssMb": float(mem.get("rssMb", 0.0) or 0.0),
+            "level": str(mem.get("level", "unknown")),
+            "ok": bool(mem.get("ok", True)),
+        }
+    except Exception:
+        memory_block = {"rssMb": 0.0, "level": "unknown", "ok": True}
+
+    # --- New TradingCache layer (hit/miss/eviction stats) ---
+    try:
+        cache_stats = cache_mod.all_cache_stats()
+    except Exception:
+        cache_stats = {}
+
     out: dict[str, Any] = {
         "asOf": now,
         "binance": binance_block,
         "klinesCache": klines_block,
         "intelCache": intel_block,
         "dataProvider": data_block,
+        "memory": memory_block,
+        "cacheStats": cache_stats,
         "score": 100,
         "issues": [],
         "warnings": 0,
@@ -169,6 +192,17 @@ def collect() -> dict:
     if klines_block["inFlight"] >= _INFLIGHT_PILEUP:
         score -= 15
         issues.append(f"klines_inflight_pileup({klines_block['inFlight']})")
+        warnings += 1
+
+    # --- Process memory check ---
+    mem_level = memory_block.get("level")
+    if mem_level == "critical":
+        score -= 40
+        issues.append("memory_critical")
+        errors += 1
+    elif mem_level == "warning":
+        score -= 15
+        issues.append("memory_high")
         warnings += 1
 
     out["score"] = max(0, min(100, score))

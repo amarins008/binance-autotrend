@@ -7,7 +7,6 @@ import time
 
 from fastapi import Body
 
-from services.cache_registry import _SYMBOL_SAMPLE_COUNT_CACHE
 from services.config_paths import TRADES_LOG_PATH, VAULT_DIR
 
 SYMBOL_PROFILES_PATH = VAULT_DIR / "symbol_profiles.json"
@@ -20,6 +19,7 @@ from services.learning_profiles import _ensure_vault, _load_single_profile
 
 
 from trading.trade_log import _live_closed_trades_from_log
+from trading.per_symbol_storage import PerSymbolStorage
 
 def _rolling_symbol_perf(*args, **kwargs):
     from main import _rolling_symbol_perf as rolling
@@ -77,7 +77,7 @@ def _symbol_volatility_score(symbol: str, intel: dict | None = None) -> dict:
         tier = "high"
         tp_mult = 1.30       # wider TP — need room for swings
         sl_mult = 1.20       # slightly wider SL — avoid premature stops
-        cap_mult = 0.85      # was 0.65 — raised to avoid orders falling below Binance minimum notional
+        cap_mult = 0.65      # smaller cap — riskier coin
         lock_mult = 1.40     # lock profits later (give trades room)
 
     return {
@@ -106,6 +106,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 1.10,
         "sl_mult": 0.90,
         "lock_trigger_mult": 0.95,
+        "holdTrail_base": 0.28,
+        "holdMinConf_base": 0.72,
         "min_conf_floor": 0.50,
         "max_trade_notional_mult": 1.15,
         "scan_long_bias": 0.55,
@@ -117,6 +119,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 0.85,
         "sl_mult": 0.85,
         "lock_trigger_mult": 0.75,
+        "holdTrail_base": 0.20,
+        "holdMinConf_base": 0.76,
         "min_conf_floor": 0.62,
         "max_trade_notional_mult": 0.95,
         "scan_long_bias": 0.50,
@@ -128,6 +132,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 1.35,
         "sl_mult": 1.20,
         "lock_trigger_mult": 1.50,
+        "holdTrail_base": 0.22,
+        "holdMinConf_base": 0.74,
         "min_conf_floor": 0.65,
         "max_trade_notional_mult": 0.60,
         "scan_long_bias": 0.50,
@@ -139,6 +145,8 @@ SYMBOL_GROUP_DEFS: dict[str, dict] = {
         "tpsl_mult": 0.95,
         "sl_mult": 0.80,
         "lock_trigger_mult": 0.50,
+        "holdTrail_base": 0.18,
+        "holdMinConf_base": 0.78,
         "min_conf_floor": 0.70,
         "max_trade_notional_mult": 0.40,
         "scan_long_bias": 0.50,
@@ -190,8 +198,11 @@ def _symbol_group(symbol: str) -> str:
         return SYMBOL_GROUP_DEFAULT[sym]
     # Otherwise consult the learned profile (in case an autotune decided
     # this coin belongs to a different group based on observed behavior).
-    profiles = _load_symbol_profiles() or {}
-    pr = profiles.get(sym) if isinstance(profiles, dict) else None
+    try:
+        _ps = PerSymbolStorage(VAULT_DIR, sym)
+        pr = _ps.load_symbol_profile()
+    except Exception:
+        pr = None
     if isinstance(pr, dict):
         grp = pr.get("group")
         if isinstance(grp, str) and grp in SYMBOL_GROUP_DEFS:
@@ -206,32 +217,18 @@ SYMBOL_PROFILE_MIN_TRADES = 8
 
 
 def _symbol_sample_count(symbol: str) -> int:
-    """Number of closed LIVE trades recorded for ``symbol`` (capped to last 30d).
-    Cached in memory with a short TTL to avoid repeated file reads during scans.
-    """
-    global _SYMBOL_SAMPLE_COUNT_CACHE
-    sym = str(symbol or "").upper().strip()
-    if not sym:
-        return 0
-    now = time.time()
-    cached = _SYMBOL_SAMPLE_COUNT_CACHE.get(sym)
-    if cached:
-        cached_ts, cached_count = cached
-        if now - cached_ts < 5.0:
-            return cached_count
+    """Number of closed LIVE trades recorded for ``symbol``."""
     try:
-        rows = _live_closed_trades_from_log(symbol=sym, mode="LIVE")
+        sym = str(symbol or "").upper().strip()
+        if not sym:
+            return 0
+        storage = PerSymbolStorage(VAULT_DIR, sym)
+        trades = storage.load_trades(mode="LIVE")
+        if not isinstance(trades, list):
+            return 0
+        return len(trades)
     except Exception:
         return 0
-    if not isinstance(rows, list):
-        return 0
-    count = len(rows)
-    _SYMBOL_SAMPLE_COUNT_CACHE[sym] = (now, count)
-    # Limit cache size
-    if len(_SYMBOL_SAMPLE_COUNT_CACHE) > 100:
-        oldest = min(_SYMBOL_SAMPLE_COUNT_CACHE, key=lambda k: _SYMBOL_SAMPLE_COUNT_CACHE[k][0])
-        del _SYMBOL_SAMPLE_COUNT_CACHE[oldest]
-    return count
 
 
 def _load_symbol_profiles() -> dict:
@@ -535,8 +532,11 @@ def _symbol_effective_profile(symbol: str, cfg: dict | None = None) -> dict:
 
     n_trades = _symbol_sample_count(sym)
     if n_trades >= SYMBOL_PROFILE_MIN_TRADES:
-        learned = _load_symbol_profiles() or {}
-        sym_profile = learned.get(sym) if isinstance(learned.get(sym), dict) else None
+        try:
+            _ps = PerSymbolStorage(VAULT_DIR, sym)
+            sym_profile = _ps.load_symbol_profile()
+        except Exception:
+            sym_profile = None
         if isinstance(sym_profile, dict):
             for k, v in sym_profile.items():
                 if k in ("group", "source"):

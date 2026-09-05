@@ -2,19 +2,37 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
+from functools import wraps
 from pathlib import Path
 
+from obsidian_memory import append_trade_memory
 from services import app_state
 from services import cache_registry as _cache_registry
 from services.config_paths import TRADES_LOG_PATH, VAULT_DIR
+from trading.per_symbol_storage import per_symbol_lock
+from trading.per_symbol_context import PerSymbolContext
+from trading.shared_cache_layer import get_shared_cache
 from trading.trade_stats import (
     _aggregate_live_trade_stats_from_log,
     _today_entry_performance_guard,
+    _append_trade_log,
 )
-from trading.trade_log import _live_closed_trades_from_log
+from trading.trade_log import _live_closed_trades_from_log, _live_closed_trades_from_symbol
+from trading.risk import (
+    AUTOTRADE_EXTRA_COST_BPS,
+    AUTOTRADE_TAKER_FEE_BPS_PER_SIDE,
+    _autotrade_leverage_bounds,
+    _autotrade_leverage_cap,
+    fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
+)
+from trading.state_ops import last_decision_intel as _last_decision_intel
+from trading.state_ops import agent_mark as _agent_mark
+from services.learning_profiles import _load_single_profile
+from trading.symbol_profiles import _symbol_effective_profile
 
 # Module-level shared mutable state
 _SESSION_BIAS_CACHE: dict = _cache_registry._SESSION_BIAS_CACHE
@@ -23,11 +41,6 @@ _SESSION_BIAS_CACHE: dict = _cache_registry._SESSION_BIAS_CACHE
 SCAN_EVENTS_PATH = VAULT_DIR / "scan_events.jsonl"
 
 AUTO_TRADE = app_state.AUTO_TRADE
-
-
-def _main():
-    import main as m
-    return m
 
 
 def _recent_payoff_loss_guard(cfg: dict | None, symbol: str | None = None) -> dict:
@@ -484,7 +497,7 @@ def _market_regime_sizing(cfg: dict, intel: dict | None, trades: list | None = N
     # ── Calm / Range + winning streak -> scale UP ──
     if regime_name in ("CALM", "RANGE", "UNKNOWN"):
         try:
-            state = _main()._recent_live_result_streak_state(
+            state = _recent_live_result_streak_state(
                 trades if isinstance(trades, list) else [],
                 int(cfg.get("supervisorSizeLookbackTrades", 12) or 12),
             )
@@ -700,7 +713,7 @@ def _symbol_risk_tune_from_recent_trades(symbol: str, trades: list[dict], cfg: d
     size_mult = float(size_mult) * float(_target_profit_mult)
     size_mult = max(0.30, min(5.0, size_mult))
     leverage_mult = max(0.55, min(1.18, float(leverage_mult)))
-    lev_min, lev_max = _main()._autotrade_leverage_bounds(cfg) if cfg else (1, _main()._autotrade_leverage_cap())
+    lev_min, lev_max = _autotrade_leverage_bounds(cfg) if cfg else (1, _autotrade_leverage_cap())
     recommended_max = max(lev_min, min(25, int(round(float(lev_max) * float(leverage_mult)))))
     return {
         "active": True,
@@ -929,9 +942,570 @@ def _recent_live_loss_streak_states_by_symbol(limit: int = 8) -> dict[str, dict]
     return out
 
 
-# Re-export for backward compatibility
+def _clamp_float(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def _estimate_trade_edge_usdt(usdt_amount: float, tp_pct: float, max_slippage_bps: float) -> tuple[float, float, float]:
+    # Cost model = taker fee entry+exit + micro cost buffer + half of slippage budget.
+    gross_profit = float(usdt_amount) * (float(tp_pct) / 100.0)
+    cost_bps = (2.0 * AUTOTRADE_TAKER_FEE_BPS_PER_SIDE) + AUTOTRADE_EXTRA_COST_BPS + max(0.0, float(max_slippage_bps) * 0.5)
+    est_cost = float(usdt_amount) * (cost_bps / 10000.0)
+    net_profit = gross_profit - est_cost
+    return gross_profit, est_cost, net_profit
+
+
+def _last_decision_entry_metrics(symbol: str | None = None) -> dict:
+    intel = _last_decision_intel(symbol)
+    if not isinstance(intel, dict):
+        return {}
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    return {
+        "confidence": float(intel.get("confidence", 0.0) or 0.0),
+        "score": float(intel.get("score", intel.get("weightedScore", 0.0)) or 0.0),
+        "spreadBps": float(ex.get("spreadBps", 0.0) or 0.0),
+        "momentumPct": float(ex.get("momentumPct", 0.0) or 0.0),
+    }
+
+
+def _trade_reward_components(trade: dict, cfg: dict) -> dict:
+    pnl = float((trade or {}).get("pnl", 0.0) or 0.0)
+    reason = str((trade or {}).get("reason", "") or "").upper()
+    side = str((trade or {}).get("side", "") or "").upper()
+    sign = 1.0 if side == "LONG" else (-1.0 if side == "SHORT" else 0.0)
+    last_metrics = _last_decision_entry_metrics()
+    conf = float((trade or {}).get("entryConfidence", last_metrics.get("confidence", 0.0)) or 0.0)
+    min_conf = float(cfg.get("minConfidence", 0.65) or 0.65)
+    spread_bps = float((trade or {}).get("entrySpreadBps", last_metrics.get("spreadBps", 0.0)) or 0.0)
+    max_spread = max(1.0, float(cfg.get("maxSpreadBps", 20.0) or 20.0))
+    pattern_bias = float((trade or {}).get("patternBias", 0.0) or 0.0)
+    pattern_score = float((trade or {}).get("patternScore", 0.0) or 0.0)
+    entry_delta = _clamp_float((conf - min_conf) / 0.25, -1.0, 1.0) * float(cfg.get("learningRewardEntryTiming", 0.25) or 0.25)
+    spread_delta = _clamp_float((max_spread - spread_bps) / max_spread, -1.0, 1.0) * 0.12
+    pattern_alignment = _clamp_float(sign * pattern_bias, -1.0, 1.0)
+    pattern_delta = _clamp_float(pattern_alignment * 0.18 + (pattern_score / 500.0), -0.28, 0.28)
+    tp_pct = float(cfg.get("takeProfitPct", 1.2) or 1.2)
+    sl_pct = max(0.01, float(cfg.get("stopLossPct", 0.8) or 0.8))
+    min_rr = float(cfg.get("minRiskRewardRatio", 1.35) or 1.35)
+    rr = tp_pct / sl_pct
+    rr_delta = 0.12 if rr >= min_rr else -0.22
+    edge_delta = 0.0
+    try:
+        qty = abs(float((trade or {}).get("qty", 0.0) or 0.0))
+        entry = abs(float((trade or {}).get("entry", 0.0) or 0.0))
+        notional = qty * entry
+        if notional > 0:
+            _gross, cost, net = _estimate_trade_edge_usdt(notional, tp_pct, float(cfg.get("maxSlippageBps", 20.0) or 20.0))
+            min_net = _fee_edge_min_net_usdt(cfg, cost, notional)
+            edge_delta = 0.10 if net > min_net else -0.16
+    except Exception:
+        edge_delta = 0.0
+    drawdown_delta = 0.0
+    try:
+        max_adverse = abs(float((trade or {}).get("maxAdversePct", 0.0) or 0.0))
+        if max_adverse > 0:
+            drawdown_delta = -_clamp_float(max_adverse / max(sl_pct, 0.01), 0.0, 1.0) * 0.22
+    except Exception:
+        drawdown_delta = 0.0
+    time_delta = 0.0
+    opened = int(float((trade or {}).get("openedAt", 0) or 0))
+    closed = int(float((trade or {}).get("closedAt", 0) or 0))
+    if opened > 0 and closed >= opened:
+        minutes = (closed - opened) / 60.0
+        if pnl > 0 and minutes <= float(cfg.get("learningFastWinMinutes", 45) or 45):
+            time_delta += 0.12
+        elif pnl < 0 and minutes <= 8:
+            time_delta -= 0.14
+        elif pnl < 0 and minutes >= 90:
+            time_delta -= 0.08
+    guard_delta = 0.0
+    if pnl > 0 and ("TP" in reason or "TARGET_MAX" in reason):
+        guard_delta += float(cfg.get("learningRewardTpHitBase", 0.2) or 0.2)
+        guard_delta += float(cfg.get("learningRewardTpScalePerUsdt", 0.35) or 0.35) * min(abs(pnl), 3.0) / 3.0
+    if pnl > 0 and ("PROFIT" in reason or "GUARD" in reason or "TRAIL" in reason):
+        guard_delta += float(cfg.get("learningRewardHoldWinner", 0.2) or 0.2)
+    if pnl > 0 and "FLIP" in reason:
+        guard_delta += float(cfg.get("learningRewardFlipGood", 0.1) or 0.1)
+    if pnl < 0 and ("SL" in reason or "STOP" in reason):
+        guard_delta -= float(cfg.get("learningPenaltyEarlySl", 0.35) or 0.35)
+    if pnl < 0 and ("SIGNAL_WAIT" in reason or "LOW_CONF" in reason):
+        guard_delta -= float(cfg.get("learningPenaltyMemoryMiss", 0.15) or 0.15)
+    if pnl < 0 and "LIVE_CUT_LOSING_SIDE" in reason:
+        guard_delta -= 0.20
+    total = entry_delta + spread_delta + pattern_delta + rr_delta + edge_delta + drawdown_delta + time_delta + guard_delta
+    cap = max(0.1, float(cfg.get("learningBehaviorDeltaCap", 2.5) or 2.5))
+    return {
+        "entryQuality": round(entry_delta, 6),
+        "spreadQuality": round(spread_delta, 6),
+        "patternAlignment": round(pattern_delta, 6),
+        "riskReward": round(rr_delta, 6),
+        "feeEdge": round(edge_delta, 6),
+        "drawdown": round(drawdown_delta, 6),
+        "timeToProfit": round(time_delta, 6),
+        "guardDiscipline": round(guard_delta, 6),
+        "total": round(_clamp_float(total, -cap, cap), 6),
+    }
+
+
+def _mark_trade_learning_agents(symbol: str, trade: dict, mode: str):
+    try:
+        pnl = float((trade or {}).get("pnl", 0.0) or 0.0)
+        reason = str((trade or {}).get("reason", "") or "")
+        side = str((trade or {}).get("side", "") or "")
+        label = f"{str(mode).upper()} {str(symbol).upper()} {side} pnl={pnl:.4f}"
+        # Only memory_agent actually persists the outcome on this path.
+        # reflection_agent / backtest_agent do real work elsewhere (loss-streak tune,
+        # walk-forward endpoint) and are marked there — marking them here would be
+        # misleading telemetry.
+        _agent_mark("memory_agent", "done", "trade outcome stored", label)
+    except Exception as exc:
+        print(f"[Trade Log] ERROR writing {TRADES_LOG_PATH}: {exc}")
+
+
 def _serialize_per_symbol_update(fn):
     """Decorator for per-symbol updates."""
+    @wraps(fn)
     def wrapped(symbol: str, *args, **kwargs):
-        return fn(symbol, *args, **kwargs)
+        with per_symbol_lock(VAULT_DIR, symbol):
+            return fn(symbol, *args, **kwargs)
     return wrapped
+
+
+def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
+    """Derive a conservative self-learning symbol profile from learning stats.
+
+    This is intentionally cautious: it only nudges policy when the symbol has
+    enough evidence in the learning store, and it keeps the resulting profile
+    bounded so the bot can learn continuously without overfitting.
+    """
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        return {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    pr = _load_single_profile(sym)
+    if not isinstance(pr, dict):
+        return {}
+
+    windows = pr.get("memoryWindows") if isinstance(pr.get("memoryWindows"), dict) else {}
+    w7 = windows.get("7d") if isinstance(windows.get("7d"), dict) else {}
+    w14 = windows.get("14d") if isinstance(windows.get("14d"), dict) else {}
+    w30 = windows.get("30d") if isinstance(windows.get("30d"), dict) else {}
+    recent_score = float((pr.get("weightedRecentScore") or {}).get("score", 0.0) or 0.0)
+    reward_score = float(pr.get("rewardScore", 0.0) or 0.0)
+    reward_delta = float(pr.get("rewardDelta", 0.0) or 0.0)
+    behavior_delta = float(pr.get("rewardBehaviorDelta", 0.0) or 0.0)
+
+    # Choose the longest available window with enough samples, then blend the
+    # shorter windows for recency. This makes the bot react to changes but not
+    # too quickly.
+    def _pick_window() -> dict:
+        for win in (w7, w14, w30):
+            if int(win.get("trades", 0) or 0) >= 6:
+                return win
+        return w30 or w14 or w7 or {}
+
+    win = _pick_window()
+    trades = int(win.get("trades", 0) or 0)
+    if trades < 6:
+        return {}
+
+    wr = float(win.get("winRatePct", 0.0) or 0.0)
+    pnl = float(win.get("pnl", 0.0) or 0.0)
+    # Compute profit factor from the window's win/loss breakdown so we don't
+    # depend on a missing profitFactor field on the learning profile.
+    gross_win = float(win.get("grossWin", 0.0) or 0.0)
+    gross_loss = float(win.get("grossLoss", 0.0) or 0.0)
+    if gross_loss > 0:
+        pf = gross_win / gross_loss
+    elif gross_win > 0:
+        pf = 999.0
+    else:
+        pf = float(pr.get("profitFactor", 0.0) or 0.0)
+    pf = min(pf, 999.0)
+    ql = int(pr.get("quickLosses", 0) or 0)
+    obs = int(pr.get("observations", 0) or 0)
+    picks = int(pr.get("pickedCount", 0) or 0)
+    pick_rate = (picks / max(obs, 1)) * 100.0 if obs > 0 else 0.0
+
+    # Start from the current effective group profile so user overrides and the
+    # 3-tier fallback stay intact.
+    base = _symbol_effective_profile(sym, cfg)
+    out = dict(base)
+
+    # Confidence floor: good symbols can relax a bit, weak symbols get stricter.
+    if wr >= 60.0 and pnl > 0.0:
+        out["min_conf_floor"] = max(0.45, float(base.get("min_conf_floor", 0.5)) - 0.03)
+    elif wr <= 45.0 or pnl < -0.5:
+        out["min_conf_floor"] = min(0.85, float(base.get("min_conf_floor", 0.5)) + 0.04)
+
+    # Scan bias: if the symbol repeatedly performs better on one side,
+    # nudge the scan bias slightly. Keep it bounded so the symbol cannot
+    # become permanently one-sided from a few trades.
+    long_bias = float(base.get("scan_long_bias", 0.5))
+    if wr >= 58.0 and pnl > 0.0:
+        long_bias += 0.02
+    elif wr < 48.0 and pnl < 0.0:
+        long_bias -= 0.02
+    out["scan_long_bias"] = round(max(0.42, min(0.58, long_bias)), 4)
+
+    # Chase speed: strong symbols can enter faster; noisy symbols should wait.
+    chase = str(base.get("scan_chase_speed", "normal"))
+    if ql >= 2 or wr < 48.0:
+        chase = "slow"
+    elif wr >= 60.0 and pnl > 0.0:
+        chase = "fast"
+    out["scan_chase_speed"] = chase
+
+    # TP/SL / lock: make the learning react more strongly to expectancy,
+    # not just win rate. Positive expectancy should widen profit capture a bit;
+    # negative expectancy should cut risk faster.
+    tp_mult = float(base.get("tpsl_mult", 1.0))
+    sl_mult = float(base.get("sl_mult", 1.0))
+    lock_mult = float(base.get("lock_trigger_mult", 1.0))
+    cap_mult = float(base.get("max_trade_notional_mult", 1.0))
+    if wr >= 58.0 and pnl > 0.0 and pf >= 1.10:
+        edge = min(0.30, (wr - 55.0) / 100.0 + min(0.10, pnl / 20.0) + min(0.10, (pf - 1.0) / 5.0))
+        tp_mult = min(2.0, tp_mult + 0.05 + edge)
+        lock_mult = min(2.0, lock_mult + 0.04 + edge * 0.5)
+        cap_mult = min(1.45, cap_mult + 0.04 + edge * 0.35)
+    elif wr <= 47.0 or pnl < -0.4 or pf < 0.95:
+        weakness = min(0.35, max(0.0, 50.0 - wr) / 80.0 + abs(min(pnl, 0.0)) / 8.0 + max(0.0, 1.0 - pf) * 0.12)
+        tp_mult = max(0.60, tp_mult - (0.06 + weakness))
+        sl_mult = min(1.65, sl_mult + (0.06 + weakness * 0.9))
+        lock_mult = max(0.40, lock_mult - (0.06 + weakness * 0.5))
+        cap_mult = max(0.30, cap_mult - (0.06 + weakness * 0.6))
+    out["tpsl_mult"] = round(tp_mult, 4)
+    out["sl_mult"] = round(sl_mult, 4)
+    out["lock_trigger_mult"] = round(lock_mult, 4)
+    out["max_trade_notional_mult"] = round(cap_mult, 4)
+
+    # Reward / tuning bias: store bounded hint values so existing adaptive
+    # functions can incorporate them, but never let them dominate the signal.
+    out["rewardDelta"] = round(max(-0.12, min(0.12, reward_delta + (0.02 if pnl > 0 else -0.02))), 4)
+    out["rewardBehaviorDelta"] = round(max(-0.12, min(0.12, behavior_delta + (0.015 if wr >= 58.0 else -0.015))), 4)
+    out["rewardScore"] = round(max(-5.0, min(5.0, reward_score + (0.05 if pnl > 0 else -0.05))), 4)
+
+    # Learning meta fields for the dashboard.
+    out["learnedAt"] = int(time.time())
+    out["learnedFromWindow"] = str(win.get("window", "30d") or "30d")
+    out["learnedTrades"] = trades
+    out["learnedWinRatePct"] = round(wr, 2)
+    out["learnedPnl"] = round(pnl, 6)
+    out["learnedProfitFactor"] = round(pf, 4)
+    out["learnedPickRatePct"] = round(pick_rate, 2)
+    out["learnedRecentScore"] = round(recent_score, 4)
+    out["learnedQuickLosses"] = ql
+
+    # Position sizing: use symbolRiskTune if available and active,
+    # otherwise fall back to the group base multiplier. Learned behavior
+    # shifts size based on win rate and pnl trend.
+    pos_mult = float(base.get("positionSizeMult") or base.get("position_size_mult", 1.0) or 1.0)
+    sm = 1.0
+    lv_mult = 1.0
+    lv_max_override = 0
+    tune = pr.get("symbolRiskTune") if isinstance(pr.get("symbolRiskTune"), dict) else {}
+    if bool(tune.get("active")) and int(tune.get("window", 0) or 0) >= 4:
+        sm = float(tune.get("sizeMult", 1.0) or 1.0)
+        lv_mult = float(tune.get("leverageMult", 1.0) or 1.0)
+        lv_max_override = int(tune.get("recommendedLeverageMax", 0) or 0)
+    elif wr >= 60.0 and pnl > 0.0:
+        sm = min(1.30, pos_mult + 0.05)
+    elif wr <= 45.0 or pnl < -0.5:
+        sm = max(0.40, pos_mult - 0.08)
+    # Loss-streak guard: a bleeding symbol never gets an oversized learned
+    # size multiplier (ESPUSDT learned positionSizeMult 1.3 while losing).
+    if pnl < 0.0:
+        sm = min(sm, 1.10)
+    out["positionSizeMult"] = round(sm, 4)
+    out["position_size_mult"] = round(sm, 4)
+
+    # Entry offset: use group default (group handles the behavioral class).
+    out["entry_offset_bps"] = float(base.get("entry_offset_bps", 0.0) or 0.0)
+
+    # Learned position size and leverage metadata for the dashboard.
+    learned_pos_mult = round(sm, 4)
+    learned_lev_mult = round(lv_mult, 4)
+    learned_lev_max = int(lv_max_override) if lv_max_override else 0
+
+    # Keep symbol profile lean: persist only override-like fields.
+    return {
+        "group": out.get("group"),
+        "minConfidence": round(float(out.get("min_conf_floor", 0.5)), 4),
+        "rewardDelta": float(out.get("rewardDelta", 0.0) or 0.0),
+        "rewardBehaviorDelta": float(out.get("rewardBehaviorDelta", 0.0) or 0.0),
+        "rewardScore": float(out.get("rewardScore", 0.0) or 0.0),
+        "longBias": round(float(out.get("scan_long_bias", 0.5)), 4),
+        "chaseSpeed": str(out.get("scan_chase_speed", "normal")),
+        "tpPct": round(float(cfg.get("takeProfitPct", 1.8) or 1.8) * float(out.get("tpsl_mult", 1.0)), 4),
+        "slPct": round(max(float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80),
+                           float(cfg.get("stopLossPct", 0.9) or 0.9) * float(out.get("sl_mult", 1.0))), 4),
+        "profitLockTriggerUsdt": round(float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35) * float(out.get("lock_trigger_mult", 1.0)), 4),
+        "notionalCapUsdt": round(float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0) * float(out.get("max_trade_notional_mult", 1.0)), 4),
+        "cooldownMinutes": int(max(0, round(float(cfg.get("symbolCooldownMins", 15) or 15)))) if wr >= 60.0 else int(max(0, round(float(cfg.get("symbolCooldownMins", 15) or 15) * 1.2))),
+        # Position sizing learned fields
+        "positionSizeMult": learned_pos_mult,
+        "leverageMult": learned_lev_mult,
+        "leverageMax": learned_lev_max,
+        "entryOffsetBps": round(float(out.get("entry_offset_bps", 0.0)), 2),
+        # Meta
+        "learnedAt": int(out.get("learnedAt", time.time())),
+        "learnedFromWindow": out.get("learnedFromWindow", "30d"),
+        "learnedTrades": int(out.get("learnedTrades", trades)),
+        "learnedWinRatePct": float(out.get("learnedWinRatePct", wr)),
+        "learnedPnl": float(out.get("learnedPnl", pnl)),
+        "learnedProfitFactor": float(out.get("learnedProfitFactor", pf)),
+        "learnedPickRatePct": float(out.get("learnedPickRatePct", pick_rate)),
+        "learnedRecentScore": float(out.get("learnedRecentScore", recent_score)),
+        "learnedQuickLosses": int(out.get("learnedQuickLosses", ql)),
+    }
+
+
+@_serialize_per_symbol_update
+def _record_learning_trade(symbol: str, trade: dict, mode: str):
+    sym = str(symbol or "").upper()
+    if not sym:
+        return
+    print(f"[Record Trade] _record_learning_trade called: symbol={sym}, mode={mode}, pnl={trade.get('pnl')}, reason={trade.get('reason')}")
+    cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
+    ctx = PerSymbolContext(sym, get_shared_cache(VAULT_DIR), cfg)
+    pr = ctx.profile
+    pnl = float(trade.get("pnl", 0.0) or 0.0)
+    pr["wins"] = int(pr.get("wins", 0)) + (1 if pnl >= 0 else 0)
+    pr["losses"] = int(pr.get("losses", 0)) + (1 if pnl < 0 else 0)
+    pr["realizedPnl"] = round(float(pr.get("realizedPnl", 0.0)) + pnl, 6)
+    pr["trades"] = int(pr.get("trades", 0)) + 1
+    pr["lastMode"] = str(mode).upper()
+    pr["lastTradeSide"] = str(trade.get("side", ""))
+    pr["lastTradeReason"] = str(trade.get("reason", ""))
+    pr["sumPnl"] = round(float(pr.get("sumPnl", 0.0)) + pnl, 6)
+    pr["avgPnlPerTrade"] = round(float(pr["sumPnl"]) / max(int(pr["trades"]), 1), 6)
+    pr["maxWinPnl"] = max(float(pr.get("maxWinPnl", pnl)), pnl)
+    pr["maxLossPnl"] = min(float(pr.get("maxLossPnl", pnl)), pnl)
+    reward_enabled = bool(cfg.get("learningRewardEnabled", True))
+    behavior_enabled = bool(cfg.get("learningBehaviorRewardEnabled", True))
+    # Live guardian feedback loop: gently adapt per-symbol TP/SL/lock thresholds.
+    if str(mode).upper() == "LIVE":
+        ts = int(trade.get("closedAt", trade.get("ts", time.time())) or time.time())
+        tloc = time.localtime(ts)
+        day_key = (tloc.tm_year, tloc.tm_mon, tloc.tm_mday)
+        if day_key != app_state._DAILY_PNL_DATE_KEY:
+            app_state.DAILY_REALIZED_PNL = 0.0
+            app_state._DAILY_PNL_DATE_KEY = day_key
+        app_state.DAILY_REALIZED_PNL += pnl
+        print(f"[Record Trade] Processing LIVE trade for {sym}: pnl={pnl}, reason={trade.get('reason')}, dailyPnl={app_state.DAILY_REALIZED_PNL}")
+        guard_tp = float(pr.get("tpPct", float(cfg.get("takeProfitPct", 1.8) or 1.8)) or float(cfg.get("takeProfitPct", 1.8) or 1.8))
+        guard_sl = float(pr.get("slPct", float(cfg.get("stopLossPct", 0.9) or 0.9)) or float(cfg.get("stopLossPct", 0.9) or 0.9))
+        guard_lock = float(pr.get("profitLockTriggerUsdt", float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)) or float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35))
+        reason_up = str(trade.get("reason", "") or "").upper()
+        win_like = pnl >= 0.0 or reason_up in {"LOCAL_TP_HIT", "TARGET_MAX", "PEAK_CAPTURE", "LIVE_CLOSE"}
+        loss_like = pnl < 0.0 or reason_up in {"LOCAL_SL_HIT", "BREAKEVEN_GUARD", "PAYOFF_LOSS_GUARD", "STRONG_REVERSAL_EXIT", "LIVE_CUT_LOSING_SIDE", "RETRACE_BUDGET", "WEAK_SIGNAL"}
+        if win_like:
+            guard_tp *= 1.012
+            guard_sl *= 1.006
+            guard_lock *= 1.010
+        elif loss_like:
+            guard_tp *= 0.988
+            guard_sl *= 0.986
+            guard_lock *= 0.965
+        guard_tp = max(0.35, min(6.0, guard_tp))
+        # V11: per-trade SL ratchet must respect the global SL floor — the
+        # old hardcoded 0.20 floor let losing streaks tighten per-symbol SL
+        # to noise level (0.28-0.47% → instant whipsaw SL hits).
+        _sl_floor = float(cfg.get("supervisorStopLossFloor", 0.80) or 0.80)
+        guard_sl = max(_sl_floor, min(3.5, guard_sl))
+        guard_lock = max(0.08, min(1.50, guard_lock))
+        pr["tpPct"] = round(guard_tp, 4)
+        pr["slPct"] = round(guard_sl, 4)
+        pr["profitLockTriggerUsdt"] = round(guard_lock, 4)
+        # Guardian autotune: adapt holdTrailPct and holdMinConfidence per symbol.
+        guard_trail = float(pr.get("holdTrailPct", float(cfg.get("holdTrailPct", 0.25) or 0.25)) or 0.25)
+        guard_conf = float(pr.get("holdMinConfidence", float(cfg.get("holdMinConfidence", 0.72) or 0.72)) or 0.72)
+        if win_like:
+            guard_trail *= 1.01
+            guard_conf *= 0.99
+        elif loss_like:
+            guard_trail *= 0.98
+            guard_conf *= 1.01
+        pr["holdTrailPct"] = round(max(0.10, min(0.50, guard_trail)), 4)
+        pr["holdMinConfidence"] = round(max(0.60, min(0.85, guard_conf)), 4)
+        pr["tpslFeedback"] = {
+            "updatedAt": int(time.time()),
+            "mode": "LIVE",
+            "reason": reason_up,
+            "pnl": round(float(pnl), 6),
+        }
+
+
+    reward_cap = max(1.0, float(cfg.get("learningRewardCap", 50.0) or 50.0))
+    reward_decay = float(cfg.get("learningRewardDecay", 0.985) or 0.985)
+    reward_decay = min(1.0, max(0.9, reward_decay))
+    reward_win = max(0.0, float(cfg.get("learningRewardWin", 1.0) or 1.0))
+    penalty_loss = max(0.0, float(cfg.get("learningPenaltyLoss", 0.8) or 0.8))
+    pnl_clip = max(1.0, float(cfg.get("learningPnlClipAbsUsdt", 25.0) or 25.0))
+    reason = str(trade.get("reason", "") or "").upper()
+    base_delta = 0.0
+    if reward_enabled:
+        # pnl_scale keeps updates smooth while still rewarding larger clean wins.
+        pnl_scale = min(1.0, abs(float(pnl)) / pnl_clip)
+        if pnl >= 0:
+            base_delta = reward_win * (0.75 + 0.25 * pnl_scale)
+        else:
+            base_delta = -penalty_loss * (0.75 + 0.25 * pnl_scale)
+    behavior_delta = 0.0
+    if behavior_enabled:
+        reward_components = _trade_reward_components(trade, cfg)
+        behavior_delta += float(reward_components.get("total", 0.0) or 0.0)
+        cap = max(0.1, float(cfg.get("learningBehaviorDeltaCap", 2.5) or 2.5))
+        behavior_delta = max(-cap, min(cap, behavior_delta))
+    else:
+        reward_components = {}
+    prev_score = float(pr.get("rewardScore", 0.0) or 0.0)
+    new_score = (prev_score * reward_decay) + base_delta + behavior_delta
+    pr["rewardScore"] = round(max(-reward_cap, min(reward_cap, new_score)), 6)
+    pr["rewardDelta"] = round(base_delta, 6)
+    pr["rewardBehaviorDelta"] = round(behavior_delta, 6)
+    pr["rewardComponents"] = reward_components
+    if pnl >= 0:
+        pr["rewardWinStreak"] = int(pr.get("rewardWinStreak", 0)) + 1
+        pr["rewardLossStreak"] = 0
+    else:
+        pr["rewardLossStreak"] = int(pr.get("rewardLossStreak", 0)) + 1
+        pr["rewardWinStreak"] = 0
+    pr["updatedAt"] = int(time.time())
+    try:
+        recent_rows = _live_closed_trades_from_symbol(sym, mode="ALL", vault_dir=VAULT_DIR)
+        current_trade = {"_pnl": pnl, "_ts": int(time.time()), **trade, "symbol": sym}
+        recent_with_current = [*recent_rows, current_trade]
+        windows = _memory_windows_from_trades(recent_with_current)
+        pr["memoryWindows"] = windows
+        pr["weightedRecentScore"] = _weighted_recent_memory_score(windows)
+        pr["symbolRiskTune"] = _symbol_risk_tune_from_recent_trades(sym, recent_with_current, cfg)
+    except Exception:
+        pass
+    # Auto-calibrate the symbol profile from the updated learning state.
+    try:
+        auto_profile = _auto_update_symbol_profile(sym, cfg)
+        if isinstance(auto_profile, dict) and auto_profile:
+            try:
+                existing = ctx._sym_profile if isinstance(ctx._sym_profile, dict) else {}
+                merged = dict(existing)
+                _AUTOTUNER_MANAGED = {"tpPct", "slPct", "holdTrailPct", "holdMinConfidence"}
+                _has_autotune = bool(existing.get("autotuneLastAt"))
+                for k, v in auto_profile.items():
+                    if _has_autotune and k in _AUTOTUNER_MANAGED:
+                        continue
+                    merged[k] = v
+                merged["updatedAt"] = int(time.time())
+                merged["lastAutoLearnedAt"] = int(time.time())
+                merged["lastAutoLearnedFrom"] = "close_trade"
+                merged["learnedTrades"] = int(pr.get("trades", 0) or 0)
+                merged["learnedWinRatePct"] = float(pr.get("memoryWindows", {}).get("7d", {}).get("winRatePct", 0.0) or 0.0) if isinstance(pr.get("memoryWindows"), dict) else 0.0
+                merged["learnedPnl"] = float(pr.get("realizedPnl", 0.0) or 0.0)
+                ctx._sym_profile = merged
+                ctx._dirty_sym_profile = True
+            except Exception:
+                pass  # per-symbol write failed, skip fallback to global
+    except Exception:
+        pass
+
+    # Write to per-symbol trade log and vault
+    try:
+        trade_log_entry = {"ts": int(time.time()), **trade, "symbol": sym}
+        if str(mode).upper() == "LIVE" and "pnl" in trade:
+            trade_log_entry["mode"] = "LIVE"
+            trade_log_entry.setdefault("closedAt", int(trade.get("closedAt") or trade.get("ts") or time.time()))
+            trade_log_entry.setdefault("reason", str(trade.get("reason", "LIVE_CLOSE") or "LIVE_CLOSE"))
+        else:
+            trade_log_entry["mode"] = str(mode).upper()
+        
+        # Attach TV data from disk (tv_signal.json) — snapshot at time of close (both LIVE and PAPER)
+        try:
+            _tv_path = VAULT_DIR / "symbols" / sym / "tv_signal.json"
+            if _tv_path.exists():
+                _tv = json.loads(_tv_path.read_text(encoding="utf-8"))
+                if isinstance(_tv, dict) and _tv:
+                    trade_log_entry["tvSignal"] = _tv.get("signal", "")
+                    trade_log_entry["tvConfidence"] = _tv.get("confidence", 0.0)
+                    trade_log_entry["tvStrength"] = _tv.get("strength", 0.0)
+                    trade_log_entry["tvAge"] = int(time.time()) - int(_tv.get("ts", 0) or 0)
+                    print(f"[Record Trade] {sym}: TV data from disk - signal={_tv.get('signal')}, conf={_tv.get('confidence')}, age={trade_log_entry['tvAge']}s")
+                else:
+                    print(f"[Record Trade] {sym}: TV file exists but data is invalid")
+            else:
+                print(f"[Record Trade] {sym}: TV signal file not found at {_tv_path}")
+        except Exception as e:
+            print(f"[Record Trade] {sym}: Error reading TV signal file: {e}")
+        
+        # Attach params_at_entry and guardian_stats from per-symbol storage
+        # (lock may already be popped from in-memory dict, so read from disk)
+        try:
+            from trading.per_symbol_storage import PerSymbolStorage
+            _ps = PerSymbolStorage(VAULT_DIR, sym)
+            _gl = _ps.load_guardian_lock()
+            if isinstance(_gl, dict) and _gl:
+                _snap = _gl.get("entrySnapshot", {})
+                if isinstance(_snap, dict):
+                    if _snap.get("params_at_entry"):
+                        trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                        print(f"[Record Trade] {sym}: Found params_at_entry: {_snap['params_at_entry']}")
+                    else:
+                        print(f"[Record Trade] {sym}: No params_at_entry in entrySnapshot")
+                    if _snap.get("tvSignal"):
+                        trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
+                        print(f"[Record Trade] {sym}: TV at entry - signal={_snap['tvSignal']}")
+                    else:
+                        print(f"[Record Trade] {sym}: No tvSignal in entrySnapshot")
+                    if _snap.get("tvConfidence") is not None:
+                        trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
+                        print(f"[Record Trade] {sym}: TV at entry confidence={_snap['tvConfidence']}")
+                _gs = _gl.get("guardianStats", {})
+                if isinstance(_gs, dict) and _gs:
+                    trade_log_entry["guardian_stats"] = {
+                        "peakProfitUsdt": _gs.get("peakProfitUsdt", 0.0),
+                        "holdWinnerActivated": _gs.get("holdWinnerActivated", 0),
+                        "tpExtensionCount": _gs.get("tpExtensionCount", 0),
+                        "notionalUsdt": _gs.get("notionalUsdt", 0.0),
+                        "timeInPositionSec": int(time.time()) - int(_gs.get("openedAt", time.time())),
+                    }
+                    print(f"[Record Trade] {sym}: Found guardian_stats: {trade_log_entry['guardian_stats']}")
+                else:
+                    print(f"[Record Trade] {sym}: No guardian_stats in guardian lock")
+            else:
+                print(f"[Record Trade] {sym}: No guardian lock found")
+        except Exception as e:
+            print(f"[Record Trade] {sym}: Error reading guardian lock: {e}")
+        
+        _append_trade_log(trade_log_entry)
+        ctx.record_trade(trade_log_entry)
+        append_trade_memory(VAULT_DIR, trade_log_entry, mode)
+    except Exception as e:
+        # NEVER swallow silently — a write failure here (e.g. cloud-sync lock
+        # on E:) must be visible so we know trades are being lost.
+        print(f"[Record Trade] {sym}: FAILED to record trade: {e}")
+    ctx._dirty_profile = True
+    ctx.commit()
+    ctx.update_symbol_note(trade)
+    _mark_trade_learning_agents(sym, trade, mode)
+    # Per-symbol autotuner: trigger evaluation after LIVE trades
+    # Delay 1s to avoid file I/O race with ctx.commit() (symbol_profile.json)
+    if str(mode).upper() == "LIVE":
+        def _deferred_autotune():
+            import time as _t; _t.sleep(1.0)
+            try:
+                from trading.symbol_autotuner import record_trade_outcome
+                print(f"[Autotune] Triggering record_trade_outcome for {sym}")
+                record_trade_outcome(sym, trade)
+                print(f"[Autotune] Completed record_trade_outcome for {sym}")
+            except Exception as e:
+                print(f"[Autotune] Error in record_trade_outcome for {sym}: {e}")
+        try:
+            import threading as _th
+            print(f"[Autotune] Starting deferred autotune thread for {sym}")
+            _th.Thread(target=_deferred_autotune, daemon=True).start()
+        except Exception as e:
+            print(f"[Autotune] Failed to start autotune thread for {sym}: {e}")
+
+
+async def _record_learning_trade_async(symbol: str, trade: dict, mode: str):
+    """Async wrapper for _record_learning_trade — delegates to a thread to avoid blocking the event loop."""
+    return await asyncio.to_thread(_record_learning_trade, symbol, trade, mode)

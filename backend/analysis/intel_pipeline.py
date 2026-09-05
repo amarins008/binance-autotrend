@@ -6,86 +6,20 @@ import asyncio
 import math
 import time
 
-from fastapi import HTTPException
-
-from schemas import IntelAnalyzeRequest
+from exceptions import DataError
+from logger import get_logger, log_exception
 
 from exchange.binance_client import _data_get
 from services.cache_registry import (
     DATA_GET_TIMEOUT_SEC,
-    SCAN_ANALYZE_CONCURRENCY,
     _KLINES_CACHE,
     _KLINES_CACHE_MAX,
     _KLINES_CACHE_TTL,
     _KLINES_INFLIGHT,
-    _INTEL_CACHE,
-    _INTEL_CACHE_MAX,
-    _INTEL_CACHE_TTL,
     _limit_cache_size,
 )
 
-
-def _main():
-    import main as m
-    return m
-
-
-
-# Lazy delegates to main during incremental refactor
-
-def _candlestick_pattern_context(*args, **kwargs):
-    return _main()._candlestick_pattern_context(*args, **kwargs)
-
-def _decision_data_layers(*args, **kwargs):
-    return _main()._decision_data_layers(*args, **kwargs)
-
-def _entry_session_bias(*args, **kwargs):
-    return _main()._entry_session_bias(*args, **kwargs)
-
-def _fapi_agreement_locked_symbols(*args, **kwargs):
-    return _main()._fapi_agreement_locked_symbols(*args, **kwargs)
-
-def _learned_min_conf(*args, **kwargs):
-    return _main()._learned_min_conf(*args, **kwargs)
-
-def _live_trades_count_today_symbol(*args, **kwargs):
-    return _main()._live_trades_count_today_symbol(*args, **kwargs)
-
-def _market_momentum(*args, **kwargs):
-    return _main()._market_momentum(*args, **kwargs)
-
-def _normalize_symbol(*args, **kwargs):
-    return _main()._normalize_symbol(*args, **kwargs)
-
-def _format_loop_error(*args, **kwargs):
-    return _main()._format_loop_error(*args, **kwargs)
-
-def _parse_symbol_whitelist(*args, **kwargs):
-    return _main()._parse_symbol_whitelist(*args, **kwargs)
-
-def _precision_signal_pack(*args, **kwargs):
-    return _main()._precision_signal_pack(*args, **kwargs)
-
-def _record_scan_health(*args, **kwargs):
-    return _main()._record_scan_health(*args, **kwargs)
-
-def _record_symbol_observation(*args, **kwargs):
-    return _main()._record_symbol_observation(*args, **kwargs)
-
-async def _record_symbol_observation_async(*args, **kwargs):
-    return await _main()._record_symbol_observation_async(*args, **kwargs)
-
-def _scan_error_penalty(*args, **kwargs):
-    return _main()._scan_error_penalty(*args, **kwargs)
-
-def _scan_health_state(*args, **kwargs):
-    return _main()._scan_health_state(*args, **kwargs)
-
-def _symbol_effective_profile(*args, **kwargs):
-    return _main()._symbol_effective_profile(*args, **kwargs)
-
-def _symbol_perf_gate(*args, **kwargs):
-    return _main()._symbol_perf_gate(*args, **kwargs)
+_log = get_logger("analysis.intel_pipeline")
 
 
 def _load_single_profile(symbol: str) -> dict:
@@ -101,24 +35,41 @@ async def _cached_klines(symbol: str, interval: str, limit: int) -> list:
         if now - fetched_at < _KLINES_CACHE_TTL:
             return data
     if key in _KLINES_INFLIGHT:
-        return await asyncio.wait_for(
-            _KLINES_INFLIGHT[key], timeout=max(1.0, DATA_GET_TIMEOUT_SEC + 1.0)
-        )
+        try:
+            return await asyncio.wait_for(
+                _KLINES_INFLIGHT[key], timeout=max(1.0, DATA_GET_TIMEOUT_SEC + 1.0)
+            )
+        except asyncio.TimeoutError:
+            raise DataError(f"klines {symbol} {interval} inflight timeout")
 
     async def _fetch() -> list:
         res = await _data_get(f"/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}")
         if res.status_code >= 400:
-            raise HTTPException(status_code=res.status_code, detail=f"klines {interval} failed: {res.text}")
-        return res.json()
+            raise DataError(
+                f"klines {interval} failed: {res.text[:200]}",
+                symbol=symbol,
+            )
+        try:
+            return res.json()
+        except ValueError as exc:
+            raise DataError(f"klines {symbol} {interval} invalid JSON: {exc}")
 
     task = asyncio.create_task(_fetch())
     _KLINES_INFLIGHT[key] = task
     try:
         data = await asyncio.wait_for(task, timeout=max(1.0, DATA_GET_TIMEOUT_SEC + 1.0))
-    except Exception:
+    except DataError:
+        raise
+    except asyncio.TimeoutError:
         if not task.done():
             task.cancel()
-        raise
+        log_exception(_log, TimeoutError(f"klines {symbol} {interval} timeout"), {"symbol": symbol})
+        raise DataError(f"klines {symbol} {interval} fetch timeout")
+    except Exception as exc:
+        if not task.done():
+            task.cancel()
+        log_exception(_log, exc, {"symbol": symbol, "interval": interval})
+        raise DataError(f"klines {symbol} {interval} fetch failed: {exc}") from exc
     finally:
         if _KLINES_INFLIGHT.get(key) is task:
             _KLINES_INFLIGHT.pop(key, None)
@@ -213,6 +164,6 @@ def _intel_score(symbol: str, intel: dict) -> float:
                 # Bonus for consistent recent winners
                 elif wr7 >= 58.0 and avg7 > 0.04:
                     score += 0.04
-    except Exception:
-        pass
+    except (TypeError, ValueError) as exc:
+        log_exception(_log, exc, {"symbol": symbol, "stage": "intel_score_quality"})
     return score

@@ -71,11 +71,6 @@ def _tv_alert_send(cfg: dict | None, level: str, title: str, message: str) -> di
         return {"sent": False, "reason": f"{type(exc).__name__}: {str(exc)[:80]}"}
 
 
-def _main():
-    import main as m
-    return m
-
-
 def _maybe_tune_external_signal_guard(payload: dict | None, cfg: dict | None = None) -> dict:
     """No-op stub: external MCP signal guard was removed.
 

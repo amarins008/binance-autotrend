@@ -6,7 +6,14 @@ import asyncio
 import os
 import time
 
-from exchange.binance_client import _binance_base
+from exchange.binance_client import _binance_base, _get_um_client, _signed_request
+from exchange.futures_orders import (
+    _close_position_one_side,
+    _current_position_amount,
+    _um_client_position_risk,
+    fetch_mark_price,
+    place_futures_order,
+)
 from schemas import IntelAnalyzeRequest
 from services import app_state
 from services.config_paths import TRADES_LOG_PATH
@@ -19,6 +26,23 @@ from trading.position import (
 )
 from trading.tradingview_mcp import get_tv_mcp, async_get_position_guidance
 from trading.per_symbol_storage import PerSymbolStorage
+from trading.state_ops import (
+    agent_mark as _agent_mark,
+    autotrade_log as _autotrade_log,
+    last_decision_intel as _last_decision_intel,
+    entry_snapshot_from_intel as _entry_snapshot_from_intel,
+    persist_autotrade_snapshot as _persist_autotrade_snapshot,
+)
+from trading.learning import _recent_payoff_loss_guard
+from trading.risk import (
+    _effective_tp_sl,
+    _flat_intel_keys,
+    _profit_lock_policy,
+    calc_tp_sl_prices as _calc_tp_sl_prices,
+    fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
+)
+from trading.symbol_profiles import _symbol_effective_profile
+from analysis.intel_analyze import intel_analyze
 
 AUTO_TRADE = app_state.AUTO_TRADE
 
@@ -49,79 +73,13 @@ def _persist_tv_signal(symbol: str, guidance: dict) -> None:
         _autotrade_log(f"[TradingView] persist error {sym}: {exc}")
 
 
-def _main():
-    import main as m
-    return m
-
-
-# Lazy delegates to main during incremental refactor
-
-def _agent_mark(*args, **kwargs):
-    return _main()._agent_mark(*args, **kwargs)
-
-def _autotrade_log(*args, **kwargs):
-    return _main()._autotrade_log(*args, **kwargs)
-
-def _fee_edge_min_net_usdt(*args, **kwargs):
-    return _main()._fee_edge_min_net_usdt(*args, **kwargs)
-
-def _profit_lock_policy(*args, **kwargs):
-    return _main()._profit_lock_policy(*args, **kwargs)
-
-def _recent_payoff_loss_guard(*args, **kwargs):
-    return _main()._recent_payoff_loss_guard(*args, **kwargs)
-
-def _last_decision_intel(*args, **kwargs):
-    return _main()._last_decision_intel(*args, **kwargs)
-
-def _entry_snapshot_from_intel(*args, **kwargs):
-    return _main()._entry_snapshot_from_intel(*args, **kwargs)
-
-def _effective_tp_sl(*args, **kwargs):
-    return _main()._effective_tp_sl(*args, **kwargs)
-
-def _symbol_effective_profile(*args, **kwargs):
-    return _main()._symbol_effective_profile(*args, **kwargs)
-
-def _calc_tp_sl_prices(*args, **kwargs):
-    return _main()._calc_tp_sl_prices(*args, **kwargs)
-
-def _get_um_client(*args, **kwargs):
-    return _main()._get_um_client(*args, **kwargs)
-
-async def _signed_request(*args, **kwargs):
-    return await _main()._signed_request(*args, **kwargs)
-
-async def _um_client_position_risk(*args, **kwargs):
-    return await _main()._um_client_position_risk(*args, **kwargs)
-
-async def fetch_mark_price(*args, **kwargs):
-    return await _main().fetch_mark_price(*args, **kwargs)
-
-async def _current_position_amount(*args, **kwargs):
-    return await _main()._current_position_amount(*args, **kwargs)
-
-async def _close_position_one_side(*args, reason: str = "LIVE_CUT_LOSING_SIDE", **kwargs):
-    return await _main()._close_position_one_side(*args, reason=reason, **kwargs)
-
-async def place_futures_order(*args, **kwargs):
-    return await _main().place_futures_order(*args, **kwargs)
-
-async def intel_analyze(*args, **kwargs):
-    return await _main().intel_analyze(*args, **kwargs)
-
-
-def _persist_autotrade_snapshot(*args, **kwargs):
-    return _main()._persist_autotrade_snapshot(*args, **kwargs)
-
-
 async def _manage_live_open_positions_once(cfg: dict, now: int) -> bool:
     _orch_start = time.monotonic()
-    _main()._agent_mark("risk_manager", "done", "risk policy active")
-    _main()._agent_mark("position_guardian", "doing", "monitor open live positions")
+    _agent_mark("risk_manager", "done", "risk policy active")
+    _agent_mark("position_guardian", "doing", "monitor open live positions")
     closed_by_lock = await _live_multi_profit_lock_manage(cfg)
     if closed_by_lock:
-        _main()._agent_mark("position_guardian", "done", "position closed by profit guard")
+        _agent_mark("position_guardian", "done", "position closed by profit guard")
         AUTO_TRADE["lastTradeAt"] = now
         AUTO_TRADE["trades"].append(now)
         _persist_autotrade_snapshot(force=True)
@@ -136,11 +94,11 @@ async def _manage_live_open_positions_once(cfg: dict, now: int) -> bool:
     ]
     if heartbeat_positions:
         _position_guardian_status_heartbeat(heartbeat_positions)
-        _main()._agent_mark("position_guardian", "done", "open positions checked")
+        _agent_mark("position_guardian", "done", "open positions checked")
         _orch_ms = int((time.monotonic() - _orch_start) * 1000)
         _autotrade_log(f"[Guardian] cycle={_orch_ms}ms positions={len(heartbeat_positions)} no-close")
     else:
-        _main()._agent_mark("position_guardian", "todo", "no open positions")
+        _agent_mark("position_guardian", "todo", "no open positions")
         _orch_ms = int((time.monotonic() - _orch_start) * 1000)
         _autotrade_log(f"[Guardian] cycle={_orch_ms}ms positions=0")
     return False
@@ -161,11 +119,11 @@ async def _pick_live_orphan_positions(
     # Req 5: raised TTL from 5 s → 25 s
     if (now - cached_at) < 25.0:
         return list(cached)
-    client = _main()._get_um_client(key, secret, base)
+    client = _get_um_client(key, secret, base)
     if client:
-        pos = await _main()._um_client_position_risk(client)
+        pos = await _um_client_position_risk(client)
     else:
-        pos = await _main()._signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {})
+        pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {})
     rows = pos if isinstance(pos, list) else ([pos] if isinstance(pos, dict) else [])
     out: list[dict] = []
     for p in rows:
@@ -213,7 +171,7 @@ def _position_guardian_status_heartbeat(open_positions: list[dict]) -> None:
         return
     symbols = sorted({str(p.get("symbol", "") or "").upper() for p in rows if str(p.get("symbol", "") or "").strip()})
     reason = ", ".join(symbols[:6])
-    _main()._agent_mark(
+    _agent_mark(
         "position_guardian",
         "done",
         "open positions heartbeat",
@@ -1214,7 +1172,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
     base = _binance_base()
     if not key or not secret:
         return False
-    rows = await _main()._pick_live_orphan_positions(key, secret, base)
+    rows = await _pick_live_orphan_positions(key, secret, base)
     locks = AUTO_TRADE.get("liveProfitLocks")
     if not isinstance(locks, dict):
         locks = {}
@@ -1246,7 +1204,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 if matched_row is not None:
                     live_entry = float(matched_row.get("entryMark", 0.0) or 0.0) or None
                 if live_entry is None:
-                    live_rows = await _main()._pick_live_orphan_positions(key, secret, base)
+                    live_rows = await _pick_live_orphan_positions(key, secret, base)
                     for row in (live_rows or []):
                         if (
                             str(row.get("symbol", "") or "").upper() == sym
@@ -1425,7 +1383,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 changed = True
     if _pending_closes:
         async def _do_close(sym_: str, side_: str, reason_: str):
-            await _main()._close_position_one_side(sym_, side_, key, secret, base, reason=reason_)
+            await _close_position_one_side(sym_, side_, key, secret, base, reason=reason_)
         await asyncio.gather(*[_do_close(s, sd, r) for s, sd, r, _, _ in _pending_closes])
         for sym, side, reason, mark_str, mark_val in _pending_closes:
             _delete_guardian_lock_file(_live_lock_key(sym, side), cfg)
@@ -1653,7 +1611,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     if f"{sym}:{side}" not in _closed_symbols:
                         _close_reason = "LOCAL_TP_HIT" if hit_tp else "LOCAL_SL_HIT"
                         _persist_single_lock_before_close(st, cfg)
-                        await _main()._close_position_one_side(sym, side, key, secret, base, reason=_close_reason)
+                        await _close_position_one_side(sym, side, key, secret, base, reason=_close_reason)
                         _closed_symbols.add(f"{sym}:{side}")
                     reason = "LOCAL_TP_HIT" if hit_tp else "LOCAL_SL_HIT"
                     _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} (held {held_sec:.0f}s < {min_hold_sec:.0f}s) mark={mark:.6f}")
@@ -1666,7 +1624,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 elif _ewc_hit:
                     if f"{sym}:{side}" not in _closed_symbols:
                         _persist_single_lock_before_close(st, cfg)
-                        await _main()._close_position_one_side(sym, side, key, secret, base, reason="EARLY_WHIPSAW_CUT")
+                        await _close_position_one_side(sym, side, key, secret, base, reason="EARLY_WHIPSAW_CUT")
                         _closed_symbols.add(f"{sym}:{side}")
                     _autotrade_log(f"LIVE multi guard close: {sym} {side} EARLY_WHIPSAW_CUT (held {held_sec:.0f}s < {min_hold_sec:.0f}s) loss={upnl:.4f} peak={float(st.get('peak',0.0)):.6f}")
                     close_decisions.append(f"{sym}:{side}:EARLY_WHIPSAW_CUT:system=B")
@@ -1687,7 +1645,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if held_sec >= dead_zone_sec and weak_now and upnl >= fee_min_capture and upnl < lock_trigger:
             if f"{sym}:{side}" not in _closed_symbols:
                 _persist_single_lock_before_close(st, cfg)
-                await _main()._close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT")
+                await _close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT")
                 _closed_symbols.add(f"{sym}:{side}")
             _autotrade_log(f"LIVE multi guard close: {sym} {side} DEAD_ZONE_TIMEOUT held={held_sec:.0f}s upnl={upnl:.4f} peak={float(st.get('peak',0.0)):.4f} lock_trigger={lock_trigger:.4f}")
             close_decisions.append(f"{sym}:{side}:DEAD_ZONE_TIMEOUT:system=B")
@@ -1705,7 +1663,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if tv_early_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRADINGVIEW_EARLY_EXIT")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="TRADINGVIEW_EARLY_EXIT")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} TRADINGVIEW_EARLY_EXIT {tv_early_exit_reason}")
                 close_decisions.append(f"{sym}:{side}:TRADINGVIEW_EARLY_EXIT:system=B")
@@ -1803,7 +1761,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if try_green:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="TRY_GREEN_EXIT")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="TRY_GREEN_EXIT")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} TRY_GREEN_EXIT {try_green_reason} pnl={upnl:.3f}")
                 close_decisions.append(f"{sym}:{side}:TRY_GREEN_EXIT:system=B")
@@ -1819,7 +1777,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if swing_peak:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="SWING_PEAK_CLOSE")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="SWING_PEAK_CLOSE")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} SWING_PEAK_CLOSE {swing_reason}")
                 close_decisions.append(f"{sym}:{side}:SWING_PEAK_CLOSE:system=B")
@@ -1854,7 +1812,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                     # ── CLOSE tier: genuine reversal, close immediately ──
                     if f"{sym}:{side}" not in _closed_symbols:
                         _persist_single_lock_before_close(st, cfg)
-                        await _main()._close_position_one_side(sym, side, key, secret, base, reason="STRONG_REVERSAL_EXIT")
+                        await _close_position_one_side(sym, side, key, secret, base, reason="STRONG_REVERSAL_EXIT")
                         _closed_symbols.add(f"{sym}:{side}")
                     _autotrade_log(f"LIVE multi guard close: {sym} {side} STRONG_REVERSAL_EXIT {reversal_reason}")
                     close_decisions.append(f"{sym}:{side}:STRONG_REVERSAL_EXIT:system=B")
@@ -1866,7 +1824,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if preempt_exit:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="PREEMPTIVE_LOSS_EXIT")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="PREEMPTIVE_LOSS_EXIT")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} PREEMPTIVE_LOSS_EXIT {preempt_reason} pnl={upnl:.3f}")
                 close_decisions.append(f"{sym}:{side}:PREEMPTIVE_LOSS_EXIT:system=B")
@@ -1878,7 +1836,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if hit_payoff_loss_guard:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="PAYOFF_LOSS_GUARD")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="PAYOFF_LOSS_GUARD")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} PAYOFF_LOSS_GUARD payoff={float(payoff_guard.get('payoffRatio', 0.0) or 0.0):.2f}")
                 close_decisions.append(f"{sym}:{side}:PAYOFF_LOSS_GUARD:system=B")
@@ -1891,7 +1849,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _close_reason2 = "LOCAL_TP_HIT" if hit_tp else ("BREAKEVEN_GUARD" if hit_be else "LOCAL_SL_HIT")
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason=_close_reason2)
+                    await _close_position_one_side(sym, side, key, secret, base, reason=_close_reason2)
                     _closed_symbols.add(f"{sym}:{side}")
                 reason = "LOCAL_TP_HIT" if hit_tp else ("BREAKEVEN_GUARD" if hit_be else "LOCAL_SL_HIT")
                 _autotrade_log(f"LIVE multi guard close: {sym} {side} {reason} mark={mark:.6f} TP={tp:.6f} SL={sl:.6f}")
@@ -1913,7 +1871,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             if upnl <= retrace_budget:
                 if f"{sym}:{side}" not in _closed_symbols:
                     _persist_single_lock_before_close(st, cfg)
-                    await _main()._close_position_one_side(sym, side, key, secret, base, reason="RETRACE_BUDGET")
+                    await _close_position_one_side(sym, side, key, secret, base, reason="RETRACE_BUDGET")
                     _closed_symbols.add(f"{sym}:{side}")
                 _autotrade_log(f"LIVE lock close: {sym} {side} RETRACE_BUDGET upnl={upnl:.3f} peak={float(st['peak']):.3f} budget={retrace_budget:.3f}")
                 close_decisions.append(f"{sym}:{side}:RETRACE_BUDGET:system=B")
@@ -1926,7 +1884,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if upnl >= tp_max:
             if f"{sym}:{side}" not in _closed_symbols:
                 _persist_single_lock_before_close(st, cfg)
-                await _main()._close_position_one_side(sym, side, key, secret, base, reason="TARGET_MAX")
+                await _close_position_one_side(sym, side, key, secret, base, reason="TARGET_MAX")
                 _closed_symbols.add(f"{sym}:{side}")
             _autotrade_log(f"LIVE lock close: {sym} {side} TARGET_MAX {upnl:.3f} USDT")
             close_decisions.append(f"{sym}:{side}:TARGET_MAX:system=B")
@@ -1950,7 +1908,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         if upnl >= min_profit_lock and weak_now and st["peak"] >= weak_peak_floor and held_sec >= weak_min_hold:
             if f"{sym}:{side}" not in _closed_symbols:
                 _persist_single_lock_before_close(st, cfg)
-                await _main()._close_position_one_side(sym, side, key, secret, base, reason="WEAK_SIGNAL")
+                await _close_position_one_side(sym, side, key, secret, base, reason="WEAK_SIGNAL")
                 _closed_symbols.add(f"{sym}:{side}")
             _autotrade_log(f"LIVE lock close: {sym} {side} WEAK_SIGNAL {upnl:.3f} USDT (min_lock={min_profit_lock:.4f} peak_floor={weak_peak_floor:.4f} held={held_sec:.0f}s>={weak_min_hold:.0f}s)")
             close_decisions.append(f"{sym}:{side}:WEAK_SIGNAL:system=B")
