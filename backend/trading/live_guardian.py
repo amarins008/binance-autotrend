@@ -22,6 +22,7 @@ from trading.position import (
     get_tradingview_tp_extension_pct,
     should_exit_early_with_tradingview,
     should_extend_tp_with_tradingview,
+    should_hold_winner,
     should_trail_sl_with_tradingview,
 )
 from trading.tradingview_mcp import get_tv_mcp, async_get_position_guidance
@@ -182,29 +183,7 @@ def _position_guardian_status_heartbeat(open_positions: list[dict]) -> None:
 def _live_lock_key(symbol: str, side: str) -> str:
     return f"{str(symbol).upper()}:{str(side).upper()}"
 
-def _should_hold_winner(side: str, intel: dict | None, cfg: dict, hold_min_conf: float | None = None) -> bool:
-    if not cfg.get("holdWinners", True):
-        return False
-    if not isinstance(intel, dict):
-        return False
-    sig = str(intel.get("signal", "WAIT")).upper()
-    conf = float(intel.get("confidence", 0.0) or 0.0)
-    min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55))
-    # Allow WAIT signal if holdAllowWaitSignal is True (default True from V15)
-    # A fresh WAIT is not a reversal; it just means TV hasn't confirmed yet.
-    if not cfg.get("holdAllowWaitSignal", True):
-        if sig != side or conf < min_conf:
-            return False
-    else:
-        # With holdAllowWaitSignal: allow WAIT, only block opposite signal or low conf
-        if sig != "WAIT" and sig != side:
-            return False
-        if conf < min_conf:
-            return False
-    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
-    mom = float(ex.get("momentumPct", 0.0) or 0.0)
-    min_momentum = float(cfg.get("holdMinMomentumPct", 0.05) or 0.05)
-    return (side == "LONG" and mom >= min_momentum) or (side == "SHORT" and mom <= -min_momentum)
+_should_hold_winner = should_hold_winner
 
 async def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None, _tv_guidance: dict | None = None) -> tuple[float, float]:
     t = max(0.05, float(trail_pct))

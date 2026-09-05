@@ -15,25 +15,29 @@ def intel_momentum_pct(intel: dict | None) -> float:
     return 0.0
 
 
-def should_hold_winner(side: str, intel: dict | None, cfg: dict) -> bool:
+def should_hold_winner(side: str, intel: dict | None, cfg: dict, hold_min_conf: float | None = None) -> bool:
     if not cfg.get("holdWinners", True):
         return False
     if not isinstance(intel, dict):
         return False
     sig = str(intel.get("signal", "WAIT")).upper()
     conf = float(intel.get("confidence", 0.0) or 0.0)
-    if sig != side or conf < float(cfg.get("holdMinConfidence", 0.72)):
-        return False
-    mom = intel_momentum_pct(intel)
-    p = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
-    long_score = float(p.get("longScore", 0.0) or 0.0)
-    short_score = float(p.get("shortScore", 0.0) or 0.0)
-    score_ok = (long_score - short_score) >= 1.0 if side == "LONG" else (short_score - long_score) >= 1.0
-    trend_ok = bool(p.get("trendUp") or p.get("trendUpPartial")) if side == "LONG" else bool(
-        p.get("trendDown") or p.get("trendDnPartial")
-    )
-    mom_ok = (side == "LONG" and mom > 0.04) or (side == "SHORT" and mom < -0.04)
-    return bool(mom_ok or (trend_ok and score_ok))
+    min_conf = float(hold_min_conf) if hold_min_conf is not None else float(cfg.get("holdMinConfidence", 0.55))
+    # Allow WAIT signal if holdAllowWaitSignal is True (default True from V15)
+    # A fresh WAIT is not a reversal; it just means TV hasn't confirmed yet.
+    if not cfg.get("holdAllowWaitSignal", True):
+        if sig != side or conf < min_conf:
+            return False
+    else:
+        # With holdAllowWaitSignal: allow WAIT, only block opposite signal or low conf
+        if sig != "WAIT" and sig != side:
+            return False
+        if conf < min_conf:
+            return False
+    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mom = float(ex.get("momentumPct", 0.0) or 0.0)
+    min_momentum = float(cfg.get("holdMinMomentumPct", 0.05) or 0.05)
+    return (side == "LONG" and mom >= min_momentum) or (side == "SHORT" and mom <= -min_momentum)
 
 
 def should_cut_loser_early(side: str, intel: dict | None, cfg: dict) -> bool:

@@ -219,6 +219,7 @@ from trading.learning import (
     _record_learning_trade,
     _record_learning_trade_async,
 )
+from trading.position import should_hold_winner
 from trading.supervisor_tuning import (
     _supervisor_trade_period_reviews as _supervisor_trade_period_reviews,
     _maybe_tune_size_multiplier_from_streak as _maybe_tune_size_multiplier_from_streak,
@@ -4801,19 +4802,7 @@ def hermes_list_symbol_profiles():
         })
     out.sort(key=lambda r: (r["source"] != "symbol+group", -r["sampleTrades"], r["symbol"]))
     return {"ok": True, "count": len(out), "items": out}
-def _should_hold_winner(side: str, intel: dict | None, cfg: dict) -> bool:
-    if not cfg.get("holdWinners", True):
-        return False
-    if not isinstance(intel, dict):
-        return False
-    sig = str(intel.get("signal", "WAIT")).upper()
-    conf = float(intel.get("confidence", 0.0) or 0.0)
-    if sig != side or conf < float(cfg.get("holdMinConfidence", 0.72)):
-        return False
-    ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
-    mom = float(ex.get("momentumPct", 0.0) or 0.0)
-    # Keep running only when momentum still supports the current side.
-    return (side == "LONG" and mom > 0) or (side == "SHORT" and mom < 0)
+_should_hold_winner = should_hold_winner
 
 
 def _trail_winner_levels(side: str, mark: float, old_sl: float, old_tp: float, trail_pct: float, cfg: dict = None, symbol: str = None) -> tuple[float, float]:
