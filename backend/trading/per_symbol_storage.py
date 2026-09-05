@@ -27,6 +27,7 @@ from typing import Any
 
 from services.config_paths import VAULT_DIR
 from services.file_utils import _atomic_write_text
+from trading.trade_log import is_corrupt_trade
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,8 @@ class PerSymbolStorage:
                 if mode_up and mode_up != "ALL":
                     if str(obj.get("mode", "")).upper() != mode_up:
                         continue
+                if is_corrupt_trade(obj):
+                    continue
                 trades.append(obj)
         except Exception:
             pass

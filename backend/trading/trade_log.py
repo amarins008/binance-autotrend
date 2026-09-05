@@ -28,6 +28,64 @@ _TRADES_LOG_ROTATION_LOCK = threading.Lock()
 _TRADES_LOG_LAST_ROTATION = 0.0
 
 
+def is_corrupt_trade(entry: dict) -> bool:
+    """True when a closed-trade record carries corrupted phantive fields.
+
+    Legacy records (mid-Aug 2026 refactor, e.g. ONDO/POL/STX/XLM) occasionally
+    wrote an exit price several orders of magnitude off the entry (exit 900-2400
+    vs entry ~0.1-0.4). Those records produce absurd pnl once multiplied out and
+    must not feed telemetry/learning. NOTE: qty is deliberately NOT a corrupt
+    signal — cheap coins (e.g. ARCUSDT at ~0.065) legitimately carry qty 500+
+    for a $50 position.
+    """
+    try:
+        pnl = float(entry.get("pnl") or 0.0)
+    except Exception:
+        return True
+    if not math.isfinite(pnl):
+        return True
+    if abs(pnl) > 5000.0:
+        return True
+    try:
+        entry_px = float(entry.get("entry") or 0.0)
+        exit_px = float(entry.get("exit") or 0.0)
+    except Exception:
+        return False
+    if entry_px > 0 and exit_px > 0:
+        ratio = exit_px / entry_px
+        # A legitimate futures swing on these symbols is < ~8x; anything above
+        # means the exit looked up a different price scale (corrupted record).
+        if ratio > 8.0 or ratio < 0.125:
+            return True
+    return False
+
+
+def trade_hold_seconds(entry: dict) -> float:
+    """Return position hold duration for a closed trade (seconds).
+
+    Falls back in order of decreasing reliability: close timestamp derived from
+    ``closedAt``/``ts`` minus the entry decision timestamp ``entryDecisionAt``
+    (or ``ts`` itself on records that use it as the open time).
+    """
+    def _sec(v) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(f):
+            return 0.0
+        if f < 1e12:
+            f *= 1000.0
+        return f
+    close_raw = entry.get("closedAt") or entry.get("ts") or 0
+    open_raw = entry.get("entryDecisionAt") or entry.get("ts") or close_raw
+    close_ms = _sec(close_raw)
+    open_ms = _sec(open_raw)
+    if close_ms <= 0 or open_ms <= 0:
+        return 0.0
+    return max(0.0, (close_ms - open_ms) / 1000.0)
+
+
 
 def _ensure_vault() -> None:
     try:
@@ -415,6 +473,8 @@ def _live_closed_trades_from_log(symbol: str | None = None, mode: str = "ALL") -
         if not math.isfinite(pnl):
             continue
         if abs(pnl) > 5000.0:
+            continue
+        if is_corrupt_trade(obj):
             continue
         ts_raw = obj.get("closedAt", obj.get("ts", 0))
         try:

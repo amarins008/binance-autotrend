@@ -23,6 +23,8 @@ import json
 import math
 import time
 
+from trading.trade_log import is_corrupt_trade
+
 # ── Tuning knobs ──────────────────────────────────────────────────────────────
 
 MIN_TRADES_TO_OPTIMIZE = 10
@@ -111,7 +113,7 @@ def _load_trades_jsonl(symbol: str, max_trades: int = 0) -> list:
         for line in lines:
             try:
                 t = json.loads(line)
-                if isinstance(t, dict):
+                if isinstance(t, dict) and not is_corrupt_trade(t):
                     trades.append(t)
             except json.JSONDecodeError:
                 continue
