@@ -6631,100 +6631,100 @@ async def _autotrade_loop():
                 continue
 
             # ── Pre-flight: check available balance before placing order ──
-                try:
-                    acct = await asyncio.wait_for(
-                        _get_account_cached(key, secret, base),
-                        timeout=6.0,
-                    )
-                    avail = float(acct.get("availableBalance", 0) or 0)
-                    cfg["_liveAvailableBalance"] = avail
-                    required = trade_usdt / max(eff_leverage, 1)
-                    if avail < required * 1.05:  # 5% buffer
-                        # Boss directive: do NOT auto-reduce — SKIP this symbol and let
-                        # scan mode try the next one. Count consecutive balance-skips so we
-                        # can alert once when NO symbol can be funded.
-                        _agent_mark("risk_manager", "blocked", "insufficient balance", f"{avail:.2f} USDT")
-                        _autotrade_skip("balance", f"Skip: insufficient margin {avail:.2f} USDT < required {required*1.05:.2f} USDT — try next symbol")
-                        _consecutive_balance_skips[0] += 1
-                        _autotrade_log(f"Margin guard: skipped {cfg.get('symbol')} (avail={avail:.2f}, need={required*1.05:.2f}) [consecutive={_consecutive_balance_skips[0]}])")
-                        _alert_thr = int(cfg.get("marginAlertAfterSkips", 5) or 5)
-                        if _consecutive_balance_skips[0] >= _alert_thr:
-                            try:
-                                _tv_notify(f"Margin insufficient for ALL symbols: {avail:.2f} USDT left but ~{required*1.05:.2f} USDT/trade needed ({_consecutive_balance_skips[0]} symbols skipped in a row) — top up capital or lower leverage/cap")
-                            except Exception:
-                                pass
-                            _consecutive_balance_skips[0] = 0
-                        await asyncio.sleep(cfg["intervalSec"])
-                        continue
-                    # Auto-fix CROSSED → ISOLATED if cross balance is low
-                    # Only switch if no open position (Binance -4048 if position exists)
-                    if cfg.get("marginType") == "CROSSED":
-                        cross_bal = float(acct.get("crossWalletBalance", avail) or avail)
-                        if cross_bal < required * 1.1:
-                            # Check if position is flat before switching
-                            try:
-                                pos_check = await asyncio.wait_for(
-                                    _current_position_amount(cfg["symbol"], key, secret, base),
-                                    timeout=4.0,
-                                )
-                                if abs(float(pos_check)) < 1e-9:  # flat — safe to switch
-                                    cfg["marginType"] = "ISOLATED"
-                                    AUTO_TRADE["config"] = copy.deepcopy(cfg)
-                                    _autotrade_log(f"Balance check: auto-switched CROSSED → ISOLATED (crossBal={cross_bal:.2f})")
-                                else:
-                                    _autotrade_log(f"Balance check: low crossBal={cross_bal:.2f} but position open — cannot switch margin type")
-                            except Exception:
-                                pass  # skip switch if can't check position
-                except Exception:
-                    pass  # balance check is best-effort; proceed anyway
-                else:
-                    _consecutive_balance_skips[0] = 0  # a funded symbol passed -> reset alert counter
+            try:
+                acct = await asyncio.wait_for(
+                    _get_account_cached(key, secret, base),
+                    timeout=6.0,
+                )
+                avail = float(acct.get("availableBalance", 0) or 0)
+                cfg["_liveAvailableBalance"] = avail
+                required = trade_usdt / max(eff_leverage, 1)
+                if avail < required * 1.05:  # 5% buffer
+                    # Boss directive: do NOT auto-reduce — SKIP this symbol and let
+                    # scan mode try the next one. Count consecutive balance-skips so we
+                    # can alert once when NO symbol can be funded.
+                    _agent_mark("risk_manager", "blocked", "insufficient balance", f"{avail:.2f} USDT")
+                    _autotrade_skip("balance", f"Skip: insufficient margin {avail:.2f} USDT < required {required*1.05:.2f} USDT — try next symbol")
+                    _consecutive_balance_skips[0] += 1
+                    _autotrade_log(f"Margin guard: skipped {cfg.get('symbol')} (avail={avail:.2f}, need={required*1.05:.2f}) [consecutive={_consecutive_balance_skips[0]}])")
+                    _alert_thr = int(cfg.get("marginAlertAfterSkips", 5) or 5)
+                    if _consecutive_balance_skips[0] >= _alert_thr:
+                        try:
+                            _tv_notify(f"Margin insufficient for ALL symbols: {avail:.2f} USDT left but ~{required*1.05:.2f} USDT/trade needed ({_consecutive_balance_skips[0]} symbols skipped in a row) — top up capital or lower leverage/cap")
+                        except Exception:
+                            pass
+                        _consecutive_balance_skips[0] = 0
+                    await asyncio.sleep(cfg["intervalSec"])
+                    continue
+                # Auto-fix CROSSED → ISOLATED if cross balance is low
+                # Only switch if no open position (Binance -4048 if position exists)
+                if cfg.get("marginType") == "CROSSED":
+                    cross_bal = float(acct.get("crossWalletBalance", avail) or avail)
+                    if cross_bal < required * 1.1:
+                        # Check if position is flat before switching
+                        try:
+                            pos_check = await asyncio.wait_for(
+                                _current_position_amount(cfg["symbol"], key, secret, base),
+                                timeout=4.0,
+                            )
+                            if abs(float(pos_check)) < 1e-9:  # flat — safe to switch
+                                cfg["marginType"] = "ISOLATED"
+                                AUTO_TRADE["config"] = copy.deepcopy(cfg)
+                                _autotrade_log(f"Balance check: auto-switched CROSSED → ISOLATED (crossBal={cross_bal:.2f})")
+                            else:
+                                _autotrade_log(f"Balance check: low crossBal={cross_bal:.2f} but position open — cannot switch margin type")
+                        except Exception:
+                            pass  # skip switch if can't check position
+            except Exception:
+                pass  # balance check is best-effort; proceed anyway
+            else:
+                _consecutive_balance_skips[0] = 0  # a funded symbol passed -> reset alert counter
 
-                # external MCP signal guard removed — no second guard to consult.
-                eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
-                # 2026-08-16: LONG TP boost — let winning LONGs run further.
-                _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
-                if signal == "LONG" and _long_boost > 0.0:
-                    eff = dict(eff)
-                    eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
-                async def _do_place():
-                    return await place_futures_order(
-                        cfg["symbol"],
-                        signal,
-                        usdt_amount=trade_usdt,
-                        leverage=eff_leverage,
-                        margin_type=cfg["marginType"],
-                        tp_pct=eff["tpPct"],
-                        sl_pct=eff["slPct"],
-                        trailing_stop_pct=cfg.get("trailingStopPct", 0.0),
-                    )
+            # external MCP signal guard removed — no second guard to consult.
+            eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
+            # 2026-08-16: LONG TP boost — let winning LONGs run further.
+            _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
+            if signal == "LONG" and _long_boost > 0.0:
+                eff = dict(eff)
+                eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
+            async def _do_place():
+                return await place_futures_order(
+                    cfg["symbol"],
+                    signal,
+                    usdt_amount=trade_usdt,
+                    leverage=eff_leverage,
+                    margin_type=cfg["marginType"],
+                    tp_pct=eff["tpPct"],
+                    sl_pct=eff["slPct"],
+                    trailing_stop_pct=cfg.get("trailingStopPct", 0.0),
+                )
 
-                # 2026-08-27 fix: initialize trade_res to None so UnboundLocalError
-                # never fires if the place block raises before the assignment (e.g.
-                # QTY_TOO_SMALL, MIN_NOTIONAL, BinanceAPIException). Also catch any
-                # non-TimeoutError so we never leave the function in a half-state
-                # and we still bubble up to the outer except for the QTY_TOO_SMALL
-                # auto-multiply handler.
-                trade_res = None
-                place_timeout = max(20.0, float(cfg.get("intervalSec", 20)) * 1.5)
-                try:
-                    _agent_mark("execution_agent", "doing", "place live order", f"{cfg['symbol']} {signal}")
-                    trade_res = await asyncio.wait_for(_do_place(), timeout=place_timeout)
-                except asyncio.TimeoutError:
-                    _agent_mark("execution_agent", "doing", "retry live order after timeout")
-                    _autotrade_log("Retry: place order timed out once, retrying immediately")
-                    trade_res = await asyncio.wait_for(_do_place(), timeout=place_timeout + 8.0)
-                except Exception as _place_err:
-                    # Log the place error, mark agent blocked, and re-raise so the
-                    # outer except (QTY_TOO_SMALL / margin / etc) can still apply
-                    # its recovery policy. Without this the exception would bubble
-                    # up after the inner try/except already exited cleanly and
-                    # AUTO_TRADE["lastDecision"] assignment would later throw
-                    # UnboundLocalError on `trade_res`.
-                    _agent_mark("execution_agent", "blocked", "place order error", f"{type(_place_err).__name__}: {str(_place_err)[:60]}")
-                    _autotrade_log(f"Place order error ({cfg['symbol']} {signal}): {type(_place_err).__name__}: {str(_place_err)[:80]}")
-                    raise
-                _agent_mark("execution_agent", "done", "live order completed", f"{cfg['symbol']} {signal}")
+            # 2026-08-27 fix: initialize trade_res to None so UnboundLocalError
+            # never fires if the place block raises before the assignment (e.g.
+            # QTY_TOO_SMALL, MIN_NOTIONAL, BinanceAPIException). Also catch any
+            # non-TimeoutError so we never leave the function in a half-state
+            # and we still bubble up to the outer except for the QTY_TOO_SMALL
+            # auto-multiply handler.
+            trade_res = None
+            place_timeout = max(20.0, float(cfg.get("intervalSec", 20)) * 1.5)
+            try:
+                _agent_mark("execution_agent", "doing", "place live order", f"{cfg['symbol']} {signal}")
+                trade_res = await asyncio.wait_for(_do_place(), timeout=place_timeout)
+            except asyncio.TimeoutError:
+                _agent_mark("execution_agent", "doing", "retry live order after timeout")
+                _autotrade_log("Retry: place order timed out once, retrying immediately")
+                trade_res = await asyncio.wait_for(_do_place(), timeout=place_timeout + 8.0)
+            except Exception as _place_err:
+                # Log the place error, mark agent blocked, and re-raise so the
+                # outer except (QTY_TOO_SMALL / margin / etc) can still apply
+                # its recovery policy. Without this the exception would bubble
+                # up after the inner try/except already exited cleanly and
+                # AUTO_TRADE["lastDecision"] assignment would later throw
+                # UnboundLocalError on `trade_res`.
+                _agent_mark("execution_agent", "blocked", "place order error", f"{type(_place_err).__name__}: {str(_place_err)[:60]}")
+                _autotrade_log(f"Place order error ({cfg['symbol']} {signal}): {type(_place_err).__name__}: {str(_place_err)[:80]}")
+                raise
+            _agent_mark("execution_agent", "done", "live order completed", f"{cfg['symbol']} {signal}")
             AUTO_TRADE["lastTradeAt"] = now
             AUTO_TRADE["trades"].append(now)
             AUTO_TRADE["consecutiveErrors"] = 0
