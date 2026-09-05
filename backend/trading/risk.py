@@ -351,13 +351,31 @@ def effective_tpsl_pct_for_trade(
     tp_max_u = max(tp_min_u, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
     rr = max(0.35, min(0.85, float(cfg.get("slToTpRatio", 0.55) or 0.55)))
     target_u = (tp_min_u + tp_max_u) * 0.5
+    _mv = 0.0
+    # Phase A: per-symbol realized-vol target (movePct5m %) → USDT TP target.
+    # When a live volatility estimate is present it wins over the interpolation
+    # path below (which only ever had a dead rvPct source). The result is
+    # clamped into the [tpTargetMinUsdt, tpTargetMaxUsdt] band so fee floors and
+    # capital limits in the rest of the pipeline still apply.
+    if bool(cfg.get("volTargetUsdtEnabled", True)):
+        _mv = max(0.0, float((precision or {}).get("movePct5m", 0.0) or 0.0))
+        if _mv > 0:
+            try:
+                _notional_u = max(1e-9, float(amt) * max(1, float(cfg.get("leverage", 5) or 5)))
+                _vol_target_u = _notional_u * (_mv / 100.0)
+                target_u = max(tp_min_u, min(tp_max_u, _vol_target_u))
+            except Exception:
+                pass
     if realized_vol_pct is not None:
         try:
             rv = max(0.0, float(realized_vol_pct))
             v_low = max(0.001, float(cfg.get("feeAdaptiveVolLowPct", 0.08) or 0.08))
             v_high = max(v_low + 0.001, float(cfg.get("feeAdaptiveVolHighPct", 0.35) or 0.35))
             norm = max(0.0, min(1.0, (rv - v_low) / max(v_high - v_low, 1e-9)))
-            target_u = tp_min_u + (tp_max_u - tp_min_u) * norm
+            interp_u = tp_min_u + (tp_max_u - tp_min_u) * norm
+            # The vol-path target already clamped; keep whichever is tighter
+            # so a dead rvPct=0 cannot inflate the target past the vol estimate.
+            target_u = min(target_u, interp_u) if _mv > 0 else interp_u
         except Exception:
             pass
     tp_u = max(tp_min_u, min(tp_max_u, target_u))

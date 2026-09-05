@@ -6319,6 +6319,28 @@ async def _autotrade_loop():
                     highs = [float(k[2]) for k in kl]
                     lows = [float(k[3]) for k in kl]
                     pre = _detect_pre_reversal(closes, highs, lows)
+                    # Phase A: realized-vol TP/SL target. The same 5m klines
+                    # are reused (no extra API call) to estimate the expected
+                    # 5-minute move, which drives the per-symbol USDT TP target.
+                    try:
+                        from trading.vol_model import estimate_5m_move_pct, series_from_klines
+                        vol_closes = series_from_klines(kl)
+                        vol_meta = estimate_5m_move_pct(vol_closes)
+                        if bool(vol_meta.get("ok")):
+                            _vol_mv = float(vol_meta.get("movePct5m", 0.0) or 0.0)
+                            if isinstance(intel, dict) and isinstance(intel.get("precision"), dict) and _vol_mv > 0:
+                                intel["precision"]["movePct5m"] = _vol_mv
+                            AUTO_TRADE.setdefault("lastVolMeta", {})[cfg["symbol"]] = {
+                                "ts": int(time.time()),
+                                **vol_meta,
+                            }
+                            _autotrade_log(
+                                f"vol: {cfg['symbol']} movePct5m={_vol_mv:.4f}% "
+                                f"(short15m={float(vol_meta.get('stdShort15m', 0.0) or 0.0):.4f} "
+                                f"long30m={float(vol_meta.get('stdLong30m', 0.0) or 0.0):.4f})"
+                            )
+                    except Exception as v_exc:
+                        _autotrade_log(f"vol estimate for {cfg['symbol']} failed: {type(v_exc).__name__}: {v_exc}")
                     if isinstance(pre, dict):
                         AUTO_TRADE.setdefault("preReversalSamples", []).append({
                             "ts": int(time.time()),

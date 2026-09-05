@@ -379,26 +379,31 @@ async def _set_leverage_margin(symbol: str, key: str, secret: str, base: str, le
 
     if client:
         await asyncio.to_thread(client.change_leverage, symbol=symbol, leverage=leverage)
-        try:
-            await asyncio.to_thread(client.change_margin_type, symbol=symbol, marginType=margin_type)
-        except Exception as e:
-            txt = str(e)
-            if "-4168" in txt:
-                _autotrade_log("Margin override: exchange rejected ISOLATED under Multi-Assets -> continue with CROSSED")
-                return
-            if not _is_non_blocking_margin_error(txt):
-                raise
+        # Skip marginType when the current mode already matches — Binance
+        # rejects a redundant POST with -4067 even when there are no open
+        # orders, which keeps blocking new entries until restart.
+        if cur != margin_type:
+            try:
+                await asyncio.to_thread(client.change_margin_type, symbol=symbol, marginType=margin_type)
+            except Exception as e:
+                txt = str(e)
+                if "-4168" in txt:
+                    _autotrade_log("Margin override: exchange rejected ISOLATED under Multi-Assets -> continue with CROSSED")
+                    return
+                if not _is_non_blocking_margin_error(txt):
+                    raise
         return
     await _signed_request("POST", base, "/fapi/v1/leverage", key, secret, {"symbol": symbol, "leverage": leverage})
-    try:
-        await _signed_request("POST", base, "/fapi/v1/marginType", key, secret, {"symbol": symbol, "marginType": margin_type})
-    except HTTPException as e:
-        detail = str(e.detail)
-        if "-4168" in detail:
-            _autotrade_log("Margin override: exchange rejected ISOLATED under Multi-Assets -> continue with CROSSED")
-            return
-        if not _is_non_blocking_margin_error(detail):
-            raise
+    if cur != margin_type:
+        try:
+            await _signed_request("POST", base, "/fapi/v1/marginType", key, secret, {"symbol": symbol, "marginType": margin_type})
+        except HTTPException as e:
+            detail = str(e.detail)
+            if "-4168" in detail:
+                _autotrade_log("Margin override: exchange rejected ISOLATED under Multi-Assets -> continue with CROSSED")
+                return
+            if not _is_non_blocking_margin_error(detail):
+                raise
 
 async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp_pct: float, sl_pct: float, key: str, secret: str, base: str, tick_size: float, tick_size_str: str, hedge_mode: bool, position_side: str | None):
     close_side = "SELL" if side == "LONG" else "BUY"
