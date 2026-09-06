@@ -11,6 +11,11 @@ from dotenv import load_dotenv
 from uuid import uuid4
 from pathlib import Path
 
+from services.cache_registry import (
+    _SESSION_BIAS_CACHE as _SESSION_BIAS_CACHE,
+    _LIVE_STATS_CACHE as _LIVE_STATS_CACHE,
+)
+
 _log = logging.getLogger("backend.main")
 
 from indicators import (
@@ -247,7 +252,6 @@ DATA_GET_CONNECT_TIMEOUT_SEC = float(os.getenv("DATA_GET_CONNECT_TIMEOUT_SEC", "
 DATA_GET_MAX_ATTEMPTS = max(1, int(os.getenv("DATA_GET_MAX_ATTEMPTS", "1")))
 SCAN_ANALYZE_CONCURRENCY = max(1, int(os.getenv("SCAN_ANALYZE_CONCURRENCY", "2")))
 _DATA_PROVIDER_HEALTH: dict[str, object] = {"streak": 0, "cooldownUntil": 0, "lastErrorAt": 0, "lastError": ""}
-_LIVE_STATS_CACHE: dict[tuple, tuple[float, dict]] = {}
 _LIVE_STATS_VERSION = 0
 # Release version shown on the dashboard. Bump on every feature release;
 # the git commit hash is resolved at runtime so the dashboard always shows
@@ -276,7 +280,6 @@ def _app_commit() -> str:
         _hash = ""
     _APP_COMMIT_CACHE.update({"hash": _hash, "at": now})
     return _hash
-_SESSION_BIAS_CACHE: dict[str, object] = {"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}}
 _EXCHANGE_FILTERS_CACHE: dict[str, tuple[float, dict]] = {}
 _EXCHANGE_FILTERS_CACHE_TTL = 60  # seconds
 _UMFUTURES_CLASS = None

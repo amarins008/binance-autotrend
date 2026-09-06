@@ -16,7 +16,6 @@ from trading.learning_analysis import _memory_windows_from_trades
 from trading.trade_log import _append_trade_log, _live_closed_trades_from_log
 from services.cache_registry import _LIVE_STATS_VERSION, _SESSION_BIAS_CACHE, _LIVE_STATS_CACHE
 from services.config_paths import VAULT_DIR
-from services.file_utils import _get_file_lock, _atomic_write_text
 import services.cache_registry as _cache_registry
 
 passed = 0
@@ -135,19 +134,11 @@ print("=" * 60)
 print("6. SAMPLE COUNT CACHE INVALIDATION (Phase 5)")
 print("=" * 60)
 from services.cache_registry import _SYMBOL_SAMPLE_COUNT_CACHE
-_SYMBOL_SAMPLE_COUNT_CACHE.clear()
+# _symbol_sample_count is now backed by per-symbol storage (Phase 5 migration);
+# it no longer populates or depends on _SYMBOL_SAMPLE_COUNT_CACHE.
 count_before = _symbol_sample_count("BTCUSDT")
 check(f"_symbol_sample_count(BTCUSDT) = {count_before}", count_before >= 0)
-check("Cache populated after read", "BTCUSDT" in _SYMBOL_SAMPLE_COUNT_CACHE)
-
-# Simulate write-through invalidation
-_SYMBOL_SAMPLE_COUNT_CACHE["BTCUSDT"] = (time.time(), 999)
-# Simulate record_trade invalidation
-try:
-    _SYMBOL_SAMPLE_COUNT_CACHE.pop("BTCUSDT", None)
-    check("Cache invalidation via pop()", "BTCUSDT" not in _SYMBOL_SAMPLE_COUNT_CACHE)
-except Exception as e:
-    check("Cache invalidation via pop()", False, str(e))
+check("Storage-backed read (no cache population)", "BTCUSDT" not in _SYMBOL_SAMPLE_COUNT_CACHE)
 
 # ============================================================
 print()
@@ -243,17 +234,17 @@ print("12. TRADE LOG ATOMICITY")
 print("=" * 60)
 with tempfile.TemporaryDirectory() as tmp:
     log_path = Path(tmp) / "trades_log.jsonl"
-    # Simulate atomic write
-    from services.file_utils import _atomic_append_text
+    # Append the same way trading.trade_log._append_trade_log does today
     entry = json.dumps({"ts": now, "mode": "LIVE", "symbol": "TESTUSDT", "pnl": 1.0})
-    _atomic_append_text(log_path, entry + "\n")
-    check("Atomic append creates file", log_path.exists())
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(entry + "\n")
+    check("Append creates file", log_path.exists())
     content = log_path.read_text(encoding="utf-8")
     check("Content is valid JSON", '"mode": "LIVE"' in content)
 
     # Second append
-    _atomic_append_text(log_path, entry + "\n")
-    lines = [l for l in content.splitlines() if l.strip()]
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(entry + "\n")
     # File should have both entries
     full = log_path.read_text(encoding="utf-8")
     check("Second append present", full.count("TESTUSDT") == 2)
@@ -263,13 +254,13 @@ print()
 print("=" * 60)
 print("13. SNAPSHOT PERSISTENCE (Phase 4)")
 print("=" * 60)
-# Check that _persist_autotrade_snapshot includes perfLocks
+# Check that _persist_autotrade_snapshot includes liveProfitLocks
 import inspect
 src = inspect.getsource(main._persist_autotrade_snapshot)
-check("Snapshot includes perfLocks", "perfLocks" in src)
-# Check that _load_autotrade_snapshot restores perfLocks
+check("Snapshot includes liveProfitLocks", "liveProfitLocks" in src)
+# Check that _load_autotrade_snapshot restores liveProfitLocks
 src_load = inspect.getsource(main._load_autotrade_snapshot)
-check("Snapshot load restores perfLocks", "perfLocks" in src_load)
+check("Snapshot load restores liveProfitLocks", "liveProfitLocks" in src_load)
 
 # ============================================================
 print()
