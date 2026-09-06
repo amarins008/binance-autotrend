@@ -3534,6 +3534,26 @@ async def debug_binance_positions():
     return result
 
 
+async def debug_direction_bias(symbol: str = "BTCUSDT"):
+    """Diagnostic endpoint — live market direction bias (M15/M30 EMA + structure)."""
+    from analysis.direction_bias import detect_direction_bias
+
+    try:
+        r = await asyncio.wait_for(detect_direction_bias(symbol), timeout=15.0)
+        r = dict(r)
+        r["symbol"] = symbol
+        return r
+    except Exception as e:
+        import traceback
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()[-500:],
+        }
+
+
 async def _exit_after_restart(delay: float = 0.9):
     await asyncio.sleep(delay)
     os._exit(0)
@@ -6218,6 +6238,27 @@ async def _autotrade_loop():
                 spread_bps = ((ask - bid) / max(mid, 1e-9)) * 10000
             signal = intel.get("signal", "WAIT")
             conf = float(intel.get("confidence", 0))
+
+            # ── Direction-bias gate: only enter when M15/M30 bias agrees with side ──
+            # Replay on 2096 LIVE trades (90d): bias==side trades avg +0.033/tr while
+            # NEUTRAL/mismatch avg -0.024/tr; NEUTRAL (choppy no-trend) carries the
+            # losses so it also blocks. Disable via config biasGateEnabled=False.
+            if bool(cfg.get("biasGateEnabled", True)) and signal in ("LONG", "SHORT"):
+                try:
+                    from analysis.direction_bias import bias_gate as _bias_gate
+                    _db = intel.get("directionBias") if isinstance(intel, dict) else None
+                    _bias = (_db or {}).get("bias") if isinstance(_db, dict) else None
+                    _allow, _reason = _bias_gate(signal, _bias)
+                    if not _allow:
+                        _agent_mark("direction_bias_gate", "blocked", f"{cfg['symbol']} {signal}", f"bias={_bias} · {_reason}")
+                        _autotrade_skip(
+                            "bias_gate",
+                            f"Skip: {cfg['symbol']} {signal} blocked by direction-bias gate ({_reason})",
+                        )
+                        await asyncio.sleep(cfg.get("intervalSec", 20))
+                        continue
+                except Exception:
+                    pass  # gate is best-effort; never block the loop on detector errors
 
             # ── Signal confirmation gate: require N consecutive matching cycles ──
             _sc_enabled = bool(cfg.get("signalConfirmEnabled", True))

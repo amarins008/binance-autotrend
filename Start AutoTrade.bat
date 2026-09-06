@@ -39,19 +39,32 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Step 1: Stop any pre-existing services -------------------------
+REM --- Pre-flight: venv must exist ---------------------------------------
+if not exist "%BACKEND%\.venv\Scripts\python.exe" (
+    echo [ERROR] venv not found at %BACKEND%\.venv\Scripts\python.exe
+    echo         Create it first: python -m venv .venv  ^&^&  .venv\Scripts\pip install -r requirements.txt
+    pause
+    exit /b 1
+)
+
+REM --- Step 1: Stop any pre-existing services -----------------------------
+REM   Must catch BOTH launch styles:
+REM     - run_backend.py / launcher.py (classic bat start)
+REM     - `python -m uvicorn main:app` (spawned by /system/restart)
+REM   Otherwise the restarted uvicorn survives and we get TWO servers on 8020.
 echo [1/5] Stopping any existing services on 8020/8021...
 for %%P in (8020 8021) do (
     for /f "tokens=5" %%I in ('netstat -aon ^| findstr ":%P " ^| findstr LISTENING 2^>nul') do (
         taskkill /PID %%I /F /T >nul 2>&1
     )
 )
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'cmd.exe') -and ($_.CommandLine -like '*run_backend.py*' -or $_.CommandLine -like '*launcher.py*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
-ping -n 3 -w 1000 >nul
+powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $re='run_backend\.py|launcher\.py|uvicorn main:app'; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'cmd.exe') -and $_.CommandLine -match $re } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+call :wait_port_free 8020 10
+call :wait_port_free 8021 10
 echo       done.
 echo.
 
-REM --- Step 2: Ensure firewall rule for port 8020 ---------------------
+REM --- Step 2: Ensure firewall rule for port 8020 -------------------------
 echo [2/5] Checking firewall rule for port 8020...
 netsh advfirewall firewall show rule name="BinanceAutoTrade-8020" >nul 2>&1
 if errorlevel 1 (
@@ -70,7 +83,7 @@ echo.
 REM --- Step 3: Start backend on port 8020 ----------------------------
 echo [3/5] Starting backend (port 8020, binding 0.0.0.0)...
 set "PYTHONUTF8=1"
-start "Binance Backend (8020)" ".venv\Scripts\python.exe" run_backend.py
+start /min "Binance Backend (8020)" ".venv\Scripts\python.exe" run_backend.py
 echo       waiting for port 8020...
 call :wait_for_http 8020 %HEALTH_TIMEOUT%
 if errorlevel 1 (
@@ -83,7 +96,7 @@ echo.
 
 REM --- Step 4: Start launcher on port 8021 ---------------------------
 echo [4/5] Starting launcher (port 8021)...
-start "Binance Launcher (8021)" ".venv\Scripts\python.exe" launcher.py
+start /min "Binance Launcher (8021)" ".venv\Scripts\python.exe" launcher.py
 echo       waiting for port 8021...
 call :wait_for_port 8021 %HEALTH_TIMEOUT%
 if errorlevel 1 (
@@ -106,6 +119,7 @@ echo     - Dashboard (mobile) : use this PC's Tailscale IP
 echo     - Backend health     : http://127.0.0.1:8020/health
 echo     - Launcher (8021)    : watchdog target
 echo     - TradingView MCP    : ENABLED
+echo     - Direction bias dbg : http://127.0.0.1:8020/debug/direction-bias?symbol=BTCUSDT
 echo.
 echo   To stop: run "Kill Binance AutoTrade.bat" from Desktop.
 echo =====================================================
@@ -113,7 +127,8 @@ echo.
 endlocal
 exit /b 0
 
-REM --- Subroutines (use FOR /L loops, no nested GOTO labels) ----------
+REM --- Subroutines ---------------------------------------------------------
+
 :wait_for_http
 set "WP_PORT=%~1"
 set "WP_TIMEOUT=%~2"
@@ -130,6 +145,16 @@ set "WP_TIMEOUT=%~2"
 for /l %%i in (1,1,%WP_TIMEOUT%) do (
     netstat -aon | findstr ":%WP_PORT% " | findstr LISTENING >nul 2>&1
     if not errorlevel 1 exit /b 0
+    ping -n 2 -w 1000 >nul
+)
+exit /b 1
+
+:wait_port_free
+set "WP_PORT=%~1"
+set "WP_TIMEOUT=%~2"
+for /l %%i in (1,1,%WP_TIMEOUT%) do (
+    netstat -aon | findstr ":%WP_PORT% " | findstr LISTENING >nul 2>&1
+    if errorlevel 1 exit /b 0
     ping -n 2 -w 1000 >nul
 )
 exit /b 1

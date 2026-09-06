@@ -29,6 +29,14 @@ from schemas import IntelAnalyzeRequest
 from trading.config import apply_autotrade_defaults
 
 
+# Lazy imports (no import cycle): avoid pulling analysis.direction_bias at
+# module import time since it imports main lazily on call. directionBias is
+# observational only — it never gates the entry pipeline.
+def _direction_bias(symbol: str) -> dict:
+    from analysis.direction_bias import detect_direction_bias
+    return detect_direction_bias(symbol)
+
+
 def _main():
     import main as m
     return m
@@ -221,12 +229,30 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     # Pre-fetch klines once and share across momentum + precision to avoid duplicate requests
     rows_1m = await _main()._cached_klines(symbol, "1m", 150)  # 150 sufficient for EMA200 approx
 
-    mm, pk, depth_out, execution, candle_ctx = await asyncio.gather(
+    async def _dir_bias():
+        try:
+            # Timeout guard: if M15/M30 klines stall under rate-limit, degrade
+            # to NEUTRAL instead of delaying/cancelling the whole gather.
+            return await asyncio.wait_for(_direction_bias(symbol), timeout=6.0)
+        except Exception:
+            return {
+                "ok": False,
+                "ts": time.time(),
+                "bias": "NEUTRAL",
+                "strength": 0.0,
+                "regime": "MIXED",
+                "timeframes": {},
+                "entry": {"keyword": "low_data", "price": None, "emaZonePrice": None, "pullbackDistAtr": 0.0, "action": "wait"},
+                "notes": ["direction_bias unavailable"],
+            }
+
+    mm, pk, depth_out, execution, candle_ctx, dir_bias = await asyncio.gather(
         _market_momentum(symbol, _rows=rows_1m[:60]),
         _precision_signal_pack(symbol, limit=150, _rows_1m=rows_1m),
         _depth_orderflow(),
         _microstructure(),
         _candlestick_pattern_context(symbol),
+        _dir_bias(),
     )
     order_book, imbalance = depth_out
 
@@ -654,6 +680,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         "execution": execution,
         "candles": candle_ctx,
         "tv": _tv_snap,
+        "directionBias": dir_bias,
     }
     result["decisionData"] = _decision_data_layers(
         symbol=symbol,

@@ -48,7 +48,26 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
-## Session ล่าสุด: แก้ root cause -1021 (CRITICAL)
+## Session: Direction Bias detector + Start AutoTrade.bat adjust (เสร็จ)
+
+### สิ่งที่ทำ
+- **`backend/analysis/direction_bias.py`** (ใหม่) — detector ทิศทาง M15/M30: EMA20/50 trend + swing structure (fractal pivots) + pullback-to-EMA zone keyword. Pure `compute_direction_bias(rows_15m, rows_30m)` + async `detect_direction_bias(symbol)` hook `main._cached_klines` (lazy `_main()` ไม่ import cycle)
+- **`backend/tests/test_direction_bias.py`** (ใหม่) — 8 tests ผ่าน; suite รวม 59 passed (`pytest tests/ -q --ignore=tests/test_pineforge.py`)
+- **`backend/tests/monitor_direction_bias.py`** (ใหม่) — live monitor 4 symbols
+- **Debug route:** `main.py::debug_direction_bias` + `/debug/direction-bias` ใน `misc_routes.py` — verify บน real bot OK
+- **ผูกเข้า intel dict:** `intel_analyze` เพิ่ม `directionBias` block ใน result (observational **ไม่ gate** ตาม scope เดิม) — lazy import `_direction_bias` + `asyncio.wait_for(6s)` guard + fallback NEUTRAL บน error; verify บน live bot: `lastDecision.intel.directionBias` มีค่า real (bias/strength/regime/entry)
+- **`Start AutoTrade.bat`** (Desktop + root copy sync ตรง) — เขียนใหม่: venv pre-flight, kill pattern `'run_backend\.py|launcher\.py|uvicorn main:app'`, `wait_port_free` 10s, `start /min`, แสดง `/debug/direction-bias` ใน summary; test รันจริง 5/5 clean
+
+### Findings (ที่เจอระหว่าง verify)
+- `/intel/analyze` HTTP ได้ 500 บ่อยตัว — **pre-existing** ไม่ใช่จาก directionBias: เป็น rate-limit/inflight contention ระหว่าง scan loop (autotrade guardian) กับ request พร้อมกัน → `_precision_signal_pack` (r5/r15 klines) timeout เกิน `DATA_GET_TIMEOUT_SEC=6.0`; พิสูจน์ด้วย baseline (stash dir_bias ออก) ก็ fail เหมือนเดิม ตัว dir_bias wrap guard กันเองแล้ว ไม่กระทบ gather
+- หลัง restart ใหม่: bot healthy, autotrade ทำงาน, Guardian cycle ปกติ, KPI today 9W/0L +1.72 USDT
+
+### ยังไม่ได้ทำ
+- ยังไม่ commit งาน direction-bias session นี้
+- (optional) remove `execution_agent` state=blocked ("Binance API/IP permission rejected" — hermes subagent ที่ไม่กระทบ real trading)
+- (ถ้าต้องการ) เพิ่ม `directionBias` เป็น entry gate จริง (ตอนนี้เป็น observational เท่านั้น)
+
+### ส่วนก่อนหน้า: แก้ root cause -1021 (CRITICAL) + summary เก่า
 
 ### ปัญหา
 - Bot (port 8020) ล้มเหลว `-1021 Timestamp outside recvWindow` ทุกคำขอ signed ใน `binance_client._signed_request` path + autotrade loop crash-loop ทุก ~10s
