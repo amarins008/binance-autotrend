@@ -48,6 +48,19 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Dedup dead tuner duplicates ใน supervisor_tuning (เสร็จ, commit ed3a7e5)
+
+### สิ่งที่ทำ
+- ลบ dead duplicates ทั้งหมด (15 statements, -906 lines) ที่เป็นของ main.py/learning.py จริง → supervisor_tuning.py เหลือ **471 lines** (เดิม 1377)
+- **ลบ (12 defs + 3 aliases):** `_maybe_tune_external_signal_guard`(+alias), `_maybe_tune_low_entry_activity`(+alias), `_maybe_tune_scan_timeout_from_skip`(+alias), `_maybe_tune_weak_payoff_from_review`, `_daily_trade_regime_review`, `_maybe_tune_daily_entry_regression`, `_maybe_tune_small_profit_capture_from_review`, `_maybe_tune_negative_expectancy_from_review`, `_symbol_drag_candidate_from_review`, `_maybe_lock_symbol_drag_from_review`, `_maybe_clear_bad_utc_hour_from_config`, `_per_symbol_streak_size_mult` (kana `learning.py:825` + main import จาก learning อยู่แล้ว)
+- **คงเหลือ live ชื่อ (เฉพาะที่ main/tests import):** `_supervisor_trade_period_reviews`, `_maybe_tune_size_multiplier_from_streak`, `maybe_tune_tradingview_health` (+ `_tv_alert_send`, `_recent_live_result_streak_state` passthrough ที่ size_streak ใช้)
+- impact analysis: manual grep ทั่ว repo (gitnexus MCP ไม่มีใน env) — import ของ supervisor_tuning มีแค่ main.py:223 (`_supervisor_trade_period_reviews`, `_maybe_tune_size_multiplier_from_streak`) + main.py:7839 (`maybe_tune_tradingview_health` lazy) + test_refactored_modules.py:44 (2 ชื่อ live) — ไม่มีไวยัง import ชื่อที่ลบ
+- Verification: py_compile + `import main` OK, `pytest tests/ = 63 passed`, `test_refactored_modules.py = 54 passed`, size_streak probes 8/8 ผ่าน, diff = 906 deletions-only (ไม่แตะ syntax อื่น)
+- bot 8020 running กับโค้ดใหม่จริง (lock/rollback fix จาก 9dd35d8) — dedup นี้ไม่เปลี่ยน behavior มีผลไฟล์เล็กลงอย่างเดียว; snapshot runtime ไม่ touch
+
+### หมายเหตุ
+- ตอนนี้ supervisor_tuning.py มีแค่ live helpers ของ supervisor (tradingview_health + size_streak + trade_period_reviews) — 6 tuners + helpers ทั้งหมดของ supervisor มี single source of truth ที่ main.py แล้ว
+
 ## Session: Supervisor auto-tune self-conflict patch (เสร็จ, commit 9dd35d8)
 
 ### ปัญหา
