@@ -48,6 +48,32 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Supervisor auto-tune self-conflict patch (เสร็จ, commit 9dd35d8)
+
+### ปัญหา
+- 8 supervisor tuners เขียน knobs overlap กัน โดยไม่มี lock ร่วม → loosener/tightener สู้กัน (เช่น small_profit loosens profit-lock/TP เดียวกับ weak_payoff tightens; low_entry loosens scan workload เดียวกับ scan_timeout tightens; size_streak loosens size เดียวกับ weak_payoff/tighten)
+- Rollback path บกพร่อง: `_commit_supervisor_config_tune` บันทึก `changes[]` ไว้แล้ว แต่ rollback แก้คืนจาก `preMetrics` (performance stats) → **no-op** ไม่ restore config จริง
+- **Discovery ใหญ่:** main.py มี tuner copies ของตัวเอง 6 ตัว (`weak_payoff` 491, `low_entry` 827, `scan_timeout` 994, `daily` 1144, `small_profit` 1245, `negative` 1311) ที่ **review loop เรียกจริง** (main.py:7856/8149/8245/8300/8399/8440/8476/8531) + import `size_streak`/`trade_period_reviews` จาก supervisor_tuning; supervisor_tuning's 6 copies = **dead duplicates** (ไม่มี caller) — แก้ที่ supervisor_tuning อย่างเดียวไม่กระทบ bot
+
+### Fix (commit 9dd35d8, 3 ไฟล์)
+- **`trading/supervisor_state.py`** — `_apply_rollback_old_values(cfg, rollback)` (ใหม่, ~216): restore ค่าจริงจาก `changes[].old` (ข้าม `old=None`, ไม่ inject metric keys) + เปลี่ยน single  `_TUNING_MODE_LOCK_STATE` → **per-domain** `_TUNING_LOCK_DOMAINS` (`entry`/`profit`/`scan`/`size`); `_tuning_mode_lock_acquire(..., domain=None, domains=None)` block เฉพาะ domain ที่ถือโหมดตรงข้าม; `_release()` ล้างทุก domain; `_status()` เพิ่ม activeDomains/domains
+- **`trading/supervisor_tuning.py`** — ลบ duplicate defs: `_supervisor_trade_period_reviews` (top) + `_maybe_tune_size_multiplier_from_streak` (top) → เหลือชื่อละ 1 (live = bottom; 1557→1344 lines); ใช้ `_apply_rollback_old_values` rollback path; เพิ่ม domain locks (low_entry entry+scan sub-gate, scan_timeout scan, weak_payoff profit+size sub-gate, small_profit profit, negative/daily entry, size_streak size ตาม target≥1.0); **+ port drift:** size_streak เพิ่ม `insufficient_recent_trades` guard (loss streak บน session ที่มี trades น้อย) + cooldown `10` → `max(10, supervisorSizeStreakCooldownMin=60)` — ตอนนี้ live เท่ากับ dead copy เดิม
+- **`main.py`** — 6 **live** tuner copies ได้ fix เดียวกัน (rollback ใช้ `_apply_rollback_old_values` + release-on-rollback; domain locks ก่อน modify; ปล่อย lock ตอน no_safe_delta); import 3 helpers จาก supervisor_state (shared, no cycle)
+
+### Verification
+- py_compile + `import main` cycle-free
+- 14 live-tuner gate probes ผ่าน (blocked paths ไม่ mutate; size sub-gate; profit/scan/entry cross-block; lock release on no-op; rollback restore จริง ไม่ inject metric keys)
+- 8 size_streak probes ผ่าน (loss guard ไม่ tune, cooldown 3600s, size domain lock)
+- `pytest tests/ -q --ignore=tests/test_pineforge.py` = **63 passed**
+
+### เดิม (ก่อนช่วย) — dead supervisor_tuning copies ที่แก้แต่ไม่กระทบ bot
+- งานก่อนหน้าเคยแก้ (a)(c)(d)(b) ที่ supervisor_tuning.py 6 copies ที่เป็น dead → เก็บไว้ (ไม่ทำร้าย) แต่ **จุดจริงคือ main.py** — session นี้ pivot ไปแก้ live
+
+### ยังต้องทำ / note
+- **Dedup (แนะนำ แต่ deferred):** supervisor_tuning's `_maybe_tune_low_entry_activity/scan_timeout/weak_payoff/daily/small_profit/negative` (6 copies) + `_daily_trade_regime_review` = dead กับ main.py's live copies → ควรลบ side ที่ถูก (referenced โดย `test_refactored_modules.py` ยัง import live names อยู่) — งาน refactor ใหญ่ ไม่ทำ session นี้
+- ยังไม่ commit งาน direction-bias session (ค้างจากก่อนหน้า ยัง)
+- (optional) remove `execution_agent` state=blocked
+
 ## Session: Direction Bias detector + Start AutoTrade.bat adjust (เสร็จ)
 
 ### สิ่งที่ทำ
