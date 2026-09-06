@@ -1,8 +1,12 @@
-import unittest
+﻿import unittest
 from pathlib import Path
 from unittest import mock
 
 import main
+import trading.live_guardian as lg
+import trading.learning as lrn
+import trading.trade_log as tl
+import exchange.futures_orders as fo
 
 
 class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
@@ -27,10 +31,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
-                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})) as intel:
-                        with mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
+                    with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})) as intel:
+                        with mock.patch.object(lg, "_autotrade_log"):
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
@@ -54,9 +58,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
                         changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertFalse(changed)
@@ -67,7 +71,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(lock["sl"], 0.097118)
 
     async def test_multi_guard_closes_positive_retrace_before_negative(self):
-        cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55, "profitLockBreakevenFloorUsdt": 0.08}
+        cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55, "profitLockBreakevenFloorUsdt": 0.08, "holdWinners": False, "feeMinEdgeVsCostMultiple": 1.0}
         main.AUTO_TRADE["liveProfitLocks"] = {
             "DOGEUSDT:LONG": {
                 "symbol": "DOGEUSDT",
@@ -76,6 +80,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "tp": 1.018,
                 "sl": 0.991,
                 "peak": 0.30,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
             }
         }
         rows = [
@@ -84,21 +89,21 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "side": "LONG",
                 "qty": 100.0,
                 "entryMark": 1.0,
-                "markPrice": 1.0006,
-                "notionalUsdtApprox": 100.06,
-                "unRealizedProfit": 0.06,
+                "markPrice": 1.0015,
+                "notionalUsdtApprox": 100.15,
+                "unRealizedProfit": 0.15,
             }
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
-                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
-                        with mock.patch.object(main, "_autotrade_log") as log:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
+                        with mock.patch.object(lg, "_autotrade_log") as log:
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base())
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="BREAKEVEN_GUARD")
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("BREAKEVEN_GUARD" in call.args[0] for call in log.call_args_list))
 
@@ -111,6 +116,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "profitLockKeepUsdt": 0.18,
             "profitLockMaxGivebackUsdt": 0.22,
             "profitLockBreakevenFloorUsdt": 0.08,
+            "holdWinners": False,
+            "feeMinEdgeVsCostMultiple": 1.0,
+            "deadZoneExitSec": 999999,
         }
         main.AUTO_TRADE["liveProfitLocks"] = {
             "ADAUSDT:LONG": {
@@ -122,6 +130,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "peak": 0.50,
                 "armed": True,
                 "lockUsdt": 0.28,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
             }
         }
         rows = [
@@ -137,14 +146,14 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
-                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "LONG", "confidence": 0.82, "execution": {"momentumPct": 0.1}, "precision": {"longScore": 2.0, "shortScore": 0.2}})):
-                        with mock.patch.object(main, "_autotrade_log") as log:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
+                    with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                        with mock.patch.object(lg, "_autotrade_log") as log:
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("ADAUSDT", "LONG", "k", "s", main._binance_base())
+        close_one.assert_awaited_once_with("ADAUSDT", "LONG", "k", "s", main._binance_base(), reason="RETRACE_BUDGET")
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("RETRACE" in call.args[0] for call in log.call_args_list))
 
@@ -156,6 +165,19 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "profitLockTriggerUsdt": 0.40,
             "profitLockKeepUsdt": 0.18,
             "profitLockMaxGivebackUsdt": 0.22,
+            "holdWinners": False,
+            "feeMinEdgeVsCostMultiple": 1.0,
+        }
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "BTCUSDT:LONG": {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryMark": 1.0,
+                "tp": 1.018,
+                "sl": 0.991,
+                "peak": 0.40,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
+            }
         }
         rows = [
             {
@@ -170,10 +192,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "LONG", "confidence": 0.82, "execution": {"momentumPct": 0.1}, "precision": {"longScore": 2.0, "shortScore": 0.2}})):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
-                        with mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+                        with mock.patch.object(lg, "_autotrade_log"):
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertFalse(changed)
@@ -201,6 +223,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "tp": 1.018,
                 "sl": 0.991,
                 "peak": 1.9,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
             }
         }
         rows = [
@@ -223,10 +246,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         }
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value=follow_intel)):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
-                        with mock.patch.object(main, "_autotrade_log") as log:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value=follow_intel)):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+                        with mock.patch.object(lg, "_autotrade_log") as log:
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
@@ -264,9 +287,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
                         changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertFalse(changed)
@@ -284,6 +307,17 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "strongFlipMinScoreGap": 1.5,
             "strongFlipUltraScoreGap": 2.2,
             "strongFlipUltraConfRelax": 0.08,
+        }
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "DOGEUSDT:LONG": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "entryMark": 1.0,
+                "tp": 1.018,
+                "sl": 0.975,
+                "peak": 0.0,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
+            }
         }
         rows = [
             {
@@ -313,15 +347,15 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         }
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value=opposite_intel)):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock(return_value={"closed": [{"ok": True}]})) as close_one:
-                        with mock.patch.object(main, "place_futures_order", new=mock.AsyncMock()) as place_order:
-                            with mock.patch.object(main, "_autotrade_log") as log:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value=opposite_intel)):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"closed": [{"ok": True}]})) as close_one:
+                        with mock.patch.object(lg, "place_futures_order", new=mock.AsyncMock()) as place_order:
+                            with mock.patch.object(lg, "_autotrade_log") as log:
                                 changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base())
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="STRONG_REVERSAL_EXIT")
         place_order.assert_not_awaited()
         self.assertNotIn("DOGEUSDT:LONG", main.AUTO_TRADE["liveProfitLocks"])
         self.assertTrue(any("STRONG_REVERSAL_EXIT" in call.args[0] for call in log.call_args_list))
@@ -369,9 +403,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         }
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value=pullback_intel)):
-                    with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value=pullback_intel)):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
                         changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertFalse(changed)
@@ -436,9 +470,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
 
         try:
             with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-                with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value=None)):
-                        with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
+                with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                    with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value=None)):
+                        with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock()) as close_one:
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
             self.assertFalse(changed)
@@ -486,11 +520,11 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             return {"ok": True}
 
         try:
-            with mock.patch.object(main, "_is_hedge_mode", new=mock.AsyncMock(return_value=False)):
-                with mock.patch.object(main, "fetch_mark_price", new=mock.AsyncMock(return_value=1.01)):
-                    with mock.patch.object(main, "_get_um_client", return_value=None):
-                        with mock.patch.object(main, "_signed_request", new=fake_signed):
-                            with mock.patch.object(main, "_record_learning_trade", side_effect=lambda sym, trade, mode: recorded.append((sym, trade, mode))):
+            with mock.patch.object(fo, "_is_hedge_mode", new=mock.AsyncMock(return_value=False)):
+                with mock.patch.object(fo, "fetch_mark_price", new=mock.AsyncMock(return_value=1.01)):
+                    with mock.patch.object(fo, "_get_um_client", return_value=None):
+                        with mock.patch.object(fo, "_signed_request", new=fake_signed):
+                            with mock.patch.object(fo, "_record_learning_trade", side_effect=lambda sym, trade, mode: recorded.append((sym, trade, mode))):
                                 res = await main._close_position_one_side("DOGEUSDT", "LONG", "k", "s", main._binance_base())
 
             self.assertTrue(res["closed"])
@@ -516,6 +550,17 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "payoffLossGuardMinLossUsdt": 0.22,
             "payoffLossGuardMaxLossUsdt": 0.9,
         }
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "DOGEUSDT:LONG": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "entryMark": 1.0,
+                "tp": 1.018,
+                "sl": 0.975,
+                "peak": 0.0,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
+            }
+        }
         rows = [
             {
                 "symbol": "DOGEUSDT",
@@ -539,15 +584,15 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         ]
 
         with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-            with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
-                with mock.patch.object(main, "_live_closed_trades_from_log", return_value=recent_trades):
-                    with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "LONG", "confidence": 0.76, "execution": {"momentumPct": 0.08}})):
-                        with mock.patch.object(main, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
-                            with mock.patch.object(main, "_autotrade_log") as log:
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lrn, "_live_closed_trades_from_log", return_value=recent_trades):
+                    with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "LONG", "confidence": 0.76, "execution": {"momentumPct": 0.08}})):
+                        with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
+                            with mock.patch.object(lg, "_autotrade_log") as log:
                                 changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base())
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="PAYOFF_LOSS_GUARD")
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("PAYOFF_LOSS_GUARD" in call.args[0] for call in log.call_args_list))
 
@@ -626,7 +671,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
 
         try:
             with mock.patch.object(main, "_manage_live_open_positions_once", new=mock.AsyncMock(return_value=False)):
-                with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
+                with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
                     with mock.patch.object(main, "_adaptive_risk_cooldown_check", new=mock.AsyncMock(side_effect=main.asyncio.TimeoutError())):
                         with mock.patch.object(main, "_persist_autotrade_snapshot"):
                             with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
@@ -705,7 +750,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         try:
             with mock.patch.object(main, "_pick_best_symbol_from_scan", new=mock.AsyncMock(return_value=(
                 "XLMUSDT",
-                {"symbol": "XLMUSDT", "signal": "LONG", "confidence": 0.82, "execution": {}},
+                {"symbol": "XLMUSDT", "signal": "LONG", "confidence": 0.82,
+                 "execution": {"spreadBps": 2.0, "momentumPct": 0.1},
+                 "precision": {"longScore": 2.0, "shortScore": 0.2},
+                 "momentum": {"net": 0.5}},
                 [{"symbol": "XLMUSDT", "qualified": True}],
             ))):
                 with mock.patch.object(main, "_recent_live_loss_streak_state", return_value={"streak": 0, "signature": ""}):
@@ -737,6 +785,8 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             "hermesAgents": main.AUTO_TRADE.get("hermesAgents"),
             "trades": main.AUTO_TRADE.get("trades"),
             "lastTradeAt": main.AUTO_TRADE.get("lastTradeAt"),
+            "lastDecision": main.AUTO_TRADE.get("lastDecision"),
+            "lastDecisions": main.AUTO_TRADE.get("lastDecisions"),
         }
         main.AUTO_TRADE["running"] = True
         main.AUTO_TRADE["manageOpenOnly"] = False
@@ -746,6 +796,8 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
         main.AUTO_TRADE["trades"] = []
         main.AUTO_TRADE["lastTradeAt"] = 0
+        main.AUTO_TRADE["lastDecision"] = None
+        main.AUTO_TRADE["lastDecisions"] = {}
         main.AUTO_TRADE["config"] = {
             "executionMode": "PAPER",
             "symbol": "AUTO",
@@ -764,14 +816,18 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                     "symbol": "BTCUSDT",
                     "signal": "WAIT",
                     "confidence": 0.5,
-                    "execution": {"mark": 100.0, "bid": 99.99, "ask": 100.01, "spreadBps": 2.0},
+                    "execution": {"mark": 100.0, "bid": 99.99, "ask": 100.01, "spreadBps": 2.0, "momentumPct": 0.0},
+                    "precision": {"longScore": 0.5, "shortScore": 0.3},
+                    "momentum": {"net": 0.0},
                 },
                 [{"symbol": "BTCUSDT", "qualified": False, "rejectReason": "signal_wait"}],
             ))):
                 with mock.patch.object(main, "_live_trades_count_today_symbol", return_value=0):
                     with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
-                        with self.assertRaises(StopLoop):
-                            await main._autotrade_loop()
+                        with mock.patch.object(main, "_cached_klines", new=mock.AsyncMock(return_value=[])):
+                            with mock.patch.object(main, "_exchange_filters", new=mock.AsyncMock(return_value={"minNotional": 0.0})):
+                                with self.assertRaises(StopLoop):
+                                    await main._autotrade_loop()
 
             self.assertIn("maxSpreadBps", main.AUTO_TRADE["config"])
             self.assertEqual(main.AUTO_TRADE["lastSkip"]["code"], "signal_wait")
@@ -820,7 +876,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
 
         try:
             with mock.patch.object(main, "_manage_live_open_positions_once", new=mock.AsyncMock(return_value=False)):
-                with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
+                with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
                     with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(side_effect=Exception("-2015 invalid api-key, ip, or permissions"))):
                         with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
                             with self.assertRaises(StopLoop):
@@ -876,7 +932,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
 
         try:
             with mock.patch.object(main, "_manage_live_open_positions_once", new=mock.AsyncMock(return_value=False)):
-                with mock.patch.object(main, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
+                with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=[])):
                     with mock.patch.object(main, "intel_analyze", new=mock.AsyncMock(side_effect=Exception("-4411 agreement contract fapi"))):
                         with mock.patch.object(main.asyncio, "sleep", new=stop_sleep):
                             with self.assertRaises(StopLoop):
@@ -890,7 +946,26 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             for key, value in prev.items():
                 main.AUTO_TRADE[key] = value
 
+class _NoOpTvMcp:
+    """Stub TradingView MCP: empty miss list + empty universe so scan-path
+    tests never filter synthetic symbols through the TV whitelist."""
+
+    _tv_missing = {}
+
+    def get_tv_universe(self, force_refresh: bool = False) -> set:
+        return set()
+
+    def is_tv_known(self, symbol: str) -> bool:
+        return True
+
+
 class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tv_patch = mock.patch("trading.tradingview_mcp.get_tv_mcp", return_value=_NoOpTvMcp())
+        self._tv_patch.start()
+
+    def tearDown(self):
+        self._tv_patch.stop()
     async def test_scan_timeout_budget_accounts_for_expanded_scan_and_retries(self):
         cfg = {
             "intervalSec": 20,
@@ -1045,6 +1120,10 @@ class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
         async def slow_data_get(_path):
             await main.asyncio.sleep(20)
 
+        # Clear the ticker cache so this test actually exercises the timeout
+        # path (a prior test may have seeded it with fresh fake data).
+        main._SCAN_TICKER_CACHE["data"] = None
+        main._SCAN_TICKER_CACHE["ts"] = 0.0
         with mock.patch.object(main, "_data_get", new=slow_data_get):
             symbols = await main._scan_market_candidates(30)
 
@@ -1941,7 +2020,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.RISK["max_leverage"] = 25
         main.AUTO_TRADE["config"]["adaptiveLeverageMax"] = 10
 
-        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
             out = main.autotrade_update_config({"leverage": 10, "leverageMin": 10, "leverageMax": 25})
 
         self.assertTrue(out["ok"])
@@ -2673,7 +2752,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
         with mock.patch.object(main, "_live_closed_trades_from_log", return_value=[]):
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         cfg = main.AUTO_TRADE["config"]
@@ -2744,7 +2823,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         try:
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=[]):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
                     cfg_after = dict(main.AUTO_TRADE["config"])
         finally:
@@ -2805,7 +2884,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         try:
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=[]):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
         finally:
             for key, value in prev.items():
@@ -2838,7 +2917,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_low_entry_activity("quiet market", cfg, board)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -2867,7 +2946,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_low_entry_activity("over target capacity", cfg, [])
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -2955,7 +3034,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["consecutiveErrors"] = 0
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
-        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
             review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         self.assertNotIn(utc_hour, main.AUTO_TRADE["config"]["liveBadUtcHours"])
@@ -3022,7 +3101,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 review = main._hermes_supervisor_review(main.AUTO_TRADE)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3118,7 +3197,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["supervisorAutoTune"] = {}
 
         with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         cfg = main.AUTO_TRADE["config"]
@@ -3177,7 +3256,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             main.AUTO_TRADE["supervisorAutoTune"] = {}
 
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
             cfg = main.AUTO_TRADE["config"]
@@ -3233,7 +3312,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             main.AUTO_TRADE["supervisorAutoTune"] = {}
 
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
             cfg = main.AUTO_TRADE["config"]
@@ -3331,7 +3410,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3359,7 +3438,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3390,7 +3469,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3467,7 +3546,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
-            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3681,7 +3760,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         try:
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3723,7 +3802,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         try:
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
@@ -3791,7 +3870,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
         try:
             with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                     review = main._hermes_supervisor_review(main.AUTO_TRADE)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune

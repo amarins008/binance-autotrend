@@ -1,8 +1,6 @@
 import tempfile
 import unittest
-import importlib.util
 import json
-import time
 from pathlib import Path
 
 from obsidian_memory import (
@@ -14,15 +12,6 @@ from obsidian_memory import (
     write_self_review_memory,
     write_symbol_memory,
 )
-
-
-def _load_clean_vault_module():
-    path = Path(__file__).parent / "obsidian_vault" / "clean_vault.py"
-    spec = importlib.util.spec_from_file_location("clean_vault_under_test", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
 
 
 class TestObsidianLongTermMemory(unittest.TestCase):
@@ -103,72 +92,16 @@ class TestObsidianLongTermMemory(unittest.TestCase):
             self.assertNotIn("entry filter may be misaligned", text)
 
     def test_clean_vault_archives_stale_trade_rows_without_deleting_history(self):
-        clean_vault = _load_clean_vault_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp)
-            clean_vault.VAULT_DIR = vault
-            clean_vault.LOG_PATH = vault / "trades_log.jsonl"
-            clean_vault.ARCHIVE_DIR = vault / "archive"
-            clean_vault.ARCHIVE_LOG_PATH = clean_vault.ARCHIVE_DIR / "trades_log.archive.jsonl"
-            clean_vault.ANOMALY_LOG_PATH = clean_vault.ARCHIVE_DIR / "trades_log.anomalies.jsonl"
-            now = int(time.time())
-            old_live = {"ts": now - 40 * 86400, "mode": "LIVE", "symbol": "OLDUSDT", "pnl": 1.0}
-            fresh_live = {"ts": now - 2 * 86400, "mode": "LIVE", "symbol": "NEWUSDT", "pnl": 0.5}
-            old_scan = {"ts": now - 10 * 86400, "mode": "SCAN", "symbol": "SCANUSDT", "score": 0.8}
-            clean_vault.LOG_PATH.write_text(
-                "\n".join(json.dumps(x) for x in (old_live, fresh_live, old_scan)) + "\n",
-                encoding="utf-8",
-            )
-
-            out = clean_vault.clean_trades_log()
-
-            active = clean_vault.LOG_PATH.read_text(encoding="utf-8")
-            archived = clean_vault.ARCHIVE_LOG_PATH.read_text(encoding="utf-8")
-            self.assertEqual(out["archived"], 2)
-            self.assertIn("NEWUSDT", active)
-            self.assertNotIn("OLDUSDT", active)
-            self.assertIn("OLDUSDT", archived)
-            self.assertIn("SCANUSDT", archived)
+        self.skipTest(
+            "clean_vault.py was removed by the per-symbol storage migration; "
+            "global trades_log.jsonl archive no longer exists."
+        )
 
     def test_clean_vault_rebuilds_profiles_from_active_live_log_only(self):
-        clean_vault = _load_clean_vault_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp)
-            clean_vault.VAULT_DIR = vault
-            clean_vault.LOG_PATH = vault / "trades_log.jsonl"
-            clean_vault.PROFILES_PATH = vault / "learning_profiles.json"
-            now = int(time.time())
-            clean_vault.LOG_PATH.write_text(
-                "\n".join(
-                    json.dumps(x)
-                    for x in (
-                        {"ts": now, "mode": "LIVE", "symbol": "BTCUSDT", "pnl": 0.4},
-                        {"ts": now, "mode": "LIVE", "symbol": "BTCUSDT", "pnl": -0.1},
-                        {"ts": now, "mode": "SCAN", "symbol": "BTCUSDT", "score": 0.9},
-                    )
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            clean_vault.PROFILES_PATH.write_text(
-                json.dumps(
-                    {
-                        "BTCUSDT": {"wins": 99, "losses": 99, "realizedPnl": -99.0, "observations": 5},
-                        "OLDUSDT": {"wins": 3, "losses": 1, "realizedPnl": 8.0, "observations": 2},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            profiles = clean_vault.rebuild_learning_profiles_from_active_log()
-
-            self.assertEqual(profiles["BTCUSDT"]["wins"], 1)
-            self.assertEqual(profiles["BTCUSDT"]["losses"], 1)
-            self.assertEqual(profiles["BTCUSDT"]["realizedPnl"], 0.3)
-            self.assertEqual(profiles["BTCUSDT"]["observations"], 5)
-            self.assertEqual(profiles["OLDUSDT"]["wins"], 0)
-            self.assertEqual(profiles["OLDUSDT"]["losses"], 0)
-            self.assertEqual(profiles["OLDUSDT"]["rewardScore"], 0.0)
+        self.skipTest(
+            "clean_vault.py was removed by the per-symbol storage migration; "
+            "global learning_profiles.json rebuild no longer exists."
+        )
 
 
 if __name__ == "__main__":

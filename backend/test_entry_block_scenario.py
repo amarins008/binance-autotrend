@@ -44,6 +44,16 @@ def _base_cfg(**over):
         "marginRiskFraction": 0.33,
         "marginSizingMinUsdt": 5.0,
         "marginSizingMaxUsdt": 60.0,
+        # Keep the newer fee-edge gate satisfied so these scenario tests reach
+        # the pre_reversal guard (the gate being tested). Without TP/SL the
+        # default small TP makes fee_edge reject before pre_reversal is reached.
+        "takeProfitPct": 2.5,
+        "stopLossPct": 1.0,
+        "minRiskRewardRatio": 1.5,
+        # USDT-target sizing would collapse TP% (1.25 USDT target on 250 USDT
+        # notional → TP 0.5%) and make fee_edge reject before pre_reversal.
+        # Force pct-based TP/SL so the fee gate passes with the configured 2.5.
+        "tpSlTargetUsdtEnabled": False,
     }
     cfg.update(over)
     return cfg

@@ -38,7 +38,7 @@ class TestCoinRankRoute(unittest.TestCase):
                 ],
             )
 
-        with patch("routers.analysis_routes._pick_best_symbol_from_scan", side_effect=fake_pick):
+        with patch("main._pick_best_symbol_from_scan", side_effect=fake_pick):
             response = client.post(
                 "/intel/rank",
                 json={"symbols": [], "scanMarket": True, "topN": 2},

@@ -124,7 +124,14 @@ class TestCandlestickMultiTimeframe(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(x["name"] == "volatility" and x["state"] == "block_bias" for x in layers["riskGuards"]["guards"]))
 
     def test_data_quality_guard_blocks_invalid_core_fields_only(self):
-        ok = _intel_data_quality_guard({"symbol": "BTCUSDT", "signal": "WAIT", "confidence": 0.5, "execution": {}})
+        ok = _intel_data_quality_guard({
+            "symbol": "BTCUSDT",
+            "signal": "WAIT",
+            "confidence": 0.5,
+            "execution": {},
+            "precision": {"ema200Ready": False},
+            "momentum": {"momentumPct": 0.1, "strength": 0.05},
+        })
         bad = _intel_data_quality_guard({"symbol": "BTCUSDT", "signal": "BUY", "confidence": 1.2, "execution": {}})
 
         self.assertTrue(ok["ok"])

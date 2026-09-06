@@ -116,13 +116,12 @@ class TestPositionCacheTTL(unittest.IsolatedAsyncioTestCase):
 
         app_state._LIVE_POSITIONS_CACHE = (time.time() - 30.0, [])
 
-        with mock.patch.object(live_guardian, "_main") as mock_main:
-            mock_main.return_value._get_um_client.return_value = None
-            mock_main.return_value._signed_request = mock.AsyncMock(return_value=[])
-            mock_main.return_value._um_client_position_risk = mock.AsyncMock(return_value=[])
-            result = await live_guardian._pick_live_orphan_positions("k", "s", "https://fapi.binance.com")
+        with mock.patch.object(live_guardian, "_get_um_client", return_value=None):
+            with mock.patch.object(live_guardian, "_signed_request",
+                                   new=mock.AsyncMock(return_value=[])) as signed:
+                result = await live_guardian._pick_live_orphan_positions("k", "s", "https://fapi.binance.com")
         # Signed request should have been called since cache was stale
-        mock_main.return_value._signed_request.assert_called_once()
+        signed.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -255,37 +254,43 @@ class TestParallelIntelDispatch(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)  # simulate 50ms intel call
             return {"signal": "WAIT", "confidence": 0.5}
 
-        with mock.patch.object(live_guardian, "intel_analyze", side_effect=slow_intel):
-            with mock.patch.object(live_guardian, "_main") as mock_main:
-                # Feed 3 fake positions
-                fake_rows = [
-                    {"symbol": f"SYM{i}USDT", "side": "LONG", "qty": 0.01,
-                     "entryMark": 100.0, "markPrice": 100.5, "notionalUsdtApprox": 10.0,
-                     "unRealizedProfit": 0.05, "leverage": 5,
-                     "marginUsedUsdt": 2.0, "isolatedWalletUsdt": 2.0}
-                    for i in range(3)
-                ]
-                from services import app_state
-                app_state._LIVE_POSITIONS_CACHE = (time.time(), fake_rows)
-                mock_main.return_value._pick_live_orphan_positions = mock.AsyncMock(return_value=fake_rows)
-                mock_main.return_value._fee_edge_min_net_usdt = mock.MagicMock(return_value=0.02)
-                mock_main.return_value._profit_lock_policy = mock.MagicMock(return_value={"trigger": 0.5, "lockUsdt": 0.3})
-                mock_main.return_value._recent_payoff_loss_guard = mock.MagicMock(return_value={"active": False})
-                mock_main.return_value._last_decision_intel = mock.MagicMock(return_value=None)
-                mock_main.return_value._entry_snapshot_from_intel = mock.MagicMock(return_value={})
-                mock_main.return_value._effective_tp_sl = mock.MagicMock(return_value={"tpPct": 1.5, "slPct": 0.9, "notionalCapUsdt": 20.0, "profitLockTriggerUsdt": 0.5, "tier": "med", "volatilityScore": 0.0})
-                mock_main.return_value._symbol_effective_profile = mock.MagicMock(return_value={"position_size_mult": 1.0, "entry_offset_bps": 0.0})
-                mock_main.return_value._calc_tp_sl_prices = mock.MagicMock(return_value=(101.5, 99.1))
-                mock_main.return_value._close_position_one_side = mock.AsyncMock()
-                mock_main.return_value._agent_mark = mock.MagicMock()
-                mock_main.return_value._autotrade_log = mock.MagicMock()
+        fake_rows = [
+            {"symbol": f"SYM{i}USDT", "side": "LONG", "qty": 0.01,
+             "entryMark": 100.0, "markPrice": 100.5, "notionalUsdtApprox": 10.0,
+             "unRealizedProfit": 0.05, "leverage": 5,
+             "marginUsedUsdt": 2.0, "isolatedWalletUsdt": 2.0}
+            for i in range(3)
+        ]
 
-                cfg = {"holdMinConfidence": 0.72, "tpTargetMaxUsdt": 3.0}
-                import os
-                with mock.patch.dict(os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-                    start = time.monotonic()
-                    await live_guardian._live_multi_profit_lock_manage(cfg)
-                    elapsed = time.monotonic() - start
+        with mock.patch.object(live_guardian, "intel_analyze", side_effect=slow_intel):
+            with mock.patch.object(live_guardian, "_get_um_client", return_value=None):
+                with mock.patch.object(live_guardian, "_signed_request",
+                                       new=mock.AsyncMock(return_value=fake_rows)):
+                    with mock.patch.object(live_guardian, "_fee_edge_min_net_usdt", return_value=0.02):
+                        with mock.patch.object(live_guardian, "_profit_lock_policy",
+                                               return_value={"trigger": 0.5, "lockUsdt": 0.3}):
+                            with mock.patch.object(live_guardian, "_recent_payoff_loss_guard",
+                                                   return_value={"active": False}):
+                                with mock.patch.object(live_guardian, "_last_decision_intel", return_value=None):
+                                    with mock.patch.object(live_guardian, "_entry_snapshot_from_intel", return_value={}):
+                                        with mock.patch.object(live_guardian, "_effective_tp_sl",
+                                                               return_value={"tpPct": 1.5, "slPct": 0.9, "notionalCapUsdt": 20.0, "profitLockTriggerUsdt": 0.5, "tier": "med", "volatilityScore": 0.0}):
+                                            with mock.patch.object(live_guardian, "_symbol_effective_profile",
+                                                                   return_value={"position_size_mult": 1.0, "entry_offset_bps": 0.0}):
+                                                with mock.patch.object(live_guardian, "_calc_tp_sl_prices",
+                                                                       return_value=(101.5, 99.1)):
+                                                    with mock.patch.object(live_guardian, "_close_position_one_side", new=mock.AsyncMock()):
+                                                        with mock.patch.object(live_guardian, "_agent_mark"):
+                                                            with mock.patch.object(live_guardian, "_autotrade_log"):
+                                                                with mock.patch.object(live_guardian, "_position_guardian_status_heartbeat"):
+                                                                    from services import app_state
+                                                                    app_state._LIVE_POSITIONS_CACHE = (time.time(), fake_rows)
+                                                                    cfg = {"holdMinConfidence": 0.72, "tpTargetMaxUsdt": 3.0}
+                                                                    import os
+                                                                    with mock.patch.dict(os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
+                                                                        start = time.monotonic()
+                                                                        await live_guardian._live_multi_profit_lock_manage(cfg)
+                                                                        elapsed = time.monotonic() - start
 
         # 3 × 50ms sequential = 150ms; parallel should be ~50ms
         # Allow generous 130ms budget to avoid flaky CI failures

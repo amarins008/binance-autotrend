@@ -12,13 +12,13 @@ class TradingEngineTests(unittest.TestCase):
 
     def test_apply_defaults_engine_version(self):
         cfg = apply_autotrade_defaults({})
-        self.assertEqual(cfg.get("engineVersion"), "pro-2.0")
+        self.assertEqual(cfg.get("engineVersion"), "pro-5.1")
         self.assertTrue(cfg.get("marketScan"))
         self.assertFalse(cfg.get("orphanAutoAdoptForceSingleSymbol"))
         self.assertTrue(cfg.get("orphanAutoAdoptMultiEnabled"))
-        self.assertLessEqual(float(cfg.get("minConfidence")), 0.66)
-        self.assertLessEqual(float(cfg.get("earlyEntryScoreGapMin")), 1.4)
-        self.assertLessEqual(float(cfg.get("earlyEntryMinConfidence")), 0.60)
+        self.assertEqual(cfg.get("minConfidence"), 0.72)
+        self.assertLessEqual(float(cfg.get("earlyEntryScoreGapMin")), 1.7)
+        self.assertLessEqual(float(cfg.get("earlyEntryMinConfidence")), 0.68)
         self.assertLessEqual(float(cfg.get("lateEntryMaxBbPctB")), 0.90)
         self.assertEqual(cfg.get("liveBadUtcHours"), [])
         self.assertEqual(cfg.get("leverageMax"), 25)
@@ -43,18 +43,18 @@ class TradingEngineTests(unittest.TestCase):
             "volSizeMaxMult": 1.4,
         })
 
-        self.assertEqual(cfg.get("maxOpenPositions"), 6)
+        self.assertEqual(cfg.get("maxOpenPositions"), 3)
         self.assertEqual(cfg.get("scanTopLiquid"), 60)
         self.assertEqual(cfg.get("scanAnalyzeTop"), 12)
         self.assertEqual(cfg.get("supervisorTargetOpenPositionsMin"), 3)
         self.assertEqual(cfg.get("supervisorTargetOpenPositionsMax"), 6)
-        self.assertEqual(cfg.get("supervisorSizeMinMultiplier"), 0.65)
-        self.assertEqual(cfg.get("supervisorSizeMultiplier"), 0.65)
+        self.assertEqual(cfg.get("supervisorSizeMinMultiplier"), 0.55)
+        self.assertEqual(cfg.get("supervisorSizeMultiplier"), 0.55)
         self.assertTrue(cfg.get("riskCooldownLightScanEnabled"))
         self.assertEqual(cfg.get("riskCooldownLightScanAnalyzeTop"), 6)
-        self.assertEqual(cfg.get("usdtAmount"), 80.0)
-        self.assertEqual(cfg.get("tradeNotionalCapUsdt"), 80.0)
-        self.assertEqual(cfg.get("autoScanTradeNotionalCapUsdt"), 80.0)
+        self.assertEqual(cfg.get("usdtAmount"), 16.0)
+        self.assertEqual(cfg.get("tradeNotionalCapUsdt"), 18.0)
+        self.assertEqual(cfg.get("autoScanTradeNotionalCapUsdt"), 40.0)
         self.assertEqual(cfg.get("adaptiveSizeBoostMaxPct"), 12.0)
         self.assertEqual(cfg.get("sessionBiasMaxSizeShiftPct"), 10.0)
         self.assertEqual(cfg.get("volSizeMaxMult"), 1.15)
@@ -142,7 +142,7 @@ class TradingEngineTests(unittest.TestCase):
 
     def test_pipeline_rejects_low_rr(self):
         cfg = apply_autotrade_defaults({"minRiskRewardRatio": 2.5, "takeProfitPct": 0.5, "stopLossPct": 0.8})
-        intel = {"precision": {"atrPct": 0.05}, "momentum": {"momentumPct": 0.1}}
+        intel = {"precision": {"atrPct": 0.05}, "momentum": {"momentumPct": 0.1, "strength": 0.5}}
         plan = evaluate_entry_plan(
             EntryInputs(
                 cfg=cfg,

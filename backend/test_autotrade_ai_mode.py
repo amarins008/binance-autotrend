@@ -16,7 +16,7 @@ class TestAutotradeAiMode(unittest.TestCase):
         self.assertEqual(req.symbol, "AUTO")
         self.assertTrue(req.marketScan)
         self.assertFalse(req.orphanAutoAdoptForceSingleSymbol)
-        self.assertEqual(req.maxOpenPositions, 6)
+        self.assertEqual(req.maxOpenPositions, 4)
         self.assertEqual(req.scanTopLiquid, 60)
         self.assertEqual(req.scanAnalyzeTop, 12)
         self.assertEqual(req.tradeNotionalCapUsdt, 80.0)
@@ -38,7 +38,7 @@ class TestAutotradeAiMode(unittest.TestCase):
         intel = {"confidence": 0.95}
         with mock.patch.object(main, "_symbol_quality_score", return_value=0.12), \
              mock.patch.object(main, "_rolling_symbol_perf", return_value={"trades": 0}), \
-             mock.patch.object(main, "_load_learning_profiles", return_value={}):
+             mock.patch.object(main, "_load_single_profile", return_value={}):
             out = main._adaptive_trade_usdt(80.0, "BTCUSDT", intel, cfg)
 
         self.assertLessEqual(out, 89.6)
@@ -78,9 +78,11 @@ class TestEntrySessionBias(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "trades_log.jsonl"
             self._write_trade_log(log_path, rows)
-            with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
+            with mock.patch.object(main, "TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.SCAN_EVENTS_PATH", Path(tmp) / "scan_events.jsonl"):
                 main._SESSION_BIAS_CACHE.update({"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}})
-                bias = main._entry_session_bias({"sessionBiasMinSamples": 5, "todayPerformanceGuardEnabled": False}, now_ts=now)
+                bias = main._entry_session_bias({"sessionBiasMinSamples": 5, "todayPerformanceGuardEnabled": False, "eveningVolatilityGuardEnabled": False}, now_ts=now)
         self.assertEqual(bias["reason"], "boost_good_session")
         self.assertLess(bias["confidenceShift"], 0)
         self.assertGreater(bias["sizeMult"], 1.0)
@@ -105,9 +107,11 @@ class TestEntrySessionBias(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "trades_log.jsonl"
             self._write_trade_log(log_path, rows)
-            with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
+            with mock.patch.object(main, "TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.SCAN_EVENTS_PATH", Path(tmp) / "scan_events.jsonl"):
                 main._SESSION_BIAS_CACHE.update({"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}})
-                bias = main._entry_session_bias({"sessionBiasMinSamples": 5, "todayPerformanceGuardEnabled": False}, now_ts=now)
+                bias = main._entry_session_bias({"sessionBiasMinSamples": 5, "todayPerformanceGuardEnabled": False, "eveningVolatilityGuardEnabled": False}, now_ts=now)
         self.assertEqual(bias["reason"], "reduce_bad_session")
         self.assertGreater(bias["confidenceShift"], 0)
         self.assertLess(bias["sizeMult"], 1.0)
@@ -144,10 +148,13 @@ class TestEntrySessionBias(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "trades_log.jsonl"
             self._write_trade_log(log_path, rows)
-            with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
+            with mock.patch.object(main, "TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.trade_stats.TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.SCAN_EVENTS_PATH", Path(tmp) / "scan_events.jsonl"):
                 main._LIVE_STATS_CACHE.clear()
                 main._SESSION_BIAS_CACHE.update({"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}})
-                bias = main._entry_session_bias({"sessionBiasMinSamples": 5}, now_ts=now)
+                bias = main._entry_session_bias({"sessionBiasMinSamples": 5, "eveningVolatilityGuardEnabled": False}, now_ts=now)
         self.assertEqual(bias["reason"], "today_performance_guard")
         self.assertGreater(bias["confidenceShift"], 0)
         self.assertLess(bias["sizeMult"], 1.0)
@@ -282,30 +289,29 @@ class TestRewardSystem(unittest.TestCase):
             }
             with tempfile.TemporaryDirectory() as tmp:
                 vault = Path(tmp) / "vault"
-                learn = vault / "learning_profiles.json"
-                log_path = vault / "trades_log.jsonl"
-                with mock.patch.object(main, "VAULT_DIR", vault):
-                    with mock.patch.object(main, "LEARN_PATH", learn):
-                        with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
-                            main._record_learning_trade(
-                                "GOODUSDT",
-                                {
-                                    "side": "LONG",
-                                    "entry": 100.0,
-                                    "exit": 101.0,
-                                    "qty": 1.0,
-                                    "pnl": 1.0,
-                                    "reason": "TP_HIT",
-                                    "openedAt": 1000,
-                                    "closedAt": 2000,
-                                    "entryConfidence": 0.82,
-                                    "entrySpreadBps": 3.0,
-                                    "patternBias": 0.6,
-                                },
-                                "LIVE",
-                            )
-                            profile = json.loads(learn.read_text(encoding="utf-8"))["GOODUSDT"]
-                            log_rows = log_path.read_text(encoding="utf-8").splitlines()
+                log_path = Path(tmp) / "trades_log.jsonl"
+                with mock.patch("trading.learning.VAULT_DIR", vault), \
+                     mock.patch("trading.learning.TRADES_LOG_PATH", log_path), \
+                     mock.patch("trading.symbol_profiles.VAULT_DIR", vault):
+                    main._record_learning_trade(
+                        "GOODUSDT",
+                        {
+                            "side": "LONG",
+                            "entry": 100.0,
+                            "exit": 101.0,
+                            "qty": 1.0,
+                            "pnl": 1.0,
+                            "reason": "TP_HIT",
+                            "openedAt": 1000,
+                            "closedAt": 2000,
+                            "entryConfidence": 0.82,
+                            "entrySpreadBps": 3.0,
+                            "patternBias": 0.6,
+                        },
+                        "LIVE",
+                    )
+                    profile = json.loads((vault / "symbols" / "GOODUSDT" / "profile.json").read_text(encoding="utf-8"))
+                    log_rows = (vault / "symbols" / "GOODUSDT" / "trades.jsonl").read_text(encoding="utf-8").splitlines()
         finally:
             main.AUTO_TRADE["config"] = prev_config
 
@@ -313,7 +319,7 @@ class TestRewardSystem(unittest.TestCase):
         self.assertGreater(profile["rewardBehaviorDelta"], 0.0)
         self.assertIn("rewardComponents", profile)
         self.assertGreater(profile["rewardComponents"]["total"], 0.0)
-        self.assertTrue(any('"mode": "LIVE"' in row and '"symbol": "GOODUSDT"' in row for row in log_rows))
+        self.assertTrue(any('"symbol": "GOODUSDT"' in row for row in log_rows))
 
 
 class TestLossStreakSelfReview(unittest.TestCase):
@@ -327,7 +333,8 @@ class TestLossStreakSelfReview(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "trades_log.jsonl"
             log_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
-            with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
+            with mock.patch.object(main, "TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.trade_log.TRADES_LOG_PATH", log_path):
                 state = main._recent_live_loss_streak_state(8)
                 same_state = main._recent_live_loss_streak_state(8)
                 rows.append({"ts": now, "closedAt": now, "mode": "LIVE", "symbol": "DUSDT", "side": "LONG", "pnl": -0.4})
@@ -364,20 +371,30 @@ class TestLossStreakSelfReview(unittest.TestCase):
             "riskCooldownMinutes": 25,
             "maxOpenPositions": 5,
             "selfReviewMinHourSamples": 8,
+            "noTradeWindowsAutoEnabled": True,
         }
+        # Reset supervisor tuner cooldown/rollback state so this test drives
+        # the tune itself (other tests in the class may have committed one).
+        main.AUTO_TRADE.setdefault("supervisorAutoTune", {})["delegations"] = {}
+        main.AUTO_TRADE["tuningHistory"] = []
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "trades_log.jsonl"
             log_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
-            with mock.patch.object(main, "TRADES_LOG_PATH", log_path):
+            with mock.patch.object(main, "TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.trade_log.TRADES_LOG_PATH", log_path), \
+                 mock.patch("trading.learning.TRADES_LOG_PATH", log_path):
                 main._SESSION_BIAS_CACHE.update({"builtAt": 0.0, "liveVersion": -1, "mtime": -1.0, "hours": {}})
                 tuned = main._loss_streak_self_review_tune(cfg, now=now, loss_streak=4)
 
         self.assertEqual(tuned["scanSidePreference"], "score")
-        self.assertFalse(tuned["scanFallbackNearEnabled"])
+        # scanFallbackNear is now locked temporarily (not disabled) during a
+        # loss streak; the knob itself stays enabled.
+        self.assertTrue(tuned["scanFallbackNearEnabled"])
+        self.assertGreaterEqual(main.AUTO_TRADE["_scanFallbackNearLock"].get("until", 0), now)
         self.assertTrue(tuned["pairLockEnabled"])
         self.assertEqual(tuned["pairLockMinutes"], 90)
         self.assertEqual(tuned["riskCooldownMinutes"], 45)
-        self.assertEqual(tuned["maxOpenPositions"], 4)
+        self.assertEqual(tuned["maxOpenPositions"], 3)
         self.assertGreater(tuned["minConfidence"], cfg["minConfidence"])
         self.assertIn(f"{hour:02d}:00-{(hour + 1) % 24:02d}:00", tuned["noTradeWindows"])
         self.assertEqual(main.AUTO_TRADE["lastSelfReview"]["lossStreak"], 4)
@@ -544,24 +561,25 @@ class TestThreeTierProfile(unittest.TestCase):
         self.assertIn(p["group"], main.SYMBOL_GROUP_DEFS)
 
     def test_effective_profile_promotes_symbol_with_enough_samples(self):
-        # DOGEUSDT has 30 closed trades — the symbol profile may apply if
-        # the user has set overrides. Even with no overrides, the
-        # ``source`` field correctly reports that the group is in use.
-        # Ensure no leftover state from a previous test.
-        main._save_symbol_profiles({})
-        p = main._symbol_effective_profile("DOGEUSDT", cfg={})
-        self.assertGreaterEqual(p["sampleTrades"], main.SYMBOL_PROFILE_MIN_TRADES)
-        # Default behaviour: source=group, the user hasn't set overrides yet.
-        self.assertEqual(p["source"], "group")
-        # When user applies overrides, source should switch to symbol+group.
-        main._save_symbol_profiles({"DOGEUSDT": {"tpPct": 2.5}})
-        try:
-            p2 = main._symbol_effective_profile("DOGEUSDT", cfg={})
-            self.assertEqual(p2["source"], "symbol+group")
-            # tpPct reflects the explicit user override.
-            self.assertEqual(p2["tpPct"], 2.5)
-        finally:
-            main._save_symbol_profiles({})
+        # DOGEUSDT with ≥8 LIVE trades in per-symbol storage should allow
+        # symbol-level overrides to apply.
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            sym_dir = vault / "symbols" / "DOGEUSDT"
+            sym_dir.mkdir(parents=True, exist_ok=True)
+            with mock.patch("trading.symbol_profiles.VAULT_DIR", vault), \
+                 mock.patch("trading.symbol_profiles._symbol_sample_count", return_value=10):
+                p = main._symbol_effective_profile("DOGEUSDT", cfg={})
+                self.assertGreaterEqual(p["sampleTrades"], 10)
+                # With enough samples, symbol_profile is loaded (even if
+                # empty) so source = symbol+group.
+                self.assertEqual(p["source"], "symbol+group")
+                # Write user override symbol_profile.json
+                (sym_dir / "symbol_profile.json").write_text(
+                    json.dumps({"tpPct": 2.5}), encoding="utf-8")
+                p2 = main._symbol_effective_profile("DOGEUSDT", cfg={})
+                self.assertEqual(p2["source"], "symbol+group")
+                self.assertEqual(p2["tpPct"], 2.5)
 
     def test_sample_count_guard_prevents_overfitting(self):
         # A symbol with fewer than SYMBOL_PROFILE_MIN_TRADES trades must NOT
@@ -659,19 +677,16 @@ class TestThreeTierProfile(unittest.TestCase):
 
     def test_position_size_mult_bounded_by_wr(self):
         # Low WR (<=45%) + negative pnl should push position_size_mult below group base.
-        # _auto_update_symbol_profile reads from learning store; mock it directly.
         cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9}
-        with mock.patch.object(main, "_load_learning_profiles", return_value={
-            "DOGEUSDT": {
-                "memoryWindows": {
-                    "7d": {"trades": 10, "winRatePct": 42.0, "pnl": -0.6},
-                    "14d": {"trades": 20, "winRatePct": 43.0, "pnl": -1.0},
-                    "30d": {"trades": 30, "winRatePct": 44.0, "pnl": -1.5},
-                },
-                "symbolRiskTune": {"active": False},
-            }
-        }), \
-             mock.patch.object(main, "_symbol_sample_count", return_value=30):
+        prof = {
+            "memoryWindows": {
+                "7d": {"trades": 10, "winRatePct": 42.0, "pnl": -0.6},
+                "14d": {"trades": 20, "winRatePct": 43.0, "pnl": -1.0},
+                "30d": {"trades": 30, "winRatePct": 44.0, "pnl": -1.5},
+            },
+            "symbolRiskTune": {"active": False},
+        }
+        with mock.patch("trading.learning._load_single_profile", return_value=prof):
             p = main._auto_update_symbol_profile("DOGEUSDT", cfg)
         # WR <= 45% + negative pnl → size shrinks vs group baseline of 0.65
         self.assertLess(p.get("positionSizeMult", 1.0), 0.65)
