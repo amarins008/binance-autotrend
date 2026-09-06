@@ -9188,6 +9188,40 @@ async def autotrade_status_lite():
     }
 
 
+_ACCOUNT_BALANCE_CACHE_TTL = 15.0
+
+
+async def autotrade_balance():
+    """Wallet/margin summary for the dashboard (cached /fapi/v2/account)."""
+    key = os.getenv("BINANCE_API_KEY")
+    secret = os.getenv("BINANCE_API_SECRET")
+    if not key or not secret:
+        return {"ok": False, "error": "MISSING_API_KEY"}
+    base = _binance_base()
+    try:
+        data = await asyncio.wait_for(_get_account_cached(key, secret, base, ttl=_ACCOUNT_BALANCE_CACHE_TTL), timeout=8.0)
+    except Exception as e:
+        return {"ok": False, "error": _format_loop_error(e)}
+
+    def _f(v):
+        try:
+            return round(float(v or 0), 6)
+        except Exception:
+            return 0.0
+
+    return {
+        "ok": True,
+        "asset": "USDT",
+        "marginBalance": _f(data.get("totalMarginBalance")),
+        "walletBalance": _f(data.get("totalWalletBalance")),
+        "availableBalance": _f(data.get("availableBalance")),
+        "unrealizedProfit": _f(data.get("totalUnrealizedProfit")),
+        "initialMargin": _f(data.get("totalInitialMargin")),
+        "maintenanceMargin": _f(data.get("totalMaintMargin")),
+        "updateTs": int(data.get("updateTime", 0) or 0),
+    }
+
+
 def learning_status(symbol: str | None = None):
     if symbol:
         sym = _normalize_symbol(symbol)

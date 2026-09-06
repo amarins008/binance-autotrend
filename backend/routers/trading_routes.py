@@ -21,4 +21,5 @@ def register(_m) -> APIRouter:
     router.add_api_route("/autotrade/reset", _m.autotrade_reset, methods=["POST"])
     router.add_api_route("/autotrade/status", _m.autotrade_status, methods=["GET"])
     router.add_api_route("/autotrade/status-lite", _m.autotrade_status_lite, methods=["GET"])
+    router.add_api_route("/autotrade/balance", _m.autotrade_balance, methods=["GET"])
     return router

@@ -394,6 +394,8 @@
 
     .vo-kpi-mini .metric .sub { display: none; }
 
+    .vo-kpi-mini .metric.margin { grid-column: 1 / -1; }
+
     .vo-controls {
 
       display: flex;
@@ -3564,6 +3566,16 @@
 
         </div>
 
+        <div class="metric margin">
+
+          <div class="lbl">Margin</div>
+
+          <div class="val" id="marginBalance">—</div>
+
+          <div class="sub" id="marginSub"></div>
+
+        </div>
+
       </div>
 
       <div class="vo-controls">
@@ -3824,6 +3836,8 @@ const ui = {
   publicIp: $("publicIp"), publishIpHeader: $("publishIpHeader"), winRate: $("winRate"), realizedPnl: $("realizedPnl"),
 
   winRateSub: $("winRateSub"), pnlSub: $("pnlSub"),
+
+  marginBalance: $("marginBalance"), marginSub: $("marginSub"),
 
   levCapHint: $("levCapHint"), engineVer: $("engineVer"), engineBadge: $("engineBadge"), configVersionBadge: $("configVersionBadge"),
 
@@ -5379,8 +5393,59 @@ function renderKpiCards(bot) {
   }
 
   if (ui.pnlSub) ui.pnlSub.textContent = `วันนี้ ${num0(kpiSticky.livePnlToday) >= 0 ? "+" : ""}${num0(kpiSticky.livePnlToday).toFixed(2)} USDT`;
+}
+
+
+
+
+async function refreshBalance() {
+
+  try {
+
+    const r = await req("/autotrade/balance", "GET", null, 10000);
+
+    if (r && r.ok) {
+
+      const mb = num0(r.marginBalance ?? r.walletBalance);
+
+      if (ui.marginBalance) {
+
+        ui.marginBalance.textContent = mb.toFixed(2);
+
+        ui.marginBalance.style.color = mb >= 0 ? "var(--good)" : "var(--bad)";
+
+      }
+
+      if (ui.marginSub) {
+
+        const up = num0(r.unrealizedProfit);
+
+        ui.marginSub.textContent = `free ${num0(r.availableBalance).toFixed(2)} · uPnL ${up >= 0 ? "+" : ""}${up.toFixed(2)}`;
+
+        ui.marginSub.style.color = up >= 0 ? "var(--good)" : "var(--bad)";
+
+      }
+
+    } else if (ui.marginBalance) {
+
+      ui.marginBalance.textContent = "—";
+
+      ui.marginBalance.style.color = "";
+
+      if (ui.marginSub) ui.marginSub.textContent = (r && r.error) || "n/a";
+
+    }
+
+  } catch (e) {
+
+    if (ui.marginBalance) { ui.marginBalance.textContent = "—"; ui.marginBalance.style.color = ""; }
+
+    if (ui.marginSub) ui.marginSub.textContent = String(e.message || e).slice(0, 40);
+
+  }
 
 }
+
 
 
 
@@ -6482,6 +6547,8 @@ setInterval(refreshStatus, 5000);
 
 setInterval(refreshLearningReport, 15000);
 
+setInterval(refreshBalance, 15000);
+
 setInterval(ensureLearningAuto, 60000);
 
 setInterval(refreshIpInfo, 60000);
@@ -6489,6 +6556,8 @@ setInterval(refreshIpInfo, 60000);
 refreshStatus();
 
 refreshLearningReport();
+
+refreshBalance();
 
 ensureLearningAuto();
 
