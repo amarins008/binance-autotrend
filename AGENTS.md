@@ -107,9 +107,9 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 - งานก่อนหน้าเคยแก้ (a)(c)(d)(b) ที่ supervisor_tuning.py 6 copies ที่เป็น dead → เก็บไว้ (ไม่ทำร้าย) แต่ **จุดจริงคือ main.py** — session นี้ pivot ไปแก้ live
 
 ### ยังต้องทำ / note
-- **Dedup (แนะนำ แต่ deferred):** supervisor_tuning's `_maybe_tune_low_entry_activity/scan_timeout/weak_payoff/daily/small_profit/negative` (6 copies) + `_daily_trade_regime_review` = dead กับ main.py's live copies → ควรลบ side ที่ถูก (referenced โดย `test_refactored_modules.py` ยัง import live names อยู่) — งาน refactor ใหญ่ ไม่ทำ session นี้
-- ยังไม่ commit งาน direction-bias session (ค้างจากก่อนหน้า ยัง)
-- (optional) remove `execution_agent` state=blocked
+- ~~Dedup supervisor_tuning 6 dead copies~~ — **เสร็จ (commit ed3a7e5)**: supervisor_tuning.py เหลือ 471 lines (live helpers เท่านั้น)
+- ~~ยังไม่ commit งาน direction-bias session~~ — **เสร็จ (commit 8bbd8fb)**
+- ~~(optional) remove `execution_agent` state=blocked~~ — เป็น real runtime health-mark (main.py:7939) non-removable; hermes subagent state ไม่กระทบ trading
 
 ## Session: Direction Bias detector + Start AutoTrade.bat adjust (เสร็จ)
 
@@ -126,9 +126,8 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 - หลัง restart ใหม่: bot healthy, autotrade ทำงาน, Guardian cycle ปกติ, KPI today 9W/0L +1.72 USDT
 
 ### ยังไม่ได้ทำ
-- ยังไม่ commit งาน direction-bias session นี้
-- (optional) remove `execution_agent` state=blocked ("Binance API/IP permission rejected" — hermes subagent ที่ไม่กระทบ real trading)
-- (ถ้าต้องการ) เพิ่ม `directionBias` เป็น entry gate จริง (ตอนนี้เป็น observational เท่านั้น)
+- (optional) remove `execution_agent` state=blocked ("Binance API/IP permission rejected" — hermes subagent ที่ไม่กระทบ real trading) — **ปิดเป็น non-issue ดู supervisor session บน** (real runtime health-mark, main.py:7939)
+- ~~เพิ่ม `directionBias` เป็น entry gate จริง~~ — **เสร็จใน commit 8bbd8fb**: gate อยู่ที่ main.py:6267-6286 (`biasGateEnabled` config, replay 2096 live trades: bias==side +0.033, NEUTRAL/mismatch -0.024)
 
 ### ส่วนก่อนหน้า: แก้ root cause -1021 (CRITICAL) + summary เก่า
 
