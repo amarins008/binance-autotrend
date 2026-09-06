@@ -32,25 +32,36 @@ AUTO_TRADE = app_state.AUTO_TRADE
 # ---------------------------------------------------------------------------
 # Tuning mode lock (prevents oscillation between loosener and tightener)
 # ---------------------------------------------------------------------------
-_TUNING_MODE_LOCK_STATE: dict[str, object] = {
-    "mode": "neutral",  # "neutral" | "loosening" | "tightening"
-    "expiresAt": 0,
-    "reason": "",
-}
+# Per-domain locks: each tuning domain (entry/profit/scan/size) tracks the last
+# applied direction independently. A tune is only blocked when ANY of the
+# domains it touches is currently held by the OPPOSITE direction — so opposite
+# tuners that write the same knobs (e.g. scan workload, profit-lock params, size
+# multiplier) no longer fight each other across the lock window.
+_TUNING_LOCK_DOMAINS: dict[str, dict] = {}
+_DEFAULT_TUNING_LOCK_DOMAIN = "entry"  # strategy strictness (legacy single-lock)
 
 # Config key for the lock duration (minutes)
 _TUNING_MODE_LOCK_MINUTES_CFG_KEY = "supervisorTuningModeLockMinutes"
 _DEFAULT_TUNING_MODE_LOCK_MINUTES = 90  # 90 minutes default
 
 
-def _tuning_mode_lock_acquire(mode: str, reason: str, cfg: dict) -> bool:
-    """Try to acquire the tuning mode lock.
+def _tuning_mode_lock_acquire(
+    mode: str,
+    reason: str,
+    cfg: dict,
+    *,
+    domain: str | None = None,
+    domains: tuple[str, ...] | list[str] | None = None,
+) -> bool:
+    """Try to acquire the tuning mode lock for one or more tuning domains.
 
     Returns True if the lock was acquired (i.e., we can proceed with this tune).
-    Returns False if the lock is held by the opposite mode (i.e., must skip).
+    Returns False if any requested domain is currently held by the opposite mode
+    (i.e., must skip). `domain` is the single-domain shorthand; `domains` allows
+    a tune that writes several knob groups (e.g. profit + size) to be gated by
+    all of them at once.
     """
     now = time.time()
-    lock = _TUNING_MODE_LOCK_STATE
     lock_duration_min = max(
         30,
         int(cfg.get(_TUNING_MODE_LOCK_MINUTES_CFG_KEY, _DEFAULT_TUNING_MODE_LOCK_MINUTES)
@@ -58,41 +69,57 @@ def _tuning_mode_lock_acquire(mode: str, reason: str, cfg: dict) -> bool:
     )
     lock_duration_sec = lock_duration_min * 60
 
-    current_mode = lock.get("mode", "neutral")
-    expires_at = float(lock.get("expiresAt", 0) or 0)
+    if isinstance(domains, (list, tuple)) and domains:
+        target_domains = tuple(str(d) for d in domains)
+    else:
+        target_domains = (str(domain or _DEFAULT_TUNING_LOCK_DOMAIN),)
 
-    # If lock expired, it's neutral — acquire freely
-    if current_mode == "neutral" or now >= expires_at:
+    to_stamp: list[str] = []
+    for d in target_domains:
+        lock = _TUNING_LOCK_DOMAINS.get(d)
+        current_mode = str((lock or {}).get("mode", "neutral"))
+        expires_at = float((lock or {}).get("expiresAt", 0) or 0)
+        # Opposite mode still active — block this tune
+        if current_mode != "neutral" and now < expires_at and current_mode != mode:
+            return False
+        # Lock expired or neutral — acquire freely (and stamp it)
+        if current_mode == "neutral" or now >= expires_at:
+            to_stamp.append(d)
+    for d in to_stamp:
+        lock = _TUNING_LOCK_DOMAINS.setdefault(d, {})
         lock["mode"] = mode
         lock["expiresAt"] = now + lock_duration_sec
         lock["reason"] = reason
-        return True
-
-    # If same mode, allow (we can reinforce the same direction)
-    if current_mode == mode:
-        return True
-
-    # Opposite mode still active — block this tune
-    return False
+    return True
 
 
 def _tuning_mode_lock_release() -> None:
-    """Release the tuning mode lock (set to neutral)."""
-    _TUNING_MODE_LOCK_STATE["mode"] = "neutral"
-    _TUNING_MODE_LOCK_STATE["expiresAt"] = 0
-    _TUNING_MODE_LOCK_STATE["reason"] = ""
+    """Release all tuning mode locks (set to neutral)."""
+    _TUNING_LOCK_DOMAINS.clear()
 
 
 def _tuning_mode_lock_status() -> dict:
     """Return current lock status for debugging/status API."""
     now = time.time()
-    lock = _TUNING_MODE_LOCK_STATE
-    expires_at = float(lock.get("expiresAt", 0) or 0)
+    active: list[dict] = []
+    for d, lock in sorted(_TUNING_LOCK_DOMAINS.items()):
+        expires_at = float(lock.get("expiresAt", 0) or 0)
+        if str(lock.get("mode", "neutral")) != "neutral" and now < expires_at:
+            active.append({
+                "domain": d,
+                "mode": lock.get("mode"),
+                "expiresAt": expires_at,
+                "remainingSec": max(0, int(expires_at - now)),
+                "reason": str(lock.get("reason", "") or ""),
+            })
+    entry = _TUNING_LOCK_DOMAINS.get(_DEFAULT_TUNING_LOCK_DOMAIN, {})
     return {
-        "mode": lock.get("mode", "neutral"),
-        "expiresAt": expires_at,
-        "remainingSec": max(0, int(expires_at - now)),
-        "reason": lock.get("reason", ""),
+        "mode": entry.get("mode", "neutral"),
+        "expiresAt": float(entry.get("expiresAt", 0) or 0),
+        "remainingSec": max(0, int(float(entry.get("expiresAt", 0) or 0) - now)),
+        "reason": entry.get("reason", ""),
+        "activeDomains": active,
+        "domains": {d: dict(lock) for d, lock in _TUNING_LOCK_DOMAINS.items()},
     }
 
 
@@ -184,6 +211,27 @@ def _tuning_rollback_last(key: str) -> dict:
             pre = entry.get("preMetrics", {}) or {}
             return {"reverted": True, "preMetrics": pre, "changes": entry.get("changes", {})}
     return {"reverted": False, "reason": "no_matching_entry"}
+
+
+def _apply_rollback_old_values(cfg: dict, rollback: dict) -> dict:
+    """Restore cfg keys to their pre-tune values recorded in a rollback entry.
+
+    Tuning history stores the applied per-key {"old", "new"} under "changes";
+    reverting means writing info["old"] back. (preMetrics holds performance
+    stats, never config keys, so restoring from it was a no-op.) Returns the
+    inversion {key: {"old": new, "new": old}} for accurate history logging.
+    """
+    reverted: dict[str, dict] = {}
+    if not isinstance(cfg, dict):
+        return reverted
+    prev_changes = rollback.get("changes", {})
+    if not isinstance(prev_changes, dict):
+        return reverted
+    for k, info in prev_changes.items():
+        if isinstance(info, dict) and "old" in info and info["old"] is not None and k in cfg:
+            cfg[k] = info["old"]
+            reverted[k] = {"old": info.get("new"), "new": info.get("old")}
+    return reverted
 
 
 # ---------------------------------------------------------------------------

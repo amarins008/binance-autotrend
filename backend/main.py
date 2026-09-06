@@ -224,6 +224,11 @@ from trading.supervisor_tuning import (
     _supervisor_trade_period_reviews as _supervisor_trade_period_reviews,
     _maybe_tune_size_multiplier_from_streak as _maybe_tune_size_multiplier_from_streak,
 )
+from trading.supervisor_state import (
+    _apply_rollback_old_values,
+    _tuning_mode_lock_acquire,
+    _tuning_mode_lock_release,
+)
 
 
 # ── Klines in-memory cache ────────────────────────────────────────────────────
@@ -512,12 +517,15 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
     if _tuning_should_rollback("weak_payoff"):
         rollback = _tuning_rollback_last("weak_payoff")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Gate on the profit domain: small_profit_capture loosens the same
+    # profit-lock/TP knobs this tuner tightens. Skip the whole tune if it
+    # recently loosened them.
+    if not _tuning_mode_lock_acquire("tightening", f"weak_payoff:{payoff_ratio}", cfg, domain="profit"):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "tightening", "blockedBy": "loosening", "domain": "profit"}
 
     # Adaptive severity: 0.0 (mild) → 1.0 (severe)
     severity = max(0.0, min(1.0, (0.75 - payoff_ratio) / 0.75 + (avg_loss / max(avg_win, 0.01) - 1.0) / 2.0))
@@ -569,9 +577,11 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         min_loss_usdt = float(cfg.get("payoffLossGuardMinLossUsdt", 0.22) or 0.22)
         set_float("payoffLossGuardMinLossUsdt", max(0.12, min(min_loss_usdt, avg_win * 0.90)), 3)
         size_mult = float(cfg.get("supervisorSizeMultiplier", 1.0) or 1.0)
-        set_float("supervisorSizeMultiplier", max(0.70, min(size_mult, 0.85 - 0.10 * severity)), 3)
+        if _tuning_mode_lock_acquire("tightening", f"weak_payoff_size:{payoff_ratio}", cfg, domain="size"):
+            set_float("supervisorSizeMultiplier", max(0.70, min(size_mult, 0.85 - 0.10 * severity)), 3)
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
 
     state.update({
@@ -832,11 +842,8 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
     if _tuning_should_rollback("low_entry_activity"):
         rollback = _tuning_rollback_last("low_entry_activity")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "low_entry_activity", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "low_entry_activity", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
     changes: dict[str, dict] = {}
@@ -905,6 +912,11 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
         or all(str(row.get("rejectReason", "") or "") in {"signal_wait", "low_conf", "perf_lock", ""} for row in board_rows)
     )
 
+    # Gate on the entry domain: negative_expectancy / daily_regression recently
+    # tightened entry knobs — skip this loosening tune entirely.
+    if not _tuning_mode_lock_acquire("loosening", f"low_entry:{reason}", cfg):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "loosening", "blockedBy": "tightening"}
+
     # Adaptive severity based on tradesLastHour=0 duration
     no_entry_metric = 0.0 if stuck_no_entry else (0.5 if quiet_board else 1.0)
     severity = max(0.0, min(1.0, (1.0 - no_entry_metric) / 1.0))
@@ -957,12 +969,13 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
         set_float("hybridMinScore", max(0.62, hybrid_score - 0.025 * (1.0 + severity * 2.0)), 3)
         hybrid_edge = float(cfg.get("hybridMinEdge", 0.06) or 0.06)
         set_float("hybridMinEdge", max(0.025, hybrid_edge - 0.01 * (1.0 + severity * 2.0)), 3)
-    analyze_top = max(3, int(cfg.get("scanAnalyzeTop", 8) or 8))
-    set_int("scanAnalyzeTop", min(16, analyze_top + int(round(2 * (1.0 + severity * 2.0)))))
-    top_liquid = max(5, int(cfg.get("scanTopLiquid", 30) or 30))
-    set_int("scanTopLiquid", min(80, top_liquid + int(round(10 * (1.0 + severity * 2.0)))))
-    guarded_top = max(analyze_top + 2, int(cfg.get("scanGuardedFallbackAnalyzeTop", analyze_top * 2) or analyze_top * 2))
-    set_int("scanGuardedFallbackAnalyzeTop", min(24, max(guarded_top, int(cfg.get("scanAnalyzeTop", analyze_top)))))
+    if _tuning_mode_lock_acquire("loosening", f"low_entry_scan:{reason}", cfg, domain="scan"):
+        analyze_top = max(3, int(cfg.get("scanAnalyzeTop", 8) or 8))
+        set_int("scanAnalyzeTop", min(16, analyze_top + int(round(2 * (1.0 + severity * 2.0)))))
+        top_liquid = max(5, int(cfg.get("scanTopLiquid", 30) or 30))
+        set_int("scanTopLiquid", min(80, top_liquid + int(round(10 * (1.0 + severity * 2.0)))))
+        guarded_top = max(analyze_top + 2, int(cfg.get("scanGuardedFallbackAnalyzeTop", analyze_top * 2) or analyze_top * 2))
+        set_int("scanGuardedFallbackAnalyzeTop", min(24, max(guarded_top, int(cfg.get("scanAnalyzeTop", analyze_top)))))
     fallback_keys = ("scanFallbackNearEnabled",) if stuck_no_entry else ("scanFallbackNearEnabled", "scanPerfSoftFallbackEnabled")
     for key in fallback_keys:
         if not bool(cfg.get(key, True)):
@@ -970,6 +983,7 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
             cfg[key] = True
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta"}
     signature = _tuning_signature("low_entry_activity", stuck=stuck_no_entry, quiet=quiet_board, reason=str(reason or "low_entry_activity"))
     out = _commit_supervisor_config_tune(
@@ -1001,12 +1015,13 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
     if _tuning_should_rollback("scan_timeout"):
         rollback = _tuning_rollback_last("scan_timeout")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Gate on the scan domain: low_entry recently loosened scan knobs — skip.
+    if not _tuning_mode_lock_acquire("tightening", f"scan_timeout:{str(skip_msg or '')[:60]}", cfg, domain="scan"):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "tightening", "blockedBy": "loosening", "domain": "scan"}
 
     changes: dict[str, dict] = {}
 
@@ -1036,6 +1051,7 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
     set_int("scanFallbackRetrySymbols", max(1, fallback_retries - int(round(1 * (1.0 + severity * 2.0)))))
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta"}
     signature = _tuning_signature("scan_timeout", skip_msg=str(skip_msg or "scan timeout"), per_symbol_timeout=per_symbol_timeout)
     out = _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, changes, str(skip_msg or "scan timeout"))
@@ -1149,11 +1165,8 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     if _tuning_should_rollback("daily_entry_regression"):
         rollback = _tuning_rollback_last("daily_entry_regression")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
     today = daily_review.get("today") if isinstance(daily_review.get("today"), dict) else {}
@@ -1174,6 +1187,10 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     # config changes made via /bot/config.
     if active:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature}
+
+    # Gate on the entry domain: low_entry recently loosened — skip tightening.
+    if not _tuning_mode_lock_acquire("tightening", f"daily_regression:{today.get('day')}", cfg):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "tightening", "blockedBy": "loosening", "signature": signature}
 
     changes: dict[str, dict] = {}
 
@@ -1230,6 +1247,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     set_float("todayPerformanceGuardMaxWinRatePct", min(48.0, max(float(cfg.get("todayPerformanceGuardMaxWinRatePct", 40.0) or 40.0), 45.0 + 3.0 * severity)), 2)
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
     out = _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, changes, "daily_entry_regression")
     delegations = AUTO_TRADE.get("supervisorAutoTune", {}).get("delegations", {})
@@ -1257,12 +1275,13 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
     if _tuning_should_rollback("small_profit_capture"):
         rollback = _tuning_rollback_last("small_profit_capture")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Gate on the profit domain: weak_payoff recently tightened profit knobs — skip.
+    if not _tuning_mode_lock_acquire("loosening", "small_profit_capture", cfg, domain="profit"):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "loosening", "blockedBy": "tightening", "domain": "profit"}
 
     # Adaptive severity based on smallWins/trades_n ratio
     ratio = small_wins / max(trades_n, 1)
@@ -1298,6 +1317,7 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
     set_float("profitLockBreakevenTriggerUsdt", min(float(cfg.get("profitLockTriggerUsdt", trigger) or trigger), max(0.14, breakeven_trigger * (0.95 - 0.05 * severity))), 3)
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         if active:
             return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
         return {"applied": False, "reason": "no_safe_delta"}
@@ -1337,12 +1357,13 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     if _tuning_should_rollback("negative_expectancy"):
         rollback = _tuning_rollback_last("negative_expectancy")
         if rollback.get("reverted"):
-            pre = rollback.get("preMetrics", {})
-            for k, v in pre.items():
-                if isinstance(v, (int, float)) and k in cfg:
-                    cfg[k] = v
-            _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, {k: {"reverted": v} for k, v in pre.items()}, "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+
+    # Gate on the entry domain: low_entry recently loosened — skip tightening.
+    if not _tuning_mode_lock_acquire("tightening", f"negative_expectancy:{label}", cfg):
+        return {"applied": False, "reason": "opposite_mode_active", "mode": "tightening", "blockedBy": "loosening", "signature": signature}
 
     changes: dict[str, dict] = {}
 
@@ -1423,6 +1444,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     set_float("sessionBiasMaxConfShift", min(0.06, max(max_shift, 0.05 + 0.01 * severity)), 3)
 
     if not changes:
+        _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
     out = _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, changes, "negative_expectancy")
     delegations = AUTO_TRADE.get("supervisorAutoTune", {}).get("delegations", {})
