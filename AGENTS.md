@@ -48,6 +48,29 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session ล่าสุด: แก้ root cause -1021 (CRITICAL)
+
+### ปัญหา
+- Bot (port 8020) ล้มเหลว `-1021 Timestamp outside recvWindow` ทุกคำขอ signed ใน `binance_client._signed_request` path + autotrade loop crash-loop ทุก ~10s
+- **`/debug/binance-auth-check` ผ่าน** (path ตัว main ที่ fresh-fetch serverTime) แต่ `/debug/binance-positions` ผ่าน (path live_guardian) — standalone ผ่าน แต่ uvicorn process ผ่านทั้ง 8020/8022
+
+### Root cause (import-order bug)
+- `exchange/binance_client.py:28` `CONNECTOR_MODE = os.getenv("CONNECTOR_MODE", "auto")` **eval ตอน import**
+- main.py import live_guardian (line 53) → binance_client **ก่อน** `load_dotenv` (line 139) → ใน bot `CONNECTOR_MODE` freeze = `"auto"` ตลอด (แม้ `.env` ตั้ง `legacy`)
+- `"auto"` → `_get_um_client` return binance **SDK `UMFutures`** client (drift ~5.3s > SDK recvWindow 5000) → SDK send local timestamp ไม่มี offset sync → `-1021 ClientError`
+- Standalone ผ่านเพราะ script โหลด `.env` ก่อน import → freeze `"legacy"` → `_get_um_client`=None → ใช้ custom `_signed_request` (offset-synced, ผ่าน)
+
+### Fix (1 point)
+- `binance_client.py _get_um_client()` — เปลี่ยนอ่าน `os.getenv("CONNECTOR_MODE", "auto").lower()` แบบ dynamic แทน module constant ที่ freeze-tại import
+- Plus: เพิ่ม `offsetDiag` (`sentTsMs`/`offsetMs`/`syncAgeSec`/`recvWindow`/`httpConfigured`) ใน detail ของ 4xx error ใน `_signed_request` เพื่อ debug อนาคต
+- main.py's own `_get_um_client` (line 5296) ใช้ constant line 3426 (eval หลัง load_dotenv) → ถูกต้องอยู่แล้ว ไม่ต้องแก้
+
+### Verification
+- Fresh uvicorn probe (8022, venv, `-m uvicorn main:app`) — ก่อน fix: `-1021`; หลัง fix: offset=5126ms, drift=5134ms, positions `count=0` ✅
+- Restart bot 8020 ผ่าน `/system/restart` — หลัง restart: positions `count=0, no error`, autotrade loop อยู่รอด (task done=False, log ไม่มี -1021, guardian cycle ปกติ)
+- `pytest tests/ --ignore=test_pineforge.py` = **51 passed** (test_pineforge sys.exit() module-level เป็น pre-existing ตามบันทึกเดิม)
+- ทำลาย probe 8022 เรียบร้อย; temp debug route ใน main.py/misc_routes.py revert หมด คงเหลือแค่ fix จริง
+
 ## Phase S1 — Stability & Performance (เริ่มแล้ว)
 
 ### สิ่งที่ทำเสร็จแล้ว (session นี้)
