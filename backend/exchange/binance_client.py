@@ -363,6 +363,13 @@ async def _signed_request(method: str, base: str, endpoint: str, key: str, secre
             detail={
                 "message": res.text,
                 "binanceRequest": diagnostic,
+                "offsetDiag": {
+                    "sentTsMs": server_ms,
+                    "offsetMs": _TIME_OFFSET_MS,
+                    "syncAgeSec": round(get_server_time_sync_age_sec(), 2),
+                    "recvWindow": BINANCE_RECV_WINDOW_MS,
+                    "httpConfigured": _HTTP is not None,
+                },
             },
         )
     return res.json()
@@ -482,11 +489,11 @@ async def _exchange_filters(symbol: str):
         return _payload_for(payload)
 
 def _get_um_client(key: str, secret: str, base: str):
-    if CONNECTOR_MODE == "legacy":
+    if os.getenv("CONNECTOR_MODE", "auto").lower() == "legacy":
         return None
     connector_cls = _resolve_umfutures_class()
     if connector_cls is None:
-        if CONNECTOR_MODE == "official":
+        if os.getenv("CONNECTOR_MODE", "auto").lower() == "official":
             raise HTTPException(status_code=500, detail="Official connector mode enabled but UMFutures not available")
         return None
     return connector_cls(key=key, secret=secret, base_url=base)
