@@ -48,6 +48,30 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Fix cross-file test pollution — suite 413 passed 0 failed (เสร็จ, commit 6692e6a)
+
+### ปัญหา
+- เหลือ 3 suite failures ที่เป็น order-dependent cross-file pollution (ไม่ใช่ logic ของ test เอง):
+  1. `test_supervisor_delegates_bad_utc_unlock_to_risk_manager` — fail เมื่อรันตาม `test_guardian_performance`
+  2. `test_live_guardian_idle_check_does_not_count_as_completed_work` — fail เมื่อรันตามกัน
+  3. `test_record_learning_trade_with_behavior_enabled_writes_log_and_profile` (ai_mode) — fail ใน full suite แต่ผ่านเมื่อรันไฟล์เดี่ยว
+
+### Root causes (3 ตัวจริง)
+- **`liveProfitLocks` leak (bad_utc):** `test_guardian_performance.py::TestParallelIntelDispatch` รัน `_live_multi_profit_lock_manage` จริง → เขียน `AUTO_TRADE["liveProfitLocks"]` (SYM0-2USDT) → `active_open_positions()` เห็น phantom open positions → bad_utc branch (main.py:8287 ต้องการ `not open_positions`) ถูก skip → utc_hour 18 ไม่ถูกลบ
+  - **Fix:** `TestStatusLitePositionCard.setUp` เพิ่ม reset `liveProfitLocks = {}` + `openLivePositions = []`
+- **`app_state._LIVE_POSITIONS_CACHE` leak (idle_check):** `TestPositionCacheTTL`/`TestParallelIntelDispatch` set cache rows → `_manage_live_open_positions_once` (live_guardian.py:89) อ่าน cache → `heartbeat_positions` มีค่า → `position_guardian` ถูก mark "done" แทน "todo"
+  - **Fix:** idle_check test save/restore + clear `_LIVE_POSITIONS_CACHE = (0.0, [])`
+- **`_GLOBAL_CACHE` singleton binding (ai_mode):** `get_shared_cache(vault_dir)` ผูก `vault_dir` แรกตลอด process — `test_session_validation.py:88` เรียก module-level → ผูก real vault ตั้งแต่ collection → ai_mode test patch `VAULT_DIR` เป็น tempdir แต่ `PerSymbolContext` ใช้ singleton เดิม → profile.json เขียนลง **real vault** ไม่ใช่ temp → FileNotFoundError
+  - **Fix:** `shared_cache_layer.get_shared_cache()` — ถ้า `vault_dir` ขอมาแตกต่างจากของ singleton เดิม → สร้าง instance ใหม่ (same-dir caller ยังได้ object เดียวกัน = production ไม่กระทบ)
+
+### Verification
+- Full suite (`test_*.py` + `tests/` excl. pineforge/recovery): **413 passed, 2 skipped (pre-existing), 0 failed**
+- `get_shared_cache` probe: same dir → same object / diff dir → new object
+- **หมายเหตุ:** ai_mode + idle_check ที่ AGENTS.md เก่าบันทึกเป็น "pre-existing stale mocks" จริงๆ สาเหตุคือ cache singleton binding + position cache leak — เหลือ pre-existing แค่ 2 skipped (obsidian_memory clean_vault removed)
+
+### ยังไม่ได้ทำ
+- ไม่แตะ `recovery_artifacts/`; `backend/autotrade_snapshot.json` ไม่ commit (runtime state)
+
 ## Session: Dedup dead tuner duplicates ใน supervisor_tuning (เสร็จ, commit ed3a7e5)
 
 ### สิ่งที่ทำ
