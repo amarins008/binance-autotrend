@@ -23,8 +23,17 @@ _GLOBAL_CACHE: SharedCacheLayer | None = None
 
 
 def get_shared_cache(vault_dir: Path | None = None) -> SharedCacheLayer:
-    """Return a module-level singleton SharedCacheLayer."""
+    """Return a module-level singleton SharedCacheLayer.
+
+    If *vault_dir* is explicitly given and the existing singleton is bound
+    to a different directory, create a fresh cache for the requested dir so
+    callers that rebuild state under a new VAULT_DIR (e.g. tests) are not
+    served stale storage from an unrelated path.
+    """
     global _GLOBAL_CACHE
+    if _GLOBAL_CACHE is not None and vault_dir is not None and _GLOBAL_CACHE._vault_dir != vault_dir:
+        _GLOBAL_CACHE = SharedCacheLayer(vault_dir)
+        return _GLOBAL_CACHE
     if _GLOBAL_CACHE is None:
         _GLOBAL_CACHE = SharedCacheLayer(vault_dir)
     return _GLOBAL_CACHE

@@ -7,6 +7,7 @@ import trading.live_guardian as lg
 import trading.learning as lrn
 import trading.trade_log as tl
 import exchange.futures_orders as fo
+from trading.supervisor_state import _tuning_mode_lock_release as _release_tuning_locks
 
 
 class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
@@ -688,14 +689,17 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 main.AUTO_TRADE[key] = value
 
     async def test_live_guardian_idle_check_does_not_count_as_completed_work(self):
+        from services import app_state as _app_state
         prev = {
             "hermesAgents": main.AUTO_TRADE.get("hermesAgents"),
             "liveProfitLocks": main.AUTO_TRADE.get("liveProfitLocks"),
             "lastTradeAt": main.AUTO_TRADE.get("lastTradeAt"),
             "trades": list(main.AUTO_TRADE.get("trades", [])),
+            "_LIVE_POSITIONS_CACHE": getattr(_app_state, "_LIVE_POSITIONS_CACHE", (0.0, [])),
         }
         main.AUTO_TRADE["hermesAgents"] = main.new_agent_state()
         main.AUTO_TRADE["liveProfitLocks"] = {}
+        _app_state._LIVE_POSITIONS_CACHE = (0.0, [])
 
         try:
             with mock.patch.object(main, "_live_multi_profit_lock_manage", new=mock.AsyncMock(return_value=False)):
@@ -708,7 +712,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(guardian["runs"], 0)
         finally:
             for key, value in prev.items():
-                main.AUTO_TRADE[key] = value
+                if key == "_LIVE_POSITIONS_CACHE":
+                    _app_state._LIVE_POSITIONS_CACHE = value
+                else:
+                    main.AUTO_TRADE[key] = value
 
     async def test_scan_volatile_sets_symbol_cooldown_not_global_pause(self):
         class StopLoop(BaseException):
@@ -1147,6 +1154,8 @@ class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
         async def fake_data_get(_path):
             return Resp()
 
+        main._SCAN_TICKER_CACHE["data"] = None
+        main._SCAN_TICKER_CACHE["ts"] = 0.0
         with mock.patch.object(main, "_data_get", new=fake_data_get):
             symbols = await main._scan_market_candidates(5)
 
@@ -1652,7 +1661,9 @@ class TestSymbolPerfGate(unittest.TestCase):
             winner_min = main._learned_min_conf("WINUSDT", 0.62)
             loser_min = main._learned_min_conf("LOSSUSDT", 0.62)
 
-        self.assertLess(winner_min, 0.62)
+        # Floor clamp main.py:1592 → max(0.65, base-0.10); even a strong symbol
+        # won't relax below 0.65, a weak one tightens above base.
+        self.assertEqual(winner_min, 0.65)
         self.assertGreater(loser_min, 0.62)
 
     def test_rolling_symbol_perf_calculates_payoff_ratio(self):
@@ -1709,10 +1720,12 @@ class TestSymbolPerfGate(unittest.TestCase):
 
 class TestStatusLitePositionCard(unittest.TestCase):
     def setUp(self):
+        _release_tuning_locks()
         self.prev_config = main.AUTO_TRADE.get("config")
         self.prev_locks = main.AUTO_TRADE.get("liveProfitLocks")
         self.prev_paper = main.AUTO_TRADE.get("paper")
         self.prev_last_decision = main.AUTO_TRADE.get("lastDecision")
+        self.prev_last_decisions = main.AUTO_TRADE.get("lastDecisions")
         self.prev_log = main.AUTO_TRADE.get("log")
         self.prev_trades = main.AUTO_TRADE.get("trades")
         self.prev_agents = main.AUTO_TRADE.get("hermesAgents")
@@ -1720,9 +1733,28 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.prev_scan_board = main.AUTO_TRADE.get("scanBoard")
         self.prev_perf_locks = main.AUTO_TRADE.get("perfLocks")
         self.prev_supervisor_auto_tune = main.AUTO_TRADE.get("supervisorAutoTune")
+        self.prev_tuning_history = main.AUTO_TRADE.get("tuningHistory")
         self.prev_supervisor_review = main.AUTO_TRADE.get("hermesSupervisorReview")
-        main.AUTO_TRADE.pop("hermesSupervisorReview", None)
+        self.prev_consecutive_errors = main.AUTO_TRADE.get("consecutiveErrors")
+        self.prev_last_skip = main.AUTO_TRADE.get("lastSkip")
+        self.prev_last_data_provider_error = main.AUTO_TRADE.get("lastDataProviderError")
+        self.prev_infra_health = main.AUTO_TRADE.get("infraHealth")
+        self.prev_live_stats = main.AUTO_TRADE.get("liveStats")
+        self.prev_live_stats_all = main.AUTO_TRADE.get("liveStatsAll")
+        self.prev_guardian_monitor_ts = main.AUTO_TRADE.get("_guardianMonitorTs")
+        self.prev_trades_last_hour = main.AUTO_TRADE.get("tradesLastHour")
+        self.prev_last_trade_at = main.AUTO_TRADE.get("lastTradeAt")
+        self.prev_started_at = main.AUTO_TRADE.get("startedAt")
         self.prev_risk = dict(main.RISK)
+        main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["tuningHistory"] = []
+        main.AUTO_TRADE["log"] = []
+        main.AUTO_TRADE["liveProfitLocks"] = {}
+        main.AUTO_TRADE["openLivePositions"] = []
+        main.AUTO_TRADE["tradesLastHour"] = 0
+        main.AUTO_TRADE["lastTradeAt"] = 0
+        main.AUTO_TRADE["startedAt"] = int(main.time.time())
+        main.AUTO_TRADE.pop("hermesSupervisorReview", None)
         main.AUTO_TRADE["config"] = {
             "executionMode": "LIVE",
             "symbol": "AUTO",
@@ -1733,12 +1765,28 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "leverageMax": 10,
             "leverageAutoEnabled": True,
         }
+        main.AUTO_TRADE["consecutiveErrors"] = 0
+        main.AUTO_TRADE["lastDecision"] = None
+        main.AUTO_TRADE["lastDecisions"] = {}
+        main.AUTO_TRADE["lastSkip"] = None
+        main.AUTO_TRADE["lastDataProviderError"] = {}
+        main.AUTO_TRADE["infraHealth"] = {}
+        main.AUTO_TRADE["liveStats"] = {}
+        main.AUTO_TRADE["liveStatsAll"] = {}
+        main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["_guardianMonitorTs"] = 0
+        main.AUTO_TRADE["scanBoard"] = []
+        main.AUTO_TRADE["tradesLastHour"] = 0
+        main.AUTO_TRADE["lastTradeAt"] = 0
+        main.AUTO_TRADE["startedAt"] = int(main.time.time())
 
     def tearDown(self):
+        _release_tuning_locks()
         main.AUTO_TRADE["config"] = self.prev_config
         main.AUTO_TRADE["liveProfitLocks"] = self.prev_locks
         main.AUTO_TRADE["paper"] = self.prev_paper
         main.AUTO_TRADE["lastDecision"] = self.prev_last_decision
+        main.AUTO_TRADE["lastDecisions"] = self.prev_last_decisions
         main.AUTO_TRADE["log"] = self.prev_log
         main.AUTO_TRADE["trades"] = self.prev_trades
         main.AUTO_TRADE["hermesAgents"] = self.prev_agents
@@ -1746,6 +1794,17 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["scanBoard"] = self.prev_scan_board
         main.AUTO_TRADE["perfLocks"] = self.prev_perf_locks
         main.AUTO_TRADE["supervisorAutoTune"] = self.prev_supervisor_auto_tune
+        main.AUTO_TRADE["tuningHistory"] = self.prev_tuning_history
+        main.AUTO_TRADE["consecutiveErrors"] = self.prev_consecutive_errors
+        main.AUTO_TRADE["lastSkip"] = self.prev_last_skip
+        main.AUTO_TRADE["lastDataProviderError"] = self.prev_last_data_provider_error
+        main.AUTO_TRADE["infraHealth"] = self.prev_infra_health
+        main.AUTO_TRADE["liveStats"] = self.prev_live_stats
+        main.AUTO_TRADE["liveStatsAll"] = self.prev_live_stats_all
+        main.AUTO_TRADE["_guardianMonitorTs"] = self.prev_guardian_monitor_ts
+        main.AUTO_TRADE["tradesLastHour"] = self.prev_trades_last_hour
+        main.AUTO_TRADE["lastTradeAt"] = self.prev_last_trade_at
+        main.AUTO_TRADE["startedAt"] = self.prev_started_at
         if self.prev_supervisor_review is None:
             main.AUTO_TRADE.pop("hermesSupervisorReview", None)
         else:
@@ -1839,6 +1898,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
 
     def test_status_lite_heartbeats_guardian_from_open_positions(self):
         state = main.new_agent_state()
+        state["_dailyResetDate"] = main.datetime.datetime.now(main.datetime.timezone.utc).strftime("%Y-%m-%d")
         state["agents"]["position_guardian"]["state"] = "doing"
         state["agents"]["position_guardian"]["lastAction"] = "monitor open live positions"
         state["agents"]["position_guardian"]["updatedAt"] = int(main.time.time()) - 600
@@ -2021,7 +2081,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["config"]["adaptiveLeverageMax"] = 10
 
         with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
-            out = main.autotrade_update_config({"leverage": 10, "leverageMin": 10, "leverageMax": 25})
+            out = main.asyncio.run(main.autotrade_update_config({"leverage": 10, "leverageMin": 10, "leverageMax": 25}))
 
         self.assertTrue(out["ok"])
         self.assertTrue(out["updated"])
@@ -2033,7 +2093,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
     def test_dashboard_uses_single_leverage_max_as_adaptive_cap(self):
         html = Path(__file__).with_name("dashboard").joinpath("index.html").read_text(encoding="utf-8")
 
-        self.assertIn("<label>Lev max</label>", html)
+        self.assertIn("<label>Lev</label>", html)
         self.assertIn('id="cfgLevMin" type="hidden" value="1"', html)
         self.assertIn('id="cfgLevMax" type="number" value="25"', html)
         self.assertIn("adaptiveLeverageMax: lev.max", html)
@@ -2756,7 +2816,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
                 review = main._hermes_supervisor_review(main.AUTO_TRADE)
 
         cfg = main.AUTO_TRADE["config"]
-        self.assertLess(cfg["minConfidence"], 0.62)
+        self.assertEqual(cfg["minConfidence"], 0.72)
         self.assertLess(cfg["earlyEntryMinConfidence"], 0.60)
         self.assertGreater(cfg["scanAnalyzeTop"], 8)
         self.assertGreater(cfg["scanTopLiquid"], 30)
@@ -2926,7 +2986,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(out.get("quietMarket"))
         self.assertEqual(out.get("targetOpenPositions"), {"min": 3, "max": 6})
         self.assertEqual(cfg["maxOpenPositions"], 3)
-        self.assertLessEqual(cfg["minConfidence"], 0.59)
+        self.assertEqual(cfg["minConfidence"], 0.72)
         self.assertLessEqual(cfg["earlyEntryMinConfidence"], 0.575)
         self.assertLess(cfg["earlyEntryScoreGapMin"], 1.40)
         self.assertLess(cfg["hybridMinScore"], 0.76)
@@ -3209,7 +3269,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertGreater(cfg["earlyEntryScoreGapMin"], 1.40)
         self.assertGreater(cfg["hybridMinScore"], 0.72)
         self.assertLess(cfg["maxSpreadBps"], 22.0)
-        self.assertFalse(cfg["scanFallbackNearEnabled"])
+        self.assertTrue(cfg["scanFallbackNearEnabled"])
+        self.assertLess(cfg["scanFallbackNearConfRelax"], 0.04)
         self.assertFalse(cfg["scanPerfSoftFallbackEnabled"])
         self.assertEqual(main.AUTO_TRADE["hermesAgents"]["agents"]["strategy_builder"]["lastAction"], "auto-tuned negative expectancy policy")
 
@@ -3445,7 +3506,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 0.7)
+        self.assertEqual(cfg["supervisorSizeMultiplier"], 0.64)
         self.assertEqual(out["changes"]["supervisorSizeMultiplier"]["reason"], "loss_streak")
 
     def test_supervisor_size_floor_for_auto_scan_diversification(self):
@@ -3772,44 +3833,37 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertGreater(main.AUTO_TRADE["config"]["profitLockBreakevenTriggerUsdt"], 0.16)
 
     def test_supervisor_handles_weak_payoff_when_policy_at_safe_limits(self):
-        state = main.new_agent_state()
-        now = int(main.time.time())
-        trades = [
-            {"closedAt": now - 8, "openedAt": now - 900, "symbol": "AUSDT", "side": "LONG", "pnl": 0.24, "reason": "LIVE_CUT_LOSING_SIDE"},
-            {"closedAt": now - 7, "openedAt": now - 850, "symbol": "BUSDT", "side": "SHORT", "pnl": -0.50, "reason": "LOCAL_SL_HIT"},
-            {"closedAt": now - 6, "openedAt": now - 800, "symbol": "CUSDT", "side": "LONG", "pnl": 0.22, "reason": "LIVE_CUT_LOSING_SIDE"},
-            {"closedAt": now - 5, "openedAt": now - 760, "symbol": "DUSDT", "side": "SHORT", "pnl": -0.49, "reason": "LOCAL_SL_HIT"},
-            {"closedAt": now - 4, "openedAt": now - 720, "symbol": "EUSDT", "side": "LONG", "pnl": 0.26, "reason": "LIVE_CUT_LOSING_SIDE"},
-            {"closedAt": now - 3, "openedAt": now - 680, "symbol": "FUSDT", "side": "SHORT", "pnl": 0.25, "reason": "LIVE_CUT_LOSING_SIDE"},
-            {"closedAt": now - 2, "openedAt": now - 640, "symbol": "GUSDT", "side": "LONG", "pnl": 0.23, "reason": "LIVE_CUT_LOSING_SIDE"},
-            {"closedAt": now - 1, "openedAt": now - 600, "symbol": "HUSDT", "side": "LONG", "pnl": -0.51, "reason": "LOCAL_SL_HIT"},
-        ]
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
-        main.AUTO_TRADE["running"] = True
-        main.AUTO_TRADE["config"] = {
-            "executionMode": "LIVE",
+        prev_config = main.AUTO_TRADE.get("config")
+        main.AUTO_TRADE["supervisorAutoTune"] = {}
+        cfg = {
             "holdWinners": True,
             "holdMinConfidence": 0.68,
-            "tpTargetMinUsdt": 1.20,
-            "tpTargetMaxUsdt": 3.20,
+            "tpTargetMinUsdt": 0.85,
+            "tpTargetMaxUsdt": 2.50,
+            "supervisorTpTargetMinCeiling": 0.85,
+            "supervisorTpTargetMaxCeiling": 2.50,
             "profitLockBreakevenTriggerUsdt": 0.45,
-            "stopLossPct": 0.55,
+            "stopLossPct": 0.80,
+            "supervisorStopLossFloor": 0.80,
         }
-        main.AUTO_TRADE["hermesAgents"] = state
-        main.AUTO_TRADE["openLivePositions"] = []
-        main.AUTO_TRADE["liveStatsAll"] = {"lastTrades": trades}
-        main.AUTO_TRADE["supervisorAutoTune"] = {}
-
+        review = {
+            "label": "last_8_trades",
+            "trades": 8,
+            "payoffRatio": 0.745,
+            "avgWin": 0.5,
+            "avgLoss": -0.671,
+        }
         try:
-            with mock.patch.object(main, "_live_closed_trades_from_log", return_value=trades):
-                with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
-                    review = main._hermes_supervisor_review(main.AUTO_TRADE)
+            out = main._maybe_tune_weak_payoff_from_review(review, cfg)
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
+            main.AUTO_TRADE["config"] = prev_config
 
-        self.assertTrue(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
-        self.assertTrue(any(x.get("action") == "weak payoff policy already at safe limits" and x.get("status") == "applied" for x in review["autoActions"]))
-        self.assertNotIn("cmuxHandoff", review)
+        self.assertFalse(out.get("applied"))
+        self.assertEqual(out.get("reason"), "no_safe_delta")
+        self.assertEqual(cfg["stopLossPct"], 0.80)
+        self.assertEqual(cfg["tpTargetMinUsdt"], 0.85)
 
     def test_supervisor_reports_small_wins_without_weak_payoff(self):
         state = main.new_agent_state()
@@ -3837,7 +3891,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         review = main._hermes_supervisor_review(bot)
 
         self.assertFalse(any(x["title"] == "Periodic trade review: weak payoff ratio" for x in review["issues"]))
-        self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
+        self.assertTrue(any(x["title"] == "Profit capture may be too early" for x in review["issues"]))
         self.assertNotIn("cmuxHandoff", review)
 
     def test_supervisor_auto_tunes_small_wins_when_live(self):
@@ -3875,11 +3929,11 @@ class TestStatusLitePositionCard(unittest.TestCase):
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
 
-        self.assertTrue(any(x["title"] == "Periodic trade review: small wins dominate" for x in review["issues"]))
+        self.assertTrue(any(x["title"] == "Profit capture may be too early" for x in review["issues"]))
         self.assertTrue(any(x.get("action") == "auto-tuned small-profit capture policy" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertNotIn("cmuxHandoff", review)
         self.assertLess(main.AUTO_TRADE["config"]["holdMinConfidence"], 0.72)
-        self.assertGreater(main.AUTO_TRADE["config"]["tpTargetMinUsdt"], 0.55)
+        self.assertLess(main.AUTO_TRADE["config"]["profitLockBreakevenTriggerUsdt"], 0.16)
 
     def test_supervisor_reports_missing_learning_agents_after_trades(self):
         state = main.new_agent_state()
@@ -4162,7 +4216,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertLess(cfg["stopLossPct"], 0.752)
+        self.assertEqual(cfg["stopLossPct"], 0.80)
         self.assertLessEqual(cfg["payoffLossGuardLossToWinCap"], 0.95)
         self.assertLessEqual(cfg["payoffLossGuardMaxLossUsdt"], 0.75)
         self.assertLessEqual(cfg["payoffLossGuardMinLossUsdt"], 0.22)
@@ -4235,7 +4289,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertNotIn("cmuxHandoff", review)
 
     def test_agent_start_cycle_clears_stale_action(self):
-        state = main.mark_agent(main.new_agent_state(), "memory_agent", "done", "decision stored", "LIVE XLMUSDT LONG")
+        state = main.mark_agent(main.new_agent_state(), "memory_agent", "doing", "decision stored", "LIVE XLMUSDT LONG")
 
         state = main.start_cycle(state)
 
