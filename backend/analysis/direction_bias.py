@@ -267,20 +267,27 @@ def _main():
     return m
 
 
-def bias_gate(side: str | None, bias: str | None) -> tuple[bool, str]:
-    """Proposed directional entry gate: allow an entry only when the detected
-    direction-bias matches the side about to be opened.
+def bias_gate(side: str | None, bias: str | None, *, neutral_conf_min: float = 0.0, conf: float = 0.0) -> tuple[bool, str]:
+    """Directional entry gate: allow an entry only when the detected direction
+    bias agrees with the side about to be opened.
 
     Replay on 2096 real LIVE trades (90d) showed that entering only when
     ``bias == side`` converted net PnL -36.2 -> +8.4 USDT (kept trades avg
     +0.033/tr vs blocked -0.024/tr). NEUTRAL bias is the choppy/no-trend band
     that historically carries the losses, so it blocks too.
 
+    ``neutral_conf_min`` softens the gate: a NEUTRAL bias is allowed through
+    when the entry confidence ``conf`` >= threshold (config
+    ``biasGateNeutralConfMin``). Bias opposing the side (LONG vs SHORT) always
+    blocks regardless of confidence.
+
     Returns ``(allowed, reason)``:
       - side not LONG/SHORT        -> (True,  "no-side")
       - bias missing/invalid       -> (True,  "bias-unavailable")  (don't block on a detector outage)
       - bias == side               -> (True,  "bias matches")
-      - bias != side (incl NEUTRAL)-> (False, "bias=NEUTRAL|SHORT|LONG")
+      - bias NEUTRAL & conf high   -> (True,  "bias=NEUTRAL conf=..")  (when neutral_conf_min > 0)
+      - bias NEUTRAL otherwise     -> (False, "bias=NEUTRAL != side")
+      - bias != side (opposing)    -> (False, "bias=SHORT|LONG != side")
     """
     side = str(side or "").upper()
     bias = str(bias or "").upper()
@@ -289,6 +296,8 @@ def bias_gate(side: str | None, bias: str | None) -> tuple[bool, str]:
     if bias not in ("LONG", "SHORT"):
         if bias not in ("LONG", "SHORT", "NEUTRAL"):
             return True, "bias-unavailable"
+        if bias == "NEUTRAL" and neutral_conf_min > 0 and float(conf) >= float(neutral_conf_min):
+            return True, f"bias=NEUTRAL conf={float(conf):.2f}"
         return False, f"bias={bias} != {side}"
     if bias == side:
         return True, f"bias={bias} matches {side}"

@@ -137,3 +137,28 @@ def test_bias_gate_no_side_or_unavailable_treats_as_allow():
 def test_bias_gate_case_insensitive():
     assert bias_gate("long", "long")[0] is True
     assert bias_gate("Long", "neutral")[0] is False
+
+
+def test_bias_gate_neutral_conf_min_allows_high_conf():
+    ok, reason = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.85, conf=0.90)
+    assert ok and "NEUTRAL" in reason and "0.90" in reason
+    ok, reason = bias_gate("SHORT", "NEUTRAL", neutral_conf_min=0.85, conf=0.87)
+    assert ok and "NEUTRAL" in reason
+
+
+def test_bias_gate_neutral_conf_min_blocks_low_conf():
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.85, conf=0.70)
+    assert not ok
+    # literal boundary: conf == threshold passes
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.85, conf=0.85)
+    assert ok
+    # knob off (0.0) keeps old blocking behaviour
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.0, conf=0.99)
+    assert not ok
+
+
+def test_bias_gate_neutral_conf_min_never_overrides_opposing_bias():
+    ok, _ = bias_gate("LONG", "SHORT", neutral_conf_min=0.85, conf=0.99)
+    assert not ok
+    ok, _ = bias_gate("SHORT", "LONG", neutral_conf_min=0.85, conf=0.99)
+    assert not ok

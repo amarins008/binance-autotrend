@@ -6268,12 +6268,18 @@ async def _autotrade_loop():
             # Replay on 2096 LIVE trades (90d): bias==side trades avg +0.033/tr while
             # NEUTRAL/mismatch avg -0.024/tr; NEUTRAL (choppy no-trend) carries the
             # losses so it also blocks. Disable via config biasGateEnabled=False.
+            # Soften via config biasGateNeutralConfMin=0.85: NEUTRAL passes when
+            # entry confidence >= threshold (opposing bias still always blocks).
             if bool(cfg.get("biasGateEnabled", True)) and signal in ("LONG", "SHORT"):
                 try:
                     from analysis.direction_bias import bias_gate as _bias_gate
                     _db = intel.get("directionBias") if isinstance(intel, dict) else None
                     _bias = (_db or {}).get("bias") if isinstance(_db, dict) else None
-                    _allow, _reason = _bias_gate(signal, _bias)
+                    _allow, _reason = _bias_gate(
+                        signal, _bias,
+                        neutral_conf_min=float(cfg.get("biasGateNeutralConfMin", 0.0) or 0.0),
+                        conf=conf,
+                    )
                     if not _allow:
                         _agent_mark("direction_bias_gate", "blocked", f"{cfg['symbol']} {signal}", f"bias={_bias} · {_reason}")
                         _autotrade_skip(
