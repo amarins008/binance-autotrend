@@ -174,7 +174,7 @@ def pretty(results):
             f"conf={i['confidence'] or 0:.3f} tw={str(tv['signal']):5s}/"
             f"{(tv['confidence'] or 0):.2f}/{int(tv['age']):>3d}s "
             f"db={str(db['bias']):7s}/{db['regime']:5s}/{str(db['entryKeyword']):16s} "
-            f"dist={db['pullbackDistAtr']:+.2f} mark={mark}"
+            f"dist={(db['pullbackDistAtr'] or 0):+.2f} mark={mark}"
         )
         if not r["ok"]:
             line += f"  ERROR {i.get('error')}"

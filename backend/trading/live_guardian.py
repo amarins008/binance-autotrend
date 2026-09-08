@@ -1281,10 +1281,19 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         lock_policy_ph1 = _profit_lock_policy(cfg, st["peak"], sym, _last_decision_intel(sym, max_age_sec=30))
         lk_trigger_ph1 = max(float(lock_policy_ph1.get("trigger", 0.0) or 0.0), fee_min_capture * 1.35)
         _rhs = profit_lock_knobs_from_tp(cfg)
+        # Fee-buffer floor must NEVER push the BE arm above the TP-ratio track.
+        # The notional*rate term grows with notional (0.525 @ notional 350) and
+        # dominated bk_floor -> bk_trigger 0.79, so small winners (peak 0.2-0.5)
+        # never armed BE and rode back to a loss. Cap it at the ratio BE floor;
+        # real fee coverage is guaranteed separately by fee_min_capture in max().
+        _be_floor_cfg = max(0.03, float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08))
+        _be_floor_ratio = float(_rhs.get("profitLockBreakevenFloorUsdt", 0.0) or 0.0)
+        _fee_buffer_cap = max(_be_floor_cfg, _be_floor_ratio)
+        _fee_buffer = min(notional * float(cfg.get("profitLockFeeBufferRate", 0.0015) or 0.0015), _fee_buffer_cap)
         bk_floor_ph1 = max(0.03,
-                          float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08),
-                          float(_rhs.get("profitLockBreakevenFloorUsdt", 0.0) or 0.0),
-                          notional * float(cfg.get("profitLockFeeBufferRate", 0.0015) or 0.0015),
+                          _be_floor_cfg,
+                          _be_floor_ratio,
+                          _fee_buffer,
                           fee_min_capture)
         bk_trigger_ph1 = max(bk_floor_ph1 * 1.5,
                             min(lk_trigger_ph1,

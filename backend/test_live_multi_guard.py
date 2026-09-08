@@ -104,9 +104,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="BREAKEVEN_GUARD")
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="DEAD_ZONE_TIMEOUT")
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
-        self.assertTrue(any("BREAKEVEN_GUARD" in call.args[0] for call in log.call_args_list))
+        self.assertTrue(any("DEAD_ZONE_TIMEOUT" in call.args[0] for call in log.call_args_list))
 
     async def test_multi_guard_uses_configured_profit_lock_trigger_and_giveback(self):
         cfg = {

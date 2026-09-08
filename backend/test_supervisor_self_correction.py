@@ -49,10 +49,17 @@ class TestPositionGuardianSelfCorrect:
         assert changes == {}
 
     def test_small_profit_tightens_giveback(self):
-        cfg = {"profitLockMaxGivebackUsdt": 0.15}
+        cfg = {"profitLockMaxGivebackUsdt": 1.10}
         corrected, changes = _position_guardian_self_correct("auto-tuned small-profit", "small_profit_capture", cfg)
         assert corrected is True
-        assert changes["profitLockMaxGivebackUsdt"] < 0.15
+        assert changes["profitLockMaxGivebackUsdt"] < 1.10
+        assert changes["profitLockMaxGivebackUsdt"] >= 0.30  # never below TP-ratio floor (V23)
+
+    def test_small_profit_at_ratio_floor_keeps_floor(self):
+        cfg = {"profitLockMaxGivebackUsdt": 0.30}
+        corrected, changes = _position_guardian_self_correct("auto-tuned small-profit", "small_profit_capture", cfg)
+        assert corrected is True
+        assert changes == {}
 
     def test_weak_payoff_tightens_sl(self):
         cfg = {"stopLossPct": 0.8}

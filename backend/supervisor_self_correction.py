@@ -2,6 +2,8 @@ import copy
 import time
 from typing import Any
 
+from trading.risk import profit_lock_knobs_from_tp as _profit_lock_knobs_from_tp
+
 # AUTO_TRADE is injected from main.py at runtime; define a safe accessor.
 _AUTO_TRADE_GLOBAL: Any = None
 
@@ -148,12 +150,14 @@ def _position_guardian_self_correct(action_text: str, issue_type: str, cfg: dict
         return True, changes
     # Profit-lock adjustments: tighten thresholds if small wins detected
     if "profit-lock" in action_text.lower() or "small-profit" in action_text.lower() or "small_profit" in issue_type.lower():
-        # Self-correct: lower maxGiveback slightly if not at safe limit
-        current_giveback = float(cfg.get("profitLockMaxGivebackUsdt", 0.15) or 0.15)
-        if current_giveback > 0.05:
-            changes["profitLockMaxGivebackUsdt"] = round(max(0.05, current_giveback * 0.90), 6)
+        # Self-correct: lower maxGiveback slightly, but never below the TP-ratio
+        # floor (guard must track the lead TP target, not a stale 0.5-1.0 scale).
+        gb_base = float(_profit_lock_knobs_from_tp(cfg).get("profitLockMaxGivebackUsdt", 0.30) or 0.30)
+        current_giveback = float(cfg.get("profitLockMaxGivebackUsdt", gb_base) or gb_base)
+        if current_giveback > gb_base:
+            changes["profitLockMaxGivebackUsdt"] = round(max(gb_base, current_giveback * 0.90), 6)
             return True, changes
-        return True, changes  # already at safe limit, just mark corrected
+        return True, changes  # already at ratio floor, just mark corrected
     # Weak payoff: tighten SL slightly
     if "payoff" in action_text.lower():
         current_sl = float(cfg.get("stopLossPct", 0.75) or 0.75)

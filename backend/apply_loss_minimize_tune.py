@@ -24,10 +24,11 @@ OPTIMIZATION_PATCH = {
     "slToTpRatio": 0.42,
     "takeProfitPct": 1.6,
     "minRiskRewardRatio": 1.6,
-    # Lock profits earlier
-    "profitLockTriggerUsdt": 0.25,
-    "profitLockKeepUsdt": 0.12,
-    "profitLockMaxGivebackUsdt": 0.18,
+    # Lock profits earlier — ratio-aligned to TP target (V23): trigger 25%,
+    # keep 55%, giveback 15% of tpTargetMinUsdt=2.0
+    "profitLockTriggerUsdt": 0.50,
+    "profitLockKeepUsdt": 1.10,
+    "profitLockMaxGivebackUsdt": 0.30,
     # Higher entry quality
     "minConfidence": 0.73,
     "earlyEntryMinConfidence": 0.66,
