@@ -82,6 +82,7 @@ from trading.risk import (
     _sync_autotrade_leverage_cap_from_cfg,
     calc_tp_sl_prices as _calc_tp_sl_prices,
     fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
+    profit_lock_knobs_from_tp as _profit_lock_knobs_from_tp,
 )
 from exchange.binance_client import configure_clients as _configure_binance_clients
 from exchange.futures_orders import (
@@ -560,7 +561,11 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
     set_float("tpTargetMaxUsdt", min(tp_max_ceil, max(tp_max * (1.0 + 0.12 * severity), float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.4)), 3)
 
     be_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
-    set_float("profitLockBreakevenTriggerUsdt", min(0.45, max(0.20, be_trigger * (1.0 + 0.15 * severity))), 3)
+    be_ratio = float(_profit_lock_knobs_from_tp(cfg).get("profitLockBreakevenTriggerUsdt", 0.50) or 0.50)
+    # Weak-payoff loosens breakeven (let winners run). Floor at the TP-ratio
+    # base, cap at 1.6× base, and never take the value BELOW its current
+    # setting (a higher absolute config = already more permissive).
+    set_float("profitLockBreakevenTriggerUsdt", max(be_trigger, min(be_ratio * 1.60, max(be_ratio, be_trigger * (1.0 + 0.15 * severity)))), 3)
 
     weak_loss_pressure = avg_loss > 0 and avg_win > 0 and avg_loss > avg_win * 1.35
     if weak_loss_pressure:
@@ -1305,20 +1310,28 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
         cfg["holdWinners"] = True
     hold_min = float(cfg.get("holdMinConfidence", 0.72) or 0.72)
     set_float("holdMinConfidence", max(0.66, min(0.84, hold_min - 0.02 * (1.0 + severity * 2.0))), 3)
-    trigger = float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)
-    keep = float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15)
-    giveback = float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22)
-    set_float("profitLockTriggerUsdt", max(0.22, min(trigger, trigger * (0.85 - 0.05 * severity))), 3)
-    set_float("profitLockKeepUsdt", min(0.45, max(keep, keep * (1.20 + 0.10 * severity), 0.18)), 3)
-    set_float("profitLockMaxGivebackUsdt", max(0.10, min(giveback, giveback * (0.82 - 0.08 * severity), 0.18)), 3)
-    floor = float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08)
-    set_float("profitLockBreakevenFloorUsdt", min(0.18, max(floor, 0.10 + 0.02 * severity)), 3)
+    rhs_small = _profit_lock_knobs_from_tp(cfg)
+    tr_base = float(rhs_small.get("profitLockTriggerUsdt", 0.50) or 0.50)
+    ke_base = float(rhs_small.get("profitLockKeepUsdt", 1.10) or 1.10)
+    gb_base = float(rhs_small.get("profitLockMaxGivebackUsdt", 0.30) or 0.30)
+    fl_base = float(rhs_small.get("profitLockBreakevenFloorUsdt", 0.25) or 0.25)
+    bt_base = float(rhs_small.get("profitLockBreakevenTriggerUsdt", 0.50) or 0.50)
+    trigger = float(cfg.get("profitLockTriggerUsdt", tr_base) or tr_base)
+    keep = float(cfg.get("profitLockKeepUsdt", ke_base) or ke_base)
+    giveback = float(cfg.get("profitLockMaxGivebackUsdt", gb_base) or gb_base)
+    # Small-profit capture tightens the guard, but never below the TP-ratio
+    # floor (guard must track the lead TP target, not a stale 0.5-1.0 scale).
+    set_float("profitLockTriggerUsdt", max(tr_base, min(trigger, trigger * (0.94 - 0.04 * severity))), 3)
+    set_float("profitLockKeepUsdt", min(ke_base * 1.60, max(keep, keep * (1.10 + 0.06 * severity), ke_base)), 3)
+    set_float("profitLockMaxGivebackUsdt", max(gb_base, min(giveback, giveback * (0.90 - 0.04 * severity), gb_base * 1.10)), 3)
+    floor = float(cfg.get("profitLockBreakevenFloorUsdt", fl_base) or fl_base)
+    set_float("profitLockBreakevenFloorUsdt", min(fl_base * 1.30, max(floor, fl_base + 0.02 * severity)), 3)
     tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.65) or 0.65))
     set_float("tpTargetMinUsdt", min(float(cfg.get("supervisorTpTargetMinCeiling", 2.0) or 2.0), max(0.65, tp_min)), 3)
     tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
     set_float("tpTargetMaxUsdt", min(float(cfg.get("supervisorTpTargetMaxCeiling", 2.0) or 2.0), max(tp_max, float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.0)), 3)
-    breakeven_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
-    set_float("profitLockBreakevenTriggerUsdt", min(float(cfg.get("profitLockTriggerUsdt", trigger) or trigger), max(0.14, breakeven_trigger * (0.95 - 0.05 * severity))), 3)
+    breakeven_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", bt_base) or bt_base)
+    set_float("profitLockBreakevenTriggerUsdt", min(bt_base * 1.50, max(bt_base, breakeven_trigger * (0.96 - 0.03 * severity))), 3)
 
     if not changes:
         _tuning_mode_lock_release()  # nothing committed — don't hold the lock

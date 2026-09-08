@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 22
+CONFIG_VERSION = 23
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -384,6 +384,25 @@ _FORCE_DEFAULTS_V22: dict = {
 }
 
 
+_FORCE_DEFAULTS_V23: dict = {
+    # V23: Guardian knobs as ratios of the lead TP target (2026-09-08).
+    # With margin-based sizing TP/SL land on ±2 USDT (tpTargetMin/Max=2.0),
+    # but the guard knobs were tuned against the old 0.5-1.0 USDT target and
+    # locked winners too early (~0.22/0.45/0.10/0.177/0.12). Derive operational
+    # values from tpTargetMinUsdt (trigger 25%, keep 55%, giveback 15%,
+    # be-trigger 25%, be-floor 12.5%) → 0.50/1.10/0.30/0.50/0.25 at TP=2.0.
+    "profitLockTriggerUsdt": 0.50,          # arm profit-lock at ~25% of TP target
+    "profitLockKeepUsdt": 1.10,             # keep ~55% of TP target
+    "profitLockMaxGivebackUsdt": 0.30,      # allow ~15% of TP target giveback
+    "profitLockBreakevenTriggerUsdt": 0.50, # arm breakeven at ~25% of TP target
+    "profitLockBreakevenFloorUsdt": 0.25,   # breakeven floor at ~12.5% of TP target
+    "tryGreenExitMinProfitUsdt": 0.15,      # was 0.06
+    "tryGreenExitMaxProfitUsdt": 0.50,      # was 0.15/0.20
+    "holdMinProfitUsdt": 0.30,              # was 0.12
+    "swingPeakMinProfitUsdt": 0.20,         # was 0.08
+}
+
+
 def _normalize_config_symbol(symbol: str) -> str:
     return str(symbol or "").upper().replace("/", "").strip()
 
@@ -495,9 +514,11 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("tvBatchRateLimitPerMin", 4)
     out.setdefault("tvBatchRetryBackoff", 2.0)
     out.setdefault("tvStaleSec", 900)
-    out.setdefault("profitLockTriggerUsdt", 0.25)
-    out.setdefault("profitLockKeepUsdt", 0.10)
-    out.setdefault("profitLockMaxGivebackUsdt", 0.18)
+    out.setdefault("profitLockTriggerUsdt", 0.50)
+    out.setdefault("profitLockKeepUsdt", 1.10)
+    out.setdefault("profitLockMaxGivebackUsdt", 0.30)
+    out.setdefault("profitLockBreakevenTriggerUsdt", 0.50)
+    out.setdefault("profitLockBreakevenFloorUsdt", 0.25)
     out.setdefault("payoffLossGuardEnabled", True)
     out.setdefault("payoffLossGuardMinTrades", 6)
     out.setdefault("payoffLossGuardWindowTrades", 8)
@@ -512,8 +533,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("preemptiveLossExitMinConfirmations", 2)
     out.setdefault("swingDecelerationEnabled", True)
     out.setdefault("tryGreenExitEnabled", True)
-    out.setdefault("tryGreenExitMinProfitUsdt", 0.06)
-    out.setdefault("tryGreenExitMaxProfitUsdt", 0.15)
+    out.setdefault("tryGreenExitMinProfitUsdt", 0.15)
+    out.setdefault("tryGreenExitMaxProfitUsdt", 0.50)
     out.setdefault("tryGreenExitMinPriorLossUsdt", 0.20)
     out.setdefault("tryGreenExitMinRecoveryPct", 0.70)
     out.setdefault("guardianMinHoldSec", 180)
@@ -537,7 +558,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("swingPeakRsiOversold", 38)
     out.setdefault("swingPeakBbUpperPct", 0.78)
     out.setdefault("swingPeakBbLowerPct", 0.22)
-    out.setdefault("swingPeakMinProfitUsdt", 0.08)
+    out.setdefault("swingPeakMinProfitUsdt", 0.20)
     out.setdefault("swingPeakMomDecelThreshold", 0.30)
     out.setdefault("slCandleAdaptiveEnabled", True)
     out.setdefault("slCandleLookback", 5)
@@ -850,6 +871,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 22:
             for _fk, _fv in _FORCE_DEFAULTS_V22.items():
+                out[_fk] = _fv
+        if _stored_ver < 23:
+            for _fk, _fv in _FORCE_DEFAULTS_V23.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

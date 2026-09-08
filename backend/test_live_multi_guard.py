@@ -203,7 +203,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         close_one.assert_not_awaited()
         lock = main.AUTO_TRADE["liveProfitLocks"]["BTCUSDT:LONG"]
         self.assertTrue(lock["armed"])
-        self.assertAlmostEqual(lock["lockUsdt"], 0.18)
+        # V23: guard knobs track the lead TP target (tpTargetMinUsdt=1.20 →
+        # keep floor = 1.20×0.55 = 0.66), capped at 98% of peak (0.40×0.98).
+        self.assertAlmostEqual(lock["lockUsdt"], 0.392, places=3)
 
     async def test_multi_guard_extends_tp_when_signal_stays_strong(self):
         cfg = {

@@ -244,9 +244,9 @@ class AutoTradeStartRequest(BaseModel):
     tpSlTargetUsdtEnabled: bool = True
     tpTargetMinUsdt: float = Field(default=0.5, ge=0.05, le=20.0)
     tpTargetMaxUsdt: float = Field(default=2.0, ge=0.1, le=50.0)
-    profitLockTriggerUsdt: float = Field(default=0.35, ge=0.01, le=50.0)
-    profitLockKeepUsdt: float = Field(default=0.15, ge=0.0, le=50.0)
-    profitLockMaxGivebackUsdt: float = Field(default=0.22, ge=0.01, le=50.0)
+    profitLockTriggerUsdt: float = Field(default=0.50, ge=0.01, le=50.0)
+    profitLockKeepUsdt: float = Field(default=1.10, ge=0.0, le=50.0)
+    profitLockMaxGivebackUsdt: float = Field(default=0.30, ge=0.01, le=50.0)
     slToTpRatio: float = Field(default=1.0, ge=0.35, le=1.0)
     minRiskRewardRatio: float = Field(default=1.35, ge=1.0, le=4.0)
     atrTpSlEnabled: bool = True

@@ -41,6 +41,7 @@ from trading.risk import (
     _profit_lock_policy,
     calc_tp_sl_prices as _calc_tp_sl_prices,
     fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
+    profit_lock_knobs_from_tp,
 )
 from trading.symbol_profiles import _symbol_effective_profile
 from analysis.intel_analyze import intel_analyze
@@ -1279,8 +1280,16 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         # Cache per-row computed values as temp keys; cleaned in Phase 4.
         lock_policy_ph1 = _profit_lock_policy(cfg, st["peak"], sym, _last_decision_intel(sym, max_age_sec=30))
         lk_trigger_ph1 = max(float(lock_policy_ph1.get("trigger", 0.0) or 0.0), fee_min_capture * 1.35)
-        bk_floor_ph1 = max(0.03, float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08), notional * float(cfg.get("profitLockFeeBufferRate", 0.0015) or 0.0015), fee_min_capture)
-        bk_trigger_ph1 = max(bk_floor_ph1 * 1.5, min(lk_trigger_ph1, float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)))
+        _rhs = profit_lock_knobs_from_tp(cfg)
+        bk_floor_ph1 = max(0.03,
+                          float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08),
+                          float(_rhs.get("profitLockBreakevenFloorUsdt", 0.0) or 0.0),
+                          notional * float(cfg.get("profitLockFeeBufferRate", 0.0015) or 0.0015),
+                          fee_min_capture)
+        bk_trigger_ph1 = max(bk_floor_ph1 * 1.5,
+                            min(lk_trigger_ph1,
+                                max(float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16),
+                                    float(_rhs.get("profitLockBreakevenTriggerUsdt", 0.0) or 0.0))))
         payoff_guard_ph1 = _recent_payoff_loss_guard(cfg, sym)
         _prev_peak_raw = st.get("peak")
         _prev_peak_f = float(_prev_peak_raw) if _prev_peak_raw is not None else 0.0
@@ -1845,7 +1854,9 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             _autotrade_log(f"Profit lock armed: {sym} {side} lock={st['lockUsdt']:.3f} peak={st['peak']:.3f}")
 
         if st.get("armed") and st["peak"] >= max(fee_min_capture, 0.12):
-            max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22))
+            max_giveback = max(0.01,
+                               float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22),
+                               float(profit_lock_knobs_from_tp(cfg).get("profitLockMaxGivebackUsdt", 0.0) or 0.0))
             retrace_budget = max(fee_min_capture, float(st["peak"]) - max_giveback, float(st["peak"]) * 0.55)
             if upnl <= retrace_budget:
                 if f"{sym}:{side}" not in _closed_symbols:

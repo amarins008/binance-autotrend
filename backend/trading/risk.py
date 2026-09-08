@@ -108,6 +108,48 @@ def _current_max_notional() -> float:
         return float(os.getenv("MAX_NOTIONAL_USDT", "200"))
 
 
+# ── Guardian knobs as ratios of the lead TP target (USDT) ────────────────────
+# 2026-09-08: with the margin-based sizing redesign (TP/SL land on ±2 USDT per
+# 5-min cycle, tpTargetMinUsdt=2.0), the old absolute guard knobs (trigger 0.22,
+# keep 0.45, giveback 0.1, be-trigger 0.177, be-floor 0.12) were tuned against a
+# 0.5-1.0 USDT TP target and locked small wins while the target was 4x larger.
+# Deriving the knobs as % of tpTargetMinUsdt makes the guardian track whatever
+# TP target is configured (a single source of truth) instead of stale absolutes.
+_GUARD_TP_RATIOS = {
+    "profitLockTriggerUsdt": 0.25,        # arm profit-lock at ~25% of TP target
+    "profitLockKeepUsdt": 0.55,           # keep ~55% of TP target
+    "profitLockMaxGivebackUsdt": 0.15,    # allow ~15% of TP target giveback
+    "profitLockBreakevenTriggerUsdt": 0.25,  # arm breakeven at ~25% of TP target
+    "profitLockBreakevenFloorUsdt": 0.125,   # breakeven floor at ~12.5% of TP target
+    "tryGreenExitMinProfitUsdt": 0.075,
+    "tryGreenExitMaxProfitUsdt": 0.25,
+    "holdMinProfitUsdt": 0.15,
+    "swingPeakMinProfitUsdt": 0.10,
+}
+
+
+def profit_lock_knobs_from_tp(cfg: dict | None) -> dict:
+    """Derive guardian USDT knobs as ratios of tpTargetMinUsdt.
+
+    Used as the runtime fallback/base so the guardian always tracks whatever
+    lead TP target is set (single source of truth). Absolute config values are
+    still honored when explicitly set on top of the ratio base (per-symbol
+    overrides and supervisor tuning keep working).
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    try:
+        tp_min = max(0.05, float(cfg.get("tpTargetMinUsdt", 2.0) or 2.0))
+        tp_max = max(tp_min, float(cfg.get("tpTargetMaxUsdt", tp_min) or tp_min))
+    except (TypeError, ValueError):
+        tp_min, tp_max = 2.0, 2.0
+    return {
+        key: round(tp_min * ratio, 6)
+        for key, ratio in _GUARD_TP_RATIOS.items()
+    } | {
+        "tpTargetUsdtMid": round((tp_min + tp_max) * 0.5, 6),
+    }
+
+
 def _autotrade_leverage_cap() -> int:
     return max(1, min(25, int(app_state.RISK.get("max_leverage", 25) or 25)))
 
@@ -183,9 +225,16 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     _sl_min = max(_sl_floor, float(cfg.get("slMinPct", 0.60) or 0.60))
     base_sl = max(_sl_min, float(cfg.get("stopLossPct", 0.8) or 0.8))
     base_cap = max(20.0, float(cfg.get("tradeNotionalCapUsdt", _current_max_notional()) or _current_max_notional()))
-    base_lock_trigger = float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35)
-    base_lock_keep = float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15)
-    base_lock_giveback = float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22)
+    # Guard knobs track the lead TP target via ratio (single source of truth).
+    # Explicit config values still win when they are LARGER (manual loosening),
+    # but stale small absolute values are never allowed to shrink the guard
+    # below the TP-aligned band (was tuned against a 0.5-1.0 TP target).
+    _ratio_lock = profit_lock_knobs_from_tp(cfg)
+    base_lock_trigger = max(float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35), float(_ratio_lock.get("profitLockTriggerUsdt", 0.0) or 0.0))
+    base_lock_keep = max(float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15), float(_ratio_lock.get("profitLockKeepUsdt", 0.0) or 0.0))
+    base_lock_giveback = max(float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22), float(_ratio_lock.get("profitLockMaxGivebackUsdt", 0.0) or 0.0))
+    base_be_floor = max(float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08), float(_ratio_lock.get("profitLockBreakevenFloorUsdt", 0.0) or 0.0))
+    base_be_trigger = max(float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16), float(_ratio_lock.get("profitLockBreakevenTriggerUsdt", 0.0) or 0.0))
     base_tp_min = float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55)
     base_tp_max = float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0)
 
@@ -200,6 +249,8 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
             "profitLockTriggerUsdt": round(base_lock_trigger, 4),
             "profitLockKeepUsdt": round(base_lock_keep, 4),
             "profitLockMaxGivebackUsdt": round(base_lock_giveback, 4),
+            "profitLockBreakevenTriggerUsdt": round(base_be_trigger, 4),
+            "profitLockBreakevenFloorUsdt": round(base_be_floor, 4),
             "tpTargetMinUsdt": round(base_tp_min, 4),
             "tpTargetMaxUsdt": round(base_tp_max, 4),
             "holdTrailPct": round(float(sym_profile.get("holdTrail_base", float(cfg.get("holdTrailPct", 0.25) or 0.25))), 4),
@@ -229,11 +280,15 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
         "slPct": round(max(_sl_min, float(sym_overrides.get("slPct", base_sl * _sl_mult_adj))), 4),
         "notionalCapUsdt": round(float(sym_overrides.get("notionalCapUsdt", base_cap * cap_mult)), 4),
         "profitLockTriggerUsdt": round(
-            float(sym_overrides.get("profitLockTriggerUsdt", base_lock_trigger * lock_mult)), 4),
+            max(float(sym_overrides.get("profitLockTriggerUsdt", base_lock_trigger * lock_mult)), base_lock_trigger * lock_mult), 4),
         "profitLockKeepUsdt": round(
-            float(sym_overrides.get("profitLockKeepUsdt", base_lock_keep * lock_mult)), 4),
+            max(float(sym_overrides.get("profitLockKeepUsdt", base_lock_keep * lock_mult)), base_lock_keep * lock_mult), 4),
         "profitLockMaxGivebackUsdt": round(
-            float(sym_overrides.get("profitLockMaxGivebackUsdt", base_lock_giveback * lock_mult)), 4),
+            max(float(sym_overrides.get("profitLockMaxGivebackUsdt", base_lock_giveback * lock_mult)), base_lock_giveback * lock_mult), 4),
+        "profitLockBreakevenTriggerUsdt": round(
+            max(float(sym_overrides.get("profitLockBreakevenTriggerUsdt", base_be_trigger * lock_mult)), base_be_trigger * lock_mult), 4),
+        "profitLockBreakevenFloorUsdt": round(
+            max(float(sym_overrides.get("profitLockBreakevenFloorUsdt", base_be_floor * lock_mult)), base_be_floor * lock_mult), 4),
         "tpTargetMinUsdt": round(float(sym_overrides.get("tpTargetMinUsdt", base_tp_min * lock_mult)), 4),
         "tpTargetMaxUsdt": round(float(sym_overrides.get("tpTargetMaxUsdt", base_tp_max * lock_mult)), 4),
     }
@@ -275,6 +330,7 @@ def _profit_lock_policy(cfg: dict, peak_usdt: float, symbol: str | None = None, 
     run; stable majors lock earlier to bank small consistent gains).
     """
     peak = max(0.0, float(peak_usdt or 0.0))
+    rhs = profit_lock_knobs_from_tp(cfg)
     # Per-symbol override via _effective_tp_sl.
     if symbol and intel is not None:
         eff = _effective_tp_sl(symbol, cfg, intel)
@@ -282,9 +338,9 @@ def _profit_lock_policy(cfg: dict, peak_usdt: float, symbol: str | None = None, 
         keep = max(0.02, float(eff.get("profitLockKeepUsdt", 0.15)))
         max_giveback = max(0.01, float(eff.get("profitLockMaxGivebackUsdt", 0.22)))
     elif "profitLockTriggerUsdt" in cfg:
-        trigger = max(0.05, float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35))
-        keep = max(0.02, float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15))
-        max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22))
+        trigger = max(0.05, float(cfg.get("profitLockTriggerUsdt", 0.35) or 0.35), float(rhs.get("profitLockTriggerUsdt", 0.0) or 0.0))
+        keep = max(0.02, float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15), float(rhs.get("profitLockKeepUsdt", 0.0) or 0.0))
+        max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22), float(rhs.get("profitLockMaxGivebackUsdt", 0.0) or 0.0))
     else:
         # Fallback: derive trigger from TP target minimum.
         if symbol and intel is not None:
@@ -292,8 +348,8 @@ def _profit_lock_policy(cfg: dict, peak_usdt: float, symbol: str | None = None, 
             trigger = max(0.20, float(eff.get("tpTargetMinUsdt", 0.55)) * 0.5)
         else:
             trigger = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55) * 0.5)
-        keep = max(0.02, float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15))
-        max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22))
+        keep = max(0.02, float(cfg.get("profitLockKeepUsdt", 0.15) or 0.15), float(rhs.get("profitLockKeepUsdt", 0.0) or 0.0))
+        max_giveback = max(0.01, float(cfg.get("profitLockMaxGivebackUsdt", 0.22) or 0.22), float(rhs.get("profitLockMaxGivebackUsdt", 0.0) or 0.0))
     lock_usdt = 0.0
     if peak >= trigger:
         lock_usdt = max(0.02, keep, peak - max_giveback, peak * 0.35)
