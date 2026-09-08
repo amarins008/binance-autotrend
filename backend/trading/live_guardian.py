@@ -40,6 +40,7 @@ from trading.risk import (
     _flat_intel_keys,
     _profit_lock_policy,
     calc_tp_sl_prices as _calc_tp_sl_prices,
+    effective_tpsl_pct_for_trade as _effective_tpsl_pct_for_trade,
     fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
     profit_lock_knobs_from_tp,
 )
@@ -1253,29 +1254,63 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             st["entrySnapshot"].setdefault("volatilityScore", _eff_snap.get("volatilityScore", 0.0))
             st["entrySnapshot"].setdefault("positionSizeMult", float(_eff_prof.get("position_size_mult", 1.0) or 1.0))
             st["entrySnapshot"].setdefault("entryOffsetBps", float(_eff_prof.get("entry_offset_bps", 0.0) or 0.0))
-            # Autotuner: snapshot active params at position open (idempotent).
-            if "params_at_entry" not in st["entrySnapshot"]:
-                try:
-                    from trading.symbol_autotuner import snapshot_active_params
-                    st["entrySnapshot"]["params_at_entry"] = snapshot_active_params(sym, _eff_snap)
-                except Exception:
-                    pass
         guard_entry = float(st.get("entryMark", entry) or entry)
 
         if guard_entry > 0 and (not st.get("tp") or not st.get("sl")):
-            # Use the per-symbol effective TP/SL (scales with volatility tier).
-            eff_g = _effective_tp_sl(sym, cfg, _last_decision_intel(sym, max_age_sec=30))
+            # Use the same USDT-target TP/SL path the entry pipeline used
+            # (tpTargetMin/Max=2.0, slToTpRatio=1.0 → ±2 USDT of this
+            # position's notional = margin × lev). Legacy per-symbol pct path
+            # (_effective_tp_sl().slPct 0.6-0.96%) pinned SL to ~4 USDT on
+            # notional 414 for ADA — guardian levels would diverge from the
+            # ±2 USDT the exchange order actually carries.
+            _g_lev = max(1.0, float(st.get("leverage", _position_display_leverage(sym, cfg, None)) or 1.0))
+            if notional > 0:
+                # Position notional known → re-derive pct from USDT targets.
+                _g_margin = max(1e-9, float(notional) / _g_lev)
+                _g_intel = _last_decision_intel(sym, max_age_sec=30)
+                _g_prec = {}
+                if isinstance(_g_intel, dict) and isinstance(_g_intel.get("precision"), dict):
+                    _g_prec = _g_intel["precision"]
+                _g_tp, _g_sl, _g_meta = _effective_tpsl_pct_for_trade(
+                    cfg,
+                    _g_margin,
+                    None,
+                    None,
+                    precision=_g_prec,
+                    effective_leverage=_g_lev,
+                )
+            else:
+                # Notional unknown (tests / degraded rows): fall back to the
+                # per-symbol effective pct path (which never needs notional).
+                _g_eff = _effective_tp_sl(sym, cfg, _last_decision_intel(sym, max_age_sec=30))
+                _g_tp, _g_sl = float(_g_eff["tpPct"]), float(_g_eff["slPct"])
+                _g_meta = _g_eff
             tp, sl = _calc_tp_sl_prices(
                 side,
                 guard_entry,
-                float(eff_g["tpPct"]),
-                float(eff_g["slPct"]),
+                float(_g_tp),
+                float(_g_sl),
             )
             st["tp"] = round(float(tp), 10)
             st["sl"] = round(float(sl), 10)
-            st["entryTPPct"] = float(eff_g["tpPct"])
-            st["entrySLPct"] = float(eff_g["slPct"])
-            st["entryVolatilityTier"] = eff_g.get("tier", "med")
+            st["entryTPPct"] = float(_g_tp)
+            st["entrySLPct"] = float(_g_sl)
+            st["entryVolatilityTier"] = _g_meta.get("tier", "usdt-target")
+
+        # Autotuner: snapshot active params at position open (idempotent).
+        # Runs AFTER the TP/SL seed so params_at_entry reflects the actual
+        # ±2 USDT levels carried by the position (not legacy per-symbol pct).
+        if isinstance(st.get("entrySnapshot"), dict) and "params_at_entry" not in st["entrySnapshot"]:
+            try:
+                from trading.symbol_autotuner import snapshot_active_params
+                _snap_eff = dict(_eff_snap)
+                if float(st.get("entryTPPct", 0.0) or 0.0) > 0:
+                    _snap_eff["tpPct"] = float(st["entryTPPct"])
+                if float(st.get("entrySLPct", 0.0) or 0.0) > 0:
+                    _snap_eff["slPct"] = float(st["entrySLPct"])
+                st["entrySnapshot"]["params_at_entry"] = snapshot_active_params(sym, _snap_eff)
+            except Exception:
+                pass
 
         # Cache per-row computed values as temp keys; cleaned in Phase 4.
         lock_policy_ph1 = _profit_lock_policy(cfg, st["peak"], sym, _last_decision_intel(sym, max_age_sec=30))

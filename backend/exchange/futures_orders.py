@@ -757,7 +757,17 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
     entry_snapshot = _entry_snapshot_from_intel(symbol, side, _last_decision_intel(symbol))
     try:
         from trading.symbol_autotuner import snapshot_active_params
+        # Record the ACTUAL TP/SL sent to the exchange (pipeline ±2 USDT target
+        # path) — not the legacy per-symbol pct (_effective_tp_sl().slPct could
+        # be 0.96% ≈ 4 USDT on notional 414 while the order carries 2 USDT).
+        # The autotuner reads params_at_entry.slPct/tpPct to tune; a legacy
+        # snapshot would make it optimize against levels the order never used.
         _eff_at_open = _effective_tp_sl(symbol, AUTO_TRADE.get("config") or {}, _last_decision_intel(symbol))
+        _eff_at_open = dict(_eff_at_open)
+        if tp_pct:
+            _eff_at_open["tpPct"] = float(tp_pct)
+        if sl_pct:
+            _eff_at_open["slPct"] = float(sl_pct)
         entry_snapshot["params_at_entry"] = snapshot_active_params(symbol, _eff_at_open)
     except Exception:
         pass

@@ -6816,12 +6816,28 @@ async def _autotrade_loop():
                 _consecutive_balance_skips[0] = 0  # a funded symbol passed -> reset alert counter
 
             # external MCP signal guard removed — no second guard to consult.
-            eff = _effective_tp_sl(cfg["symbol"], cfg, intel)
+            # 2026-09-08: order TP/SL comes from the entry pipeline's USDT
+            # targets (tpTargetMin/Max=2.0, slToTpRatio=1.0 → ±2 USDT on the
+            # final notional = margin × lev). Legacy per-symbol pct path —
+            # _effective_tp_sl().slPct (0.6-0.96% based on stopLossPct/slMinPct
+            # × group/vol mult) pinned SL to ~4 USDT for ADA instead of ±2 USDT
+            # the pipeline was gated/approved on (fee-edge 1.05 > 0.95 net).
+            _tpsl_meta = (plan.tpsl_meta or {}) if isinstance(plan, EntryPlan) else {}
+            _tp_target_u = max(0.0, float(_tpsl_meta.get("tpTargetUsdt", 0.0) or 0.0))
+            _sl_target_u = max(0.0, float(_tpsl_meta.get("slTargetUsdt", 0.0) or 0.0))
+            _final_notional = max(1e-9, float(trade_usdt) * eff_leverage)
+            if _tp_target_u > 0 and _sl_target_u > 0 and _final_notional > 0:
+                # Re-derive pct from USDT targets against the FINAL (post-re-clamp)
+                # notional so TP/SL land on exactly ±2 USDT on the placed size.
+                tp_pct = max(0.13, min(6.0, (_tp_target_u / _final_notional) * 100.0))
+                sl_pct = max(0.13, min(4.5, (_sl_target_u / _final_notional) * 100.0))
+            else:
+                tp_pct = float(plan.eff_tp_pct or 1.2)
+                sl_pct = float(plan.eff_sl_pct or 0.8)
             # 2026-08-16: LONG TP boost — let winning LONGs run further.
             _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
             if signal == "LONG" and _long_boost > 0.0:
-                eff = dict(eff)
-                eff["tpPct"] = round(eff["tpPct"] + _long_boost, 4)
+                tp_pct = round(float(tp_pct) + _long_boost, 4)
             async def _do_place():
                 return await place_futures_order(
                     cfg["symbol"],
@@ -6829,8 +6845,8 @@ async def _autotrade_loop():
                     usdt_amount=trade_usdt,
                     leverage=eff_leverage,
                     margin_type=cfg["marginType"],
-                    tp_pct=eff["tpPct"],
-                    sl_pct=eff["slPct"],
+                    tp_pct=float(tp_pct),
+                    sl_pct=float(sl_pct),
                     trailing_stop_pct=cfg.get("trailingStopPct", 0.0),
                 )
 

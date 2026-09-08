@@ -21,7 +21,7 @@ _storage = PerSymbolStorage(VAULT_DIR)
 OPTIMIZATION_PATCH = {
     # Tighter stop-loss: avg loss (-0.36) > avg win (+0.31)
     "stopLossPct": 0.65,
-    "slToTpRatio": 0.42,
+    "slToTpRatio": 1.0,
     "takeProfitPct": 1.6,
     "minRiskRewardRatio": 1.6,
     # Lock profits earlier — ratio-aligned to TP target (V23): trigger 25%,
