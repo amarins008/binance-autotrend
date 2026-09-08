@@ -466,8 +466,9 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         inp.rv_pct,
         pullback_allowance_pct=inp.pb_pct,
         precision=p_intel,
+        effective_leverage=inp.eff_leverage,
     )
-    min_rr = float(cfg.get("minRiskRewardRatio", 1.5) or 1.5)
+    min_rr = float(cfg.get("minRiskRewardRatio", 1.0) or 1.0)
     rr_val = eff_tp / max(eff_sl, 1e-9)
     if not _step(pipeline, "risk_reward", passes_min_risk_reward(eff_tp, eff_sl, min_rr), f"R:R {rr_val:.2f} (min {min_rr})"):
         return EntryPlan(
@@ -484,8 +485,13 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             pipeline=pipeline,
         )
 
+    # trade_usdt is MARGIN after the 2026-09-08 sizing redesign; the edge/fee
+    # model operates on real exposure = margin × leverage, so gross profit and
+    # cost must be scaled by effective leverage (notional) to match TP/SL which
+    # land on ±2 USDT of the notional.
+    notional_u = max(1e-9, float(trade_usdt) * inp.eff_leverage)
     gross_u, est_cost_u, net_u = estimate_trade_edge_usdt(
-        trade_usdt,
+        notional_u,
         eff_tp,
         float(cfg.get("maxSlippageBps", 18)),
         taker_fee_bps_per_side=inp.taker_fee_bps,
@@ -497,6 +503,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         default_min_net=inp.default_min_net,
         taker_fee_bps=inp.taker_fee_bps,
         extra_cost_bps=inp.extra_cost_bps,
+        notional_usdt=notional_u,
     )
     if inp.live_loss_streak >= 2:
         min_net *= 1.0 + (0.18 * min(3, inp.live_loss_streak - 1))

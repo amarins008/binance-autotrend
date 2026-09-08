@@ -5,6 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 
+from dotenv import load_dotenv
+
+# Load .env BEFORE any env reads below (RISK dict). This module is imported
+# transitively by futures_orders/live_guardian/learning etc. before main.py's
+# own load_dotenv runs, so without this the MAX_NOTIONAL_USDT / MAX_LEVERAGE
+# values would default (e.g. notional=200) on every uvicorn restart.
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 
 from hermes_agents import new_agent_state as _hermes_new_agent_state
 

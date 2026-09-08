@@ -328,19 +328,18 @@ _FORCE_DEFAULTS_V19: dict = {
 }
 _FORCE_DEFAULTS_V20: dict = {
     # V20: TP/SL USDT-target 0.5-1.0 USDT (2026-09-01).
-    # User directive: TP ~0.5-1.0 USDT, SL proportional.
-    # With notional ~250 USDT (50*5x), 0.40% = 1.0 USDT.
-    # slToTpRatio=0.70 → SL ~0.70 USDT (covers 0.48 USDT fees).
+    # 2026-09-08 sizing redesign: leverage scales real exposure (qty = usdt×lev/price)
+    # so TP/SL land on ±2 USDT per 5-min cycle. slToTpRatio=1.0 → SL ≈ TP.
     "takeProfitPct": 0.40,          # base TP%; overridden by risk.py USDT-target
     "stopLossPct": 0.28,            # base SL%; overridden by risk.py USDT-target
-    "tpTargetMinUsdt": 0.45,        # TP floor in USDT
-    "tpTargetMaxUsdt": 1.00,        # TP ceiling in USDT
-    "slToTpRatio": 0.70,            # SL = TP × 0.70 (was 0.50)
+    "tpTargetMinUsdt": 2.0,         # TP floor in USDT
+    "tpTargetMaxUsdt": 2.0,         # TP ceiling in USDT
+    "slToTpRatio": 1.0,             # SL = TP × 1.0 (±2 USDT both ways)
     "tpSlTargetUsdtEnabled": True,  # ensure USDT-target system active
     # Lower floors to allow tighter stops:
     "supervisorStopLossFloor": 0.15,  # was 0.80 — too tight for 0.5-1.0 USDT
-    "supervisorTpTargetMinCeiling": 0.60,  # hard cap — prevent supervisor from raising TP target above 0.60
-    "supervisorTpTargetMaxCeiling": 1.20,  # hard cap — prevent supervisor from raising above 1.20
+    "supervisorTpTargetMinCeiling": 2.0,  # hard cap — prevent supervisor from raising TP target above 2.0
+    "supervisorTpTargetMaxCeiling": 2.0,  # hard cap — prevent supervisor from raising above 2.0
     # Fee floor: allow tighter TP without fee-floor rejection
     "feeMinNetProfitUSDT": 0.03,     # was 0.06-0.08
     # Guardian alignment with 0.5-1.0 USDT TP:
@@ -451,7 +450,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("trailingStopPct", 0.0)
     out.setdefault("takeProfitPct", 2.5)
     out.setdefault("stopLossPct", 1.0)
-    out.setdefault("minRiskRewardRatio", 1.5)
+    out.setdefault("minRiskRewardRatio", 1.0)
     out.setdefault("atrTpSlEnabled", True)
     out.setdefault("ema200StrictEnabled", False)
     out.setdefault("usdtAmount", 25.0)
@@ -543,13 +542,13 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("slCandleAdaptiveEnabled", True)
     out.setdefault("slCandleLookback", 5)
     out.setdefault("candlePatternLookback", 5)
-    out.setdefault("slToTpRatio", 0.70)
+    out.setdefault("slToTpRatio", 1.0)
     out.setdefault("tpSlTargetUsdtEnabled", True)
     out.setdefault("tpTargetMinUsdt", 0.45)
     out.setdefault("tpTargetMaxUsdt", 1.00)
-    out.setdefault("slToTpRatio", 0.70)
+    out.setdefault("slToTpRatio", 1.0)
     out.setdefault("feeMinNetProfitUSDT", 0.03)
-    out.setdefault("feeMinEdgeVsCostMultiple", 1.35)
+    out.setdefault("feeMinEdgeVsCostMultiple", 1.0)
     out.setdefault("feeMinOrderUsdt", 5.0)
     out.setdefault("tradeNotionalCapUsdt", 80.0)
     out.setdefault("autoScanTradeNotionalCapUsdt", 80.0)

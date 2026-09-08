@@ -77,6 +77,19 @@ def estimate_5m_move_pct(
     }
 
 
+def preferred_sizing_vol_pct(precision: dict | None = None) -> float:
+    """Volatility used for position-sizing decisions.
+
+    Prefers the 15-30 minute window estimate (movePct5m: RMS of the std of the
+    last 15m and 30m of 5-minute returns) and falls back to the 1-minute ATR
+    when the live loop hasn't injected the window estimate yet.
+    """
+    p = precision if isinstance(precision, dict) else {}
+    mv = max(0.0, float(p.get("movePct5m", 0.0) or 0.0))
+    atr = max(0.0, float(p.get("atrPct", 0.0) or 0.0))
+    return mv if mv > 0 else atr
+
+
 def series_from_klines(klines: list) -> list[float]:
     """Extract close prices from Binance 5m kline rows (index 4)."""
     closes: list[float] = []

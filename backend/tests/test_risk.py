@@ -27,13 +27,13 @@ def test_fee_edge_min_net_uses_configured_floor():
 
 
 def test_fee_edge_min_net_scales_with_cost():
-    val = fee_edge_min_net_usdt({"feeMinNetProfitUSDT": 0.05}, est_cost_usdt=0.10)
+    val = fee_edge_min_net_usdt({"feeMinNetProfitUSDT": 0.05, "feeMinEdgeVsCostMultiple": 3.0}, est_cost_usdt=0.10)
     assert val >= 0.30  # 0.10 * 3.0
 
 
 def test_fee_edge_min_net_taker_roundtrip():
     # notional 100 @ 4bps/side → roundtrip = 100 * 2*4/10000 = 0.08; *3 = 0.24
-    val = fee_edge_min_net_usdt({"feeMinNetProfitUSDT": 0.01}, 0.0, 100.0)
+    val = fee_edge_min_net_usdt({"feeMinNetProfitUSDT": 0.01, "feeMinEdgeVsCostMultiple": 3.0}, 0.0, 100.0)
     assert abs(val - 0.24) < 1e-6
 
 

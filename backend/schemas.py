@@ -234,20 +234,20 @@ class AutoTradeStartRequest(BaseModel):
     usdtTooSmallMultiplierMin: float = Field(default=5.0, ge=1.0, le=100.0)
     usdtTooSmallMultiplierMax: float = Field(default=10.0, ge=1.0, le=200.0)
     feeMinNetProfitUSDT: float = Field(default=0.15, ge=0.0, le=50.0)
-    feeMinEdgeVsCostMultiple: float = Field(default=3.0, ge=1.0, le=5.0)
+    feeMinEdgeVsCostMultiple: float = Field(default=1.0, ge=1.0, le=5.0)
     feeMinOrderUsdt: float = Field(default=5.0, ge=5.0, le=200.0)
     feeAdaptiveNetEnabled: bool = True
     feeAdaptiveVolLowPct: float = Field(default=0.08, ge=0.01, le=3.0)
     feeAdaptiveVolHighPct: float = Field(default=0.35, ge=0.02, le=5.0)
     feeAdaptiveMinFactor: float = Field(default=0.8, ge=0.6, le=1.0)
-    feeAdaptiveMaxFactor: float = Field(default=1.15, ge=1.0, le=1.6)
+    feeAdaptiveMaxFactor: float = Field(default=1.0, ge=1.0, le=1.6)
     tpSlTargetUsdtEnabled: bool = True
     tpTargetMinUsdt: float = Field(default=0.5, ge=0.05, le=20.0)
     tpTargetMaxUsdt: float = Field(default=2.0, ge=0.1, le=50.0)
     profitLockTriggerUsdt: float = Field(default=0.35, ge=0.01, le=50.0)
     profitLockKeepUsdt: float = Field(default=0.15, ge=0.0, le=50.0)
     profitLockMaxGivebackUsdt: float = Field(default=0.22, ge=0.01, le=50.0)
-    slToTpRatio: float = Field(default=0.55, ge=0.35, le=0.85)
+    slToTpRatio: float = Field(default=1.0, ge=0.35, le=1.0)
     minRiskRewardRatio: float = Field(default=1.35, ge=1.0, le=4.0)
     atrTpSlEnabled: bool = True
     ema200StrictEnabled: bool = True

@@ -677,7 +677,10 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
     if quantity is None and usdt_amount is None:
         raise HTTPException(status_code=400, detail="Please provide quantity or usdtAmount")
     if quantity is None and usdt_amount is not None:
-        quantity = usdt_amount / max(mark, 1e-9)
+        # notional = usdt_amount × leverage → qty = notional / mark.
+        # (2026-09-08 sizing redesign: leverage now scales real exposure so
+        # TP/SL land on ±2 USDT; margin used = notional/lev = usdt_amount.)
+        quantity = (usdt_amount * max(1, leverage)) / max(mark, 1e-9)
     if quantity is None:
         raise HTTPException(status_code=400, detail="Invalid quantity")
 

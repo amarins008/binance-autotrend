@@ -11,7 +11,7 @@ def _lazy_main():
     return _m
 
 
-from schemas import CoinRankRequest
+from schemas import CoinRankRequest, RiskConfig
 
 router = APIRouter()
 
@@ -135,7 +135,13 @@ def _route_getter(name: str):
 
 router.add_api_route('/risk-config', lambda: _route_getter('get_risk_config')(), methods=['GET'])
 router.add_api_route('/symbol-meta', lambda: _route_getter('symbol_meta')(), methods=['GET'])
-router.add_api_route('/risk-config', lambda: _route_getter('set_risk_config')(), methods=['POST'])
+
+
+def _set_risk_config(req: RiskConfig):
+    return _route_getter('set_risk_config')(req)
+
+
+router.add_api_route('/risk-config', _set_risk_config, methods=['POST'])
 router.add_api_route('/analyze', lambda: _route_getter('analyze')(), methods=['POST'])
 router.add_api_route('/analyze-vision', lambda: _route_getter('analyze_vision')(), methods=['POST'])
 router.add_api_route('/intel/analyze', lambda: _route_getter('intel_analyze')(), methods=['POST'])

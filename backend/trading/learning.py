@@ -986,7 +986,7 @@ def _trade_reward_components(trade: dict, cfg: dict) -> dict:
     pattern_delta = _clamp_float(pattern_alignment * 0.18 + (pattern_score / 500.0), -0.28, 0.28)
     tp_pct = float(cfg.get("takeProfitPct", 1.2) or 1.2)
     sl_pct = max(0.01, float(cfg.get("stopLossPct", 0.8) or 0.8))
-    min_rr = float(cfg.get("minRiskRewardRatio", 1.35) or 1.35)
+    min_rr = float(cfg.get("minRiskRewardRatio", 1.0) or 1.0)
     rr = tp_pct / sl_pct
     rr_delta = 0.12 if rr >= min_rr else -0.22
     edge_delta = 0.0

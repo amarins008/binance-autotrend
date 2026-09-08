@@ -8,7 +8,8 @@ from trading.presets import PRO_STANDALONE_PRESET
 
 class TradingEngineTests(unittest.TestCase):
     def test_pro_preset_has_rr(self):
-        self.assertGreaterEqual(float(PRO_STANDALONE_PRESET["minRiskRewardRatio"]), 1.35)
+        # 2026-09-08 sizing redesign: SL ≈ TP (±2 USDT both ways) → min R:R = 1.0
+        self.assertGreaterEqual(float(PRO_STANDALONE_PRESET["minRiskRewardRatio"]), 1.0)
 
     def test_apply_defaults_engine_version(self):
         cfg = apply_autotrade_defaults({})

@@ -1,13 +1,15 @@
 """Market regime classification for sizing and gate strictness."""
 import time
 
+from trading.vol_model import preferred_sizing_vol_pct
+
 
 def detect_market_regime(intel: dict | None, loss_streak: int = 0) -> dict:
     if not isinstance(intel, dict):
         return {"name": "UNKNOWN", "confidenceBoost": 0.0, "sizeMultiplier": 1.0, "strictness": "normal"}
     p = intel.get("precision") if isinstance(intel.get("precision"), dict) else {}
     m = intel.get("momentum") if isinstance(intel.get("momentum"), dict) else {}
-    atr = float(p.get("atrPct", 0.0) or 0.0)
+    atr = preferred_sizing_vol_pct(p)
     bbw = float(p.get("bbBandwidth", 0.0) or 0.0)
     l_score = float(p.get("longScore", 0.0) or 0.0)
     s_score = float(p.get("shortScore", 0.0) or 0.0)

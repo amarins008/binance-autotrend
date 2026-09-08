@@ -16,7 +16,7 @@ def fee_edge_min_net_usdt(
 ) -> float:
     cfg = cfg if isinstance(cfg, dict) else {}
     configured = float(cfg.get("feeMinNetProfitUSDT", AUTOTRADE_MIN_NET_PROFIT_USDT) or AUTOTRADE_MIN_NET_PROFIT_USDT)
-    multiple = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 3.0) or 3.0))
+    multiple = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.0) or 1.0))
     taker_roundtrip = max(0.0, float(notional_usdt or 0.0)) * ((2.0 * AUTOTRADE_TAKER_FEE_BPS_PER_SIDE) / 10000.0)
     return round(max(configured, float(est_cost_usdt or 0.0) * multiple, taker_roundtrip * multiple), 6)
 
@@ -42,14 +42,15 @@ def effective_min_net_profit_usdt(
     default_min_net: float = 0.05,
     taker_fee_bps: float = 4.0,
     extra_cost_bps: float = 2.0,
+    notional_usdt: float | None = None,
 ) -> float:
     # When feeMinNetProfitUSDT is set to 0 or below, skip fee gate entirely.
     _raw_fee_floor = cfg.get("feeMinNetProfitUSDT")
     if _raw_fee_floor is not None and float(_raw_fee_floor) <= 0.0:
         return 0.0
     base_floor = float(_raw_fee_floor if _raw_fee_floor is not None else default_min_net)
-    mul = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.2) or 1.2))
-    usdt = float(cfg.get("usdtAmount", 0.0) or 0.0)
+    mul = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.0) or 1.0))
+    usdt = float(notional_usdt or cfg.get("usdtAmount", 0.0) or 0.0) if notional_usdt is not None else float(cfg.get("usdtAmount", 0.0) or 0.0)
     _, est_cost, _ = estimate_trade_edge_usdt(
         usdt,
         float(cfg.get("takeProfitPct", 1.8) or 1.8),
@@ -341,15 +342,17 @@ def effective_tpsl_pct_for_trade(
     realized_vol_pct: float | None = None,
     pullback_allowance_pct: float | None = None,
     precision: dict | None = None,
+    effective_leverage: float | None = None,
 ) -> tuple[float, float, dict]:
     base_tp = float(cfg.get("takeProfitPct", 1.8) or 1.8)
     base_sl = float(cfg.get("stopLossPct", 0.8) or 0.8)
     if not bool(cfg.get("tpSlTargetUsdtEnabled", True)):
         return base_tp, base_sl, {"enabled": False}
     amt = max(1e-9, float(trade_usdt or 0.0))
+    _lev = max(1, float(effective_leverage if effective_leverage and effective_leverage > 0 else (cfg.get('leverage', 5) or 5)))
     tp_min_u = max(0.05, float(cfg.get("tpTargetMinUsdt", 0.5) or 0.5))
     tp_max_u = max(tp_min_u, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
-    rr = max(0.35, min(0.85, float(cfg.get("slToTpRatio", 0.55) or 0.55)))
+    rr = max(0.35, min(1.0, float(cfg.get("slToTpRatio", 1.0) or 1.0)))
     target_u = (tp_min_u + tp_max_u) * 0.5
     _mv = 0.0
     # Phase A: per-symbol realized-vol target (movePct5m %) → USDT TP target.
@@ -361,7 +364,7 @@ def effective_tpsl_pct_for_trade(
         _mv = max(0.0, float((precision or {}).get("movePct5m", 0.0) or 0.0))
         if _mv > 0:
             try:
-                _notional_u = max(1e-9, float(amt) * max(1, float(cfg.get("leverage", 5) or 5)))
+                _notional_u = max(1e-9, float(amt) * _lev)
                 _vol_target_u = _notional_u * (_mv / 100.0)
                 target_u = max(tp_min_u, min(tp_max_u, _vol_target_u))
             except Exception:
@@ -383,7 +386,7 @@ def effective_tpsl_pct_for_trade(
     # tp_u is USDT profit target; convert to % of entry price.
     # PnL = entry × pct/100 × notional, so pct = (tp_u / notional) × 100.
     # notional = amt × leverage (default 5x).
-    _leverage = max(1, float(cfg.get('leverage', 5) or 5))
+    _leverage = _lev
     _notional = amt * _leverage
     tp_pct = max(0.1, (tp_u / max(_notional, 1e-9)) * 100.0)
     sl_pct = max(0.1, (sl_u / max(_notional, 1e-9)) * 100.0)
@@ -398,8 +401,8 @@ def effective_tpsl_pct_for_trade(
             sl_pct = max(sl_pct, sl_from_candles)
         except Exception:
             sl_from_candles = None
-    tp_pct = min(6.0, max(0.2, tp_pct))
-    sl_pct = min(4.5, max(0.2, sl_pct))
+    tp_pct = min(6.0, max(0.13, tp_pct))
+    sl_pct = min(4.5, max(0.13, sl_pct))
     tp_pct, sl_pct, atr_meta = blend_tpsl_with_atr(tp_pct, sl_pct, precision, cfg)
     meta = {
         "enabled": True,

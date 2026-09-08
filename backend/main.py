@@ -53,6 +53,7 @@ from obsidian_memory import (
     write_self_review_memory,
 )
 from trading.regime import detect_market_regime
+from trading.vol_model import preferred_sizing_vol_pct
 from trading.config import ENTRY_MIN_CONFIDENCE_FLOOR, apply_autotrade_defaults
 from trading.live_guardian import (
     _manage_live_open_positions_once,
@@ -1312,10 +1313,10 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
     set_float("profitLockMaxGivebackUsdt", max(0.10, min(giveback, giveback * (0.82 - 0.08 * severity), 0.18)), 3)
     floor = float(cfg.get("profitLockBreakevenFloorUsdt", 0.08) or 0.08)
     set_float("profitLockBreakevenFloorUsdt", min(0.18, max(floor, 0.10 + 0.02 * severity)), 3)
-    tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55))
-    set_float("tpTargetMinUsdt", min(1.20, max(0.45, tp_min)), 3)
-    tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.2) or 2.2))
-    set_float("tpTargetMaxUsdt", min(3.20, max(tp_max, float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.0)), 3)
+    tp_min = max(0.20, float(cfg.get("tpTargetMinUsdt", 0.65) or 0.65))
+    set_float("tpTargetMinUsdt", min(float(cfg.get("supervisorTpTargetMinCeiling", 2.0) or 2.0), max(0.65, tp_min)), 3)
+    tp_max = max(tp_min + 0.10, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
+    set_float("tpTargetMaxUsdt", min(float(cfg.get("supervisorTpTargetMaxCeiling", 2.0) or 2.0), max(tp_max, float(cfg.get("tpTargetMinUsdt", tp_min)) * 2.0)), 3)
     breakeven_trigger = float(cfg.get("profitLockBreakevenTriggerUsdt", 0.16) or 0.16)
     set_float("profitLockBreakevenTriggerUsdt", min(float(cfg.get("profitLockTriggerUsdt", trigger) or trigger), max(0.14, breakeven_trigger * (0.95 - 0.05 * severity))), 3)
 
@@ -4973,7 +4974,7 @@ def _adaptive_symbol_leverage(symbol: str, intel: dict | None, cfg: dict) -> dic
     min_conf = float(cfg.get("minConfidence", 0.65) or 0.65)
     conf_score = _clamp_float((conf - min_conf) / 0.25, 0.0, 1.0)
 
-    atr_pct = max(0.0, float(p.get("atrPct", 0.0) or 0.0))
+    atr_pct = preferred_sizing_vol_pct(p)
     momentum_abs = abs(float(ex.get("momentumPct", 0.0) or 0.0))
     spread_bps = max(0.0, float(ex.get("spreadBps", 0.0) or 0.0))
     max_spread = max(1.0, float(cfg.get("maxSpreadBps", 16.0) or 16.0))
@@ -6533,6 +6534,15 @@ async def _autotrade_loop():
             # the capital-preservation limit regardless of tier.
             _hard_cap = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
             trade_cap = min(trade_cap, max(20.0, _hard_cap))
+            # 2026-09-08: margin is the sizing base after the redesign (TP/SL
+            # land on ±2 USDT of notional = margin × lev). The multiplier stack
+            # above can blow margin far past fee-viable notional (e.g. BNBUSDT
+            # 100 margin × lev → ~2200 notional → cost ~4.2 USDT > 2 USDT TP).
+            # Clamp the FINAL margin to marginSizingMaxUsdt so notional stays in
+            # the ±2 USDT-fee-viable band (≈500 at lev 25 = net 1.05 > min 0.95).
+            if bool(cfg.get("marginBasedSizing", False)):
+                _margin_cap = max(20.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
+                trade_cap = min(trade_cap, _margin_cap)
             if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
                 trade_cap = min(
                     trade_cap,
@@ -6579,7 +6589,10 @@ async def _autotrade_loop():
                 )
                 AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
                 continue
-            if trade_usdt < min_order_usdt:
+            # 2026-09-08: trade_usdt is MARGIN; the exchange MIN_NOTIONAL floors
+            # NOTIONAL = margin × leverage. Compare in notional units.
+            _fl_notional_ok = (float(trade_usdt) * max(1.0, float(eff_leverage or 1))) >= min_order_usdt if bool(cfg.get("marginBasedSizing", False)) else (float(trade_usdt) >= min_order_usdt)
+            if not _fl_notional_ok:
                 action = str(cfg.get("usdtTooSmallAction", "multiply") or "multiply").lower()
                 if action == "skip":
                     _agent_mark("risk_manager", "blocked", "order notional too small")
@@ -6591,7 +6604,27 @@ async def _autotrade_loop():
                 # never blow the small-capital budget) so the symbol trades
                 # continuously at its correct size instead of re-flooring each tick.
                 _cap = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
-                trade_usdt = round(min(max(trade_usdt, min_order_usdt), _cap), 2)
+                # 2026-09-08: after the sizing redesign trade_usdt is MARGIN, and
+                # the exchange MIN_NOTIONAL floors NOTIONAL = margin × leverage.
+                # Compare in notional units and never lift margin past the
+                # margin-sizing cap, otherwise the floor reintroduces the
+                # fee-unsustainable ~2000-USDT notional (TP capped at ±2 USDT).
+                if bool(cfg.get("marginBasedSizing", False)):
+                    _eff_lev_f = max(1.0, float(eff_leverage or cfg.get("leverage", 5) or 5))
+                    _margin_cap_f = max(1.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
+                    _need_margin = max(_margin_cap_f, min_order_usdt / _eff_lev_f)
+                    if _need_margin > _margin_cap_f:
+                        _autotrade_skip(
+                            "usdt_too_small",
+                            f"Skip: {cfg['symbol']} min_notional {min_order_usdt:.2f} needs "
+                            f"margin >= {_need_margin:.2f} > marginSizingMaxUsdt {_margin_cap_f:.2f} (lev {int(_eff_lev_f)}x)",
+                        )
+                        AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
+                        continue
+                    trade_usdt = round(max(trade_usdt, min_order_usdt / _eff_lev_f), 2)
+                    trade_usdt = round(min(trade_usdt, _margin_cap_f), 2)
+                else:
+                    trade_usdt = round(min(max(trade_usdt, min_order_usdt), _cap), 2)
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
                 AUTO_TRADE["config"] = copy.deepcopy(cfg)
                 _autotrade_log(f"Order floor ({cfg['symbol']}): adjusted USDT → {trade_usdt:.2f} (min_notional={_sym_min or 'n/a'} cap={_cap:.2f})")
@@ -6662,6 +6695,12 @@ async def _autotrade_loop():
             signal = plan.signal
             conf = plan.confidence
             trade_usdt = plan.trade_usdt
+            # 2026-09-08: the pipeline re-applies regime/session multipliers on
+            # the capped margin (pipeline.py regime_sizing/session_sizing), which
+            # silently defeats the margin cap applied above (trade_cap). Re-clamp
+            # after the plan override so plan side can never blow past the cap.
+            if trade_usdt > trade_cap:
+                trade_usdt = round(float(trade_cap), 2)
             eff_leverage = plan.eff_leverage
             _agent_mark("strategy_builder", "done", "entry approved", f"{cfg['symbol']} {signal} c={conf:.3f} pipeline={len(plan.pipeline)} gates")
 
@@ -7059,10 +7098,13 @@ async def autotrade_start(req: AutoTradeStartRequest):
             status_code=400,
             detail=f"USDT amount {cfg['usdtAmount']} exceeds server max notional {RISK['max_notional']}",
         )
+    # usdtAmount is MARGIN after the sizing redesign; edge/fee uses notional =
+    # margin × leverage (real exposure behind the ±2-USDT TP/SL targets).
+    start_notional = float(cfg["usdtAmount"]) * max(1.0, float(cfg.get("leverage", 5) or 5))
     gross_u, est_cost_u, net_u = _estimate_trade_edge_usdt(
-        cfg["usdtAmount"], cfg["takeProfitPct"], cfg["maxSlippageBps"]
+        start_notional, cfg["takeProfitPct"], cfg["maxSlippageBps"]
     )
-    min_net_u = _fee_edge_min_net_usdt(cfg, est_cost_u, cfg["usdtAmount"])
+    min_net_u = _fee_edge_min_net_usdt(cfg, est_cost_u, start_notional)
     if net_u <= min_net_u:
         raise HTTPException(
             status_code=400,

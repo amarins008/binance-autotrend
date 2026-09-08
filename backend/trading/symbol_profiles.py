@@ -20,6 +20,7 @@ from services.learning_profiles import _ensure_vault, _load_single_profile
 
 from trading.trade_log import _live_closed_trades_from_log
 from trading.per_symbol_storage import PerSymbolStorage
+from trading.vol_model import preferred_sizing_vol_pct
 
 def _rolling_symbol_perf(*args, **kwargs):
     from main import _rolling_symbol_perf as rolling
@@ -42,6 +43,10 @@ def _symbol_volatility_score(symbol: str, intel: dict | None = None) -> dict:
     execution = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
 
     atr_pct = max(0.0, float(precision.get("atrPct", 0.0) or 0.0))
+    # V15: position-sizing volatility must use the 15-30 min window
+    # (movePct5m = RMS of 15m+30m stds of 5m returns) when present, falling
+    # back to the 1-minute ATR only when no window estimate is available.
+    vol_pct = preferred_sizing_vol_pct(precision)
     momentum = abs(float(execution.get("momentumPct", 0.0) or 0.0))
     spread_bps = max(0.0, float(execution.get("spreadBps", 0.0) or 0.0))
     vwap_dist = abs(float(precision.get("vwapDistancePct", 0.0) or 0.0))
@@ -53,7 +58,7 @@ def _symbol_volatility_score(symbol: str, intel: dict | None = None) -> dict:
     # Volatility score 0.0 (rock solid) → 1.0 (chaotic). Each component is
     # weighted by how much it actually predicts tradable noise.
     score = 0.0
-    score += min(0.30, atr_pct / 1.5)            # ATR is the dominant driver
+    score += min(0.30, vol_pct / 1.5)          # 15-30m window vol is the dominant driver
     score += min(0.25, momentum / 1.0)            # absolute momentum
     score += min(0.15, spread_bps / 80.0)         # execution cost / slippage risk
     score += min(0.15, vwap_dist / 0.5)           # stretched-from-fair risk
