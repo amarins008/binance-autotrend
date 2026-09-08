@@ -48,6 +48,44 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Fix dual TP/SL system — align order placement with pipeline ±2 USDT targets (เสร็จ, commit 9579064)
+
+### ปัญหา
+- Two TP/SL systems ขัดกัน:
+  1. **Entry pipeline gate** (main.py → pipeline.py → `effective_tpsl_pct_for_trade`): คำนวณ TP=SL=±2 USDT ถูกต้อง (tpTargetMin/Max=2.0, slToTpRatio=1.0)
+  2. **Order placement** (main.py `_do_place` → `_effective_tp_sl` pct path): slPct 0.6-0.96% based on stopLossPct/slMinPct × group/vol mult → pin SL ที่ ~4 USDT สำหรับ ADA notional 414 (ไม่ใช่ 2)
+- Guardian lock seed ก็ใช้ legacy `_effective_tp_sl` → mismatch กับ exchange order
+- `params_at_entry` snapshot เก็บ legacy pct → autotuner tune ผิด level
+
+### Root cause
+- `_do_place` อ่าน `eff = _effective_tp_sl(...)` (legacy pct) แทนที่จะใช้ pipeline's `tpsl_meta` USDT targets
+- Guardian seed `st["tp"]/["sl"]` ก็ใช้ legacy pct → divergence
+- `futures_orders.py` snapshot เก็บ `_effective_tp_sl().slPct/tpPct` ไม่ใช่ค่าจริงที่วาง
+
+### Fix (4 files, +81/-20)
+- **`main.py:6818-6851`** — `_do_place`: อ่าน `plan.tpsl_meta` → `_tp_target_u`/`_sl_target_u` → `tp_pct = (tp_u / final_notional) × 100`, `sl_pct = (sl_u / final_notional) × 100`; fallback `plan.eff_tp_pct`/`plan.eff_sl_pct` เมื่อไม่มี targets
+- **`live_guardian.py:1259-1298`** — seed: ใช้ `_effective_tpsl_pct_for_trade` (notional known → re-derive pct) / fallback `_effective_tp_sl` (notional unknown → legacy pct); moved `params_at_entry` snapshot หลัง seed
+- **`futures_orders.py:760-771`** — override `_eff_at_open["tpPct"]/["slPct"]` ด้วยค่าจริงที่วาง (`tp_pct`/`sl_pct` params)
+- **`apply_loss_minimize_tune.py:24`** — slToTpRatio 0.42 → 1.0 (standalone script, mismatch กับ config)
+
+### Verification
+- py_compile + full suite: **417 passed, 2 skipped** (baseline 0 regression)
+- Live monitor: restart 8020 → ZECUSDT opened post-fix → localTp/localSl = ±2 USDT (1.42%/1.41% on notional 141 = 1.99 USDT each)
+- params_at_entry: all recent ZEC trades show `tpPct == slPct` (symmetric)
+- ZECUSDT today: **12W/0L +$9.76** (100% win rate post-fix)
+- Overall today: **50W/16L +$11.02** (from 26W/12L +$0.57 pre-fix)
+- BOT status: paused (-2015 Binance API key/IP permission, separate infra issue)
+
+### Impact analysis
+- `main.py:5605` (manual trade API) — ไม่แตะ (uses req.takeProfitPct/stopLossPct directly)
+- `main.py:9413` (monitor StrategyPlan) — ไม่แตะ (separate path)
+- `live_guardian.py:1249-1250` (effectiveTP/effectiveSL display) — ยัง legacy `_effective_tp_sl` (display only, not live SL)
+- `live_guardian.py:1496` (`_per_sym_eff` for holdTrail/holdMinConf) — safe, ไม่เกี่ยวกับ SL path
+
+### ยังไม่ได้ทำ
+- `-2015` Binance API key/IP permission error — pre-existing infra issue, ไม่เกี่ยวกับ fix
+- `stopLossPct=0.176` — autotuner runtime value (behavior ปกติ, ไม่ต้องแก้)
+
 ## Session: Margin-based sizing redesign — 15-30m vol, ±2 USDT TP/SL, fee-viable notional (เสร็จ, commit 5016bb5)
 
 ### เป้าหมาย
