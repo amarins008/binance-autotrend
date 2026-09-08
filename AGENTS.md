@@ -48,6 +48,39 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Margin-based sizing redesign — 15-30m vol, ±2 USDT TP/SL, fee-viable notional (เสร็จ, commit 5016bb5)
+
+### เป้าหมาย
+- เปลี่ยน volatility ที่ใช้กำหนดขนาดไม้ เป็นช่วงจริงของไม้ 15-30 นาที (`movePct5m` = RMS of std 15m/30m returns) แทน 1m ATR
+- Sizing เป็น margin-based หลัง redesign: **notional = margin × leverage** (qty = usdt×lev/price); TP/SL ลงที่ ±2 USDT ทั้งสองข้าง
+
+### สิ่งที่ทำ
+- **`trading/vol_model.py`** — `preferred_sizing_vol_pct()` ใหม่: คืน `movePct5m` (ถ้า >0) ไม่งั้น fallback `atrPct` — ใช้ร่วมกัน 3 จุด (capMult/regime/leverage) เป็น single source of truth
+- **`trading/symbol_profiles.py`** `_symbol_volatility_score` — ใช้ `vol_pct` เป็นตัวหลัก (แทน atrPct)
+- **`trading/regime.py`** `detect_market_regime` — ใช้ preferred_sizing_vol_pct
+- **`main.py:4976`** `_adaptive_symbol_leverage` — ใช้ preferred_sizing_vol_pct (import main.py:56)
+- **`exchange/futures_orders.py`** `place_futures_order` — qty = (usdt_amount × lev)/mark (margin เป็น sizing base)
+- **`main.py:6537`** — clamp margin สุดท้ายที่ `marginSizingMaxUsdt=20` (notional อยู่ใน band fee-viable ~500@lev25 = net 1.05 > min 0.95)
+- **`main.py` order floor** — เปรียบเทียบเป็น notional (margin×lev ≥ MIN_NOTIONAL) ไม่เทียบ margin ตรง; ไม่ยก margin เกิน marginSizingMaxUsdt
+- **`risk.py` `effective_tpsl_pct_for_trade`** — เพิ่ม param `effective_leverage` (TP% ใช้ adaptive lev จริง ไม่ใช่ cfg lev); `effective_min_net_profit_usdt` รับ `notional_usdt`
+- **`pipeline.py`** — `estimate_trade_edge_usdt` บน notional (= margin×lev) + ส่ง `effective_leverage`; min R:R 1.0
+
+### Root cause ไม้แรกหลุด cap (BNB 31.68 vs cap 20) — จุดสำคัญ
+- Cap ทำงานที่ main.py:6553 (476→20) แต่ **pipeline re-apply ตัวคูณซ้ำ**: ส่ง 20 เข้า `EntryInputs` → pipeline คูณ regime (×1.3) + session (×1.2) → 31.2 → main.py:6697 `trade_usdt = plan.trade_usdt` **overwrite** cap กลับเป็น 31.68
+- **Fix (main.py:6698):** re-clamp หลัง plan override — `if trade_usdt > trade_cap: trade_usdt = round(trade_cap, 2)`
+- Live: BNB LONG margin 28.6 (ไม่ใช่ 20) พิสูจน์ cap defect; after fix re-clamp enforced
+
+### Config/presets/schemas (slToTpRatio 1.0, tpTarget 2.0, minRR 1.0)
+- `slToTpRatio` 0.70→1.0, `tpTargetMin/MaxUsdt` 0.45/1.0→2.0/2.0, `minRiskRewardRatio` 1.35/1.5→1.0, `feeMinEdgeVsCostMultiple` 1.35→1.0, `supervisorTpTargetMin/MaxCeiling`→2.0
+- schemas defaults: feeMinEdgeVsCost 3.0→1.0, feeAdaptiveMaxFactor 1.15→1.0, slToTpRatio 0.55→1.0 (range 0.35-1.0)
+- `services/app_state.py` — `load_dotenv` ก่อน env reads (futures_orders/live_guardian import ก่อน main.py's own load_dotenv → MAX_NOTIONAL/USDT เดิม default 200 ทุก restart)
+- `routers/analysis_routes.py` — POST /risk-config ใช้ typed `RiskConfig` (was generic lambda)
+
+### Verification
+- Full suite: **416 passed, 2 skipped, 0 failed** (แก้ `test_pro_preset_has_rr` stale assertion 1.35→1.0 + `test_risk` notional-aware)
+- Live: bot restart UP, autotrade running, fee-edge skips ลดจาก ~3/6 นาที → 0-1/10 รอบ, guardian ปกติ
+- BNB ไม้แรก (ใช้ lev 14, notional cap ไม่มีผล) → เปิด แต่ cap defect แก้แล้ว; INJ LONG +0.50 USDT หลัง fix
+
 ## Session: Fix cross-file test pollution — suite 413 passed 0 failed (เสร็จ, commit 6692e6a)
 
 ### ปัญหา
