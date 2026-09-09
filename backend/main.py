@@ -6284,24 +6284,40 @@ async def _autotrade_loop():
             # losses so it also blocks. Disable via config biasGateEnabled=False.
             # Soften via config biasGateNeutralConfMin=0.85: NEUTRAL passes when
             # entry confidence >= threshold (opposing bias still always blocks).
+            # Strength gate: block weak trends (biasGateMinStrength) that carry
+            # losses similar to NEUTRAL.
             if bool(cfg.get("biasGateEnabled", True)) and signal in ("LONG", "SHORT"):
                 try:
                     from analysis.direction_bias import bias_gate as _bias_gate
                     _db = intel.get("directionBias") if isinstance(intel, dict) else None
                     _bias = (_db or {}).get("bias") if isinstance(_db, dict) else None
+                    _bias_strength = float((_db or {}).get("strength", 0.0) or 0.0) if isinstance(_db, dict) else 0.0
                     _allow, _reason = _bias_gate(
                         signal, _bias,
                         neutral_conf_min=float(cfg.get("biasGateNeutralConfMin", 0.0) or 0.0),
                         conf=conf,
+                        min_strength=float(cfg.get("biasGateMinStrength", 0.0) or 0.0),
+                        strength=_bias_strength,
                     )
                     if not _allow:
-                        _agent_mark("direction_bias_gate", "blocked", f"{cfg['symbol']} {signal}", f"bias={_bias} · {_reason}")
+                        _agent_mark("direction_bias_gate", "blocked", f"{cfg['symbol']} {signal}", f"bias={_bias} str={_bias_strength:.2f} · {_reason}")
                         _autotrade_skip(
                             "bias_gate",
                             f"Skip: {cfg['symbol']} {signal} blocked by direction-bias gate ({_reason})",
                         )
                         await asyncio.sleep(cfg.get("intervalSec", 20))
                         continue
+                    # ── Bias size scaling: scale trade_usdt by bias strength ──
+                    if bool(cfg.get("biasSizeScalingEnabled", False)) and _bias_strength > 0:
+                        from analysis.direction_bias import bias_size_mult as _bias_size_mult
+                        _bsm = _bias_size_mult(
+                            _bias_strength,
+                            min_mult=float(cfg.get("biasSizeMinMult", 0.5) or 0.5),
+                        )
+                        if _bsm < 0.999:
+                            _old_usdt = trade_usdt
+                            trade_usdt = round(float(trade_usdt) * _bsm, 2)
+                            _autotrade_log(f"Bias size scaling: strength={_bias_strength:.2f} mult={_bsm:.3f} size {_old_usdt:.2f}->{trade_usdt:.2f}")
                 except Exception:
                     pass  # gate is best-effort; never block the loop on detector errors
 

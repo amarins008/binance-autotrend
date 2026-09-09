@@ -267,7 +267,15 @@ def _main():
     return m
 
 
-def bias_gate(side: str | None, bias: str | None, *, neutral_conf_min: float = 0.0, conf: float = 0.0) -> tuple[bool, str]:
+def bias_gate(
+    side: str | None,
+    bias: str | None,
+    *,
+    neutral_conf_min: float = 0.0,
+    conf: float = 0.0,
+    min_strength: float = 0.0,
+    strength: float = 0.0,
+) -> tuple[bool, str]:
     """Directional entry gate: allow an entry only when the detected direction
     bias agrees with the side about to be opened.
 
@@ -281,9 +289,13 @@ def bias_gate(side: str | None, bias: str | None, *, neutral_conf_min: float = 0
     ``biasGateNeutralConfMin``). Bias opposing the side (LONG vs SHORT) always
     blocks regardless of confidence.
 
+    ``min_strength`` blocks entries when bias strength < threshold (config
+    ``biasGateMinStrength``). Weak trends carry losses similar to NEUTRAL.
+
     Returns ``(allowed, reason)``:
       - side not LONG/SHORT        -> (True,  "no-side")
       - bias missing/invalid       -> (True,  "bias-unavailable")  (don't block on a detector outage)
+      - strength < min_strength    -> (False, "bias=.. strength=.. < min")
       - bias == side               -> (True,  "bias matches")
       - bias NEUTRAL & conf high   -> (True,  "bias=NEUTRAL conf=..")  (when neutral_conf_min > 0)
       - bias NEUTRAL otherwise     -> (False, "bias=NEUTRAL != side")
@@ -299,9 +311,23 @@ def bias_gate(side: str | None, bias: str | None, *, neutral_conf_min: float = 0
         if bias == "NEUTRAL" and neutral_conf_min > 0 and float(conf) >= float(neutral_conf_min):
             return True, f"bias=NEUTRAL conf={float(conf):.2f}"
         return False, f"bias={bias} != {side}"
+    # Strength threshold: block weak trends (similar loss profile to NEUTRAL)
+    if float(min_strength) > 0 and float(strength) < float(min_strength):
+        return False, f"bias={bias} strength={float(strength):.2f} < {float(min_strength):.2f}"
     if bias == side:
         return True, f"bias={bias} matches {side}"
     return False, f"bias={bias} != {side}"
+
+
+def bias_size_mult(strength: float, min_mult: float = 0.5) -> float:
+    """Scale position size by bias strength (0.0-1.0).
+
+    Strong bias (1.0) → full size (1.0). Weak bias (0.0) → min_mult (0.5).
+    Linear interpolation in between.
+    """
+    s = max(0.0, min(1.0, float(strength)))
+    mn = max(0.1, min(1.0, float(min_mult)))
+    return round(mn + (1.0 - mn) * s, 4)
 
 
 async def detect_direction_bias(symbol: str, *, interval_15m: str = "15m", interval_30m: str = "30m") -> dict:
