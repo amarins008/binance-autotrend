@@ -319,9 +319,9 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 - `_load_single_profile('NONEXISTENT')` return {} ถูกต้อง
 - `_save_single_profile()` + `_load_single_profile()` roundtrip สำเร็จ
 
-### สิ่งที่ยังไม่ได้ทำ (optional/future)
-1. ทดสอบกับระบบเทรดจริง (live trading)
-2. อัพเดท test files ให้เข้ากับ per-symbol storage
+### สิ่งที่ยังไม่ได้ทำ (optional/future) — เสร็จแล้ว
+1. ~~ทดสอบกับระบบเทรดจริง (live trading)~~ — **เสร็จ**: ZEC 25W/1L, ETH 16W/0L, 82W/23L +$18.17/24h, symmetric tpPct==slPct
+2. ~~อัพเดท test files ให้เข้ากับ per-symbol storage~~ — **เสร็จ**: test_session_validation.py ใช้ PerSymbolStorage, test_obsidian_memory.py skip clean_vault 2 tests ด้วย message ชัดเจน, full suite 417 passed
 
 ### สถาปัตยกรรมใหม่
 ```
