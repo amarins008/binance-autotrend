@@ -13,7 +13,6 @@
 - [ ] Monitor 1-2 days: verify net PnL improvement after config changes
 
 ### 📋 Backlog
-- [ ] Commit SL ratio change
 - [ ] Analyze trade frequency vs quality tradeoff
 - [ ] Consider tradeNotionalCapUsdt adjustment
 
