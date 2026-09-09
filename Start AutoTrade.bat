@@ -19,6 +19,12 @@ set "SCAN_ANALYZE_CONCURRENCY=2"
 set "DATA_GET_TIMEOUT_SEC=4.5"
 set "DATA_GET_CONNECT_TIMEOUT_SEC=2.0"
 
+REM Use custom signed-request path (avoids SDK drift / recvWindow issues)
+set "CONNECTOR_MODE=legacy"
+
+REM Explicit notional cap (matches config default)
+set "MAX_NOTIONAL_USDT=200"
+
 REM Enable TradingView MCP integration inside the backend
 set "TRADINGVIEW_ENABLED=true"
 
