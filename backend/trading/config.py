@@ -229,8 +229,9 @@ _FORCE_DEFAULTS_V13: dict = {
     "autoScanTradeNotionalCapUsdt": 40.0,
     # 2026-08-20: low-cap / meme symbols that repeatedly SL out (7d telemetry
     # PUMPUSDT -12 trades, LINKUSDT, ALICEUSDT, BOMEUSDT, WLDUSDT, REDUSDT).
-    # Denied in BOTH scan and single-symbol mode via _risk_cooldown_resume_ok.
-    "denySymbols": ["PUMPUSDT", "LINKUSDT", "ALICEUSDT", "BOMEUSDT", "WLDUSDT", "REDUSDT"],
+    # 2026-09-09: cleared static deny list — replaced by dynamic volatility
+    # ceiling gate in pipeline.py (blocks when movePct5m exceeds threshold).
+    "denySymbols": [],
 }
 
 
@@ -651,6 +652,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("scanAnalyzeTop", 12)
     out.setdefault("scanGuardedFallbackAnalyzeTop", 18)
     out.setdefault("scanDenySymbols", ["XAUUSDT", "XAGUSDT", "SPCXUSDT", "CLUSDT", "MRVLUSDT", "INTCUSDT"])
+    # Volatility ceiling: block entry when 15-30m realized vol (movePct5m) exceeds
+    # this threshold. 0 = disabled. Replaces static deny list with dynamic filter.
+    # Typical crypto vol: 0.05-0.50%. Ceiling at 0.80% blocks extreme spikes.
+    out.setdefault("volatilityCeilingPct", 0.80)
     out.setdefault("supervisorTargetOpenPositionsMin", 3)
     out.setdefault("supervisorTargetOpenPositionsMax", 6)
     out.setdefault("scanPerSymbolTimeoutSec", 7.5)

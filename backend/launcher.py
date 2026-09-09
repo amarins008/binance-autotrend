@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -17,9 +18,84 @@ from pathlib import Path
 BACKEND_PORT = os.getenv("BACKEND_PORT", "8020")
 LAUNCHER_PORT = int(os.getenv("LAUNCHER_PORT", "8021"))
 BACKEND_URL = f"http://127.0.0.1:{BACKEND_PORT}"
+BACKEND_PID_FILE = Path(__file__).resolve().parent / ".standalone" / "backend.pid"
+
+
+def _port_in_use(port: int) -> bool:
+    """Return True if *port* is already bound."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _read_backend_pid() -> int | None:
+    if not BACKEND_PID_FILE.exists():
+        return None
+    try:
+        return int(BACKEND_PID_FILE.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, check=False,
+            )
+            out = (proc.stdout or "").strip()
+            return bool(out and "No tasks are running" not in out and f'"{pid}"' in out)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_pid(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+            return True
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 9)
+        return True
+    except OSError:
+        return False
+
+
+def _wait_port_free(port: int, timeout: float = 5.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.2)
+    return not _port_in_use(port)
 
 
 def _spawn_backend() -> tuple[bool, str]:
+    # ── Single-instance guard: kill stale backend before spawning ────────────
+    existing_pid = _read_backend_pid()
+    if existing_pid and _pid_is_running(existing_pid):
+        _kill_pid(existing_pid)
+        _wait_port_free(int(BACKEND_PORT), timeout=5.0)
+    elif _port_in_use(int(BACKEND_PORT)):
+        # Port in use but no valid PID file — wait for stale listener to clear
+        _wait_port_free(int(BACKEND_PORT), timeout=5.0)
+
     backend_dir = Path(__file__).parent
     candidates = [
         backend_dir / ".venv" / "Scripts" / "python.exe",  # Windows venv on WSL/Windows

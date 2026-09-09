@@ -61,7 +61,7 @@ def detect_market_regime(intel: dict | None, loss_streak: int = 0) -> dict:
         return {
             "name": "VOLATILE",
             "confidenceBoost": 0.06 + session_boost + loss_adj,
-            "sizeMultiplier": 0.72 * session_multiplier * (1.0 - min(loss_streak * 0.05, 0.2)),
+            "sizeMultiplier": 0.72 * (1.0 - min(loss_streak * 0.05, 0.2)),
             "strictness": "high"
         }
     if edge >= edge_threshold and (trend_bias or partial_bias) and atr >= 0.05 and vol_ratio >= 0.95 and mom_abs >= mom_threshold:
@@ -69,7 +69,7 @@ def detect_market_regime(intel: dict | None, loss_streak: int = 0) -> dict:
         return {
             "name": "TREND",
             "confidenceBoost": -0.02 + session_boost + loss_adj,
-            "sizeMultiplier": 1.1 * session_multiplier * (1.0 - min(loss_streak * 0.04, 0.15)),
+            "sizeMultiplier": 1.1 * (1.0 - min(loss_streak * 0.04, 0.15)),
             "strictness": "low"
         }
     if edge <= 1.5 or mom_abs < mom_threshold or atr < 0.04:
@@ -77,13 +77,13 @@ def detect_market_regime(intel: dict | None, loss_streak: int = 0) -> dict:
         return {
             "name": "RANGE",
             "confidenceBoost": 0.04 + session_boost + loss_adj,
-            "sizeMultiplier": 0.86 * session_multiplier * (1.0 - min(loss_streak * 0.06, 0.25)),
+            "sizeMultiplier": 0.86 * (1.0 - min(loss_streak * 0.06, 0.25)),
             "strictness": "medium"
         }
     loss_adj = min(loss_streak * 0.015, 0.05)
     return {
         "name": "NORMAL",
         "confidenceBoost": 0.0 + session_boost + loss_adj,
-        "sizeMultiplier": 1.0 * session_multiplier * (1.0 - min(loss_streak * 0.03, 0.12)),
+        "sizeMultiplier": 1.0 * (1.0 - min(loss_streak * 0.03, 0.12)),
         "strictness": "normal"
     }

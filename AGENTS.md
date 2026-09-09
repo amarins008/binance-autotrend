@@ -48,6 +48,47 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Fix margin erosion — funding rate + session/regime double-count (เสร็จ, 2026-09-09)
+
+### ปัญหา
+- Margin ยิ่งเทรดยิ่งลด ทั้งๆ ที่เทรดป็น + (วันนี้ +$13.54 54 trades, 45W/9L)
+- Root cause analysis พบ 3 ปัญหาหลัก:
+  1. **Funding rate ไม่ได้หักจาก fee model** — บอทคำนวณ PnL จาก `(exit - entry) × qty` ล้วนๆ ไม่หัก funding rate (0.01-0.05%/8hr) ทำให้กำไรที่เห็นสูงกว่าความเป็นจริง ~$4-14/วัน
+  2. **Session multiplier ถูก apply ซ้ำ 2 ครั้ง** — `regime.py` คูณ session_multiplier เข้า sizeMultiplier แล้ว `pipeline.py` คูณ sessionBasedAdjustments อีกรอบ → margin ลดซ้ำ ~15-27%
+  3. **Regime sizeMultiplier ถูก apply ซ้ำ 2 ครั้ง** — `main.py:6512` คูณ regime sizeMult แล้ว `pipeline.py:395` คูณ regime sizeMultiplier อีกรอบ → margin ลดซ้ำ ~28% (VOLATILE 0.72×0.72=0.52)
+
+### Root cause
+- **Funding:** `intel_analyze.py` fetches `lastFundingRate` แต่ display only — ไม่มี code path ไหนอ่านค่าไปคำนวณ cost จริง
+- **Session double-count:** `regime.py:64` `sizeMultiplier = 0.72 * session_multiplier * ...` แล้ว `pipeline.py:398-424` apply `sessionBasedAdjustments` อีกครั้ง
+- **Regime double-count:** `main.py:6512` `trade_usdt *= _regime["sizeMult"]` แล้ว `pipeline.py:395` `trade_usdt *= regime.get("sizeMultiplier")` อีกครั้ง
+
+### Fix (3 files)
+- **`trading/risk.py:24-36`** — `estimate_trade_edge_usdt()` เพิ่ม param `funding_rate: float = 0.0`; แปลง funding rate (per 8hr) เป็น bps แล้วบวกเข้า `cost_bps`; `fee_edge_min_net_usdt()` เพิ่ม param `funding_rate` + เพิ่ม funding_cost เข้า taker_roundtrip
+- **`trading/pipeline.py:492-512`** — ดึง `lastFundingRate` จาก `inp.ex` → ส่ง `funding_rate=_funding_rate` เข้า `estimate_trade_edge_usdt()` และ `effective_min_net_profit_usdt()`
+- **`trading/regime.py:59-89`** — ลบ `session_multiplier` ออกจาก `sizeMultiplier` ในทุก regime branch (VOLATILE/TREND/RANGE/NORMAL) — session ถูก apply แค่ครั้งเดียวใน pipeline.py
+- **`trading/pipeline.py:382-396`** — ลบ regime sizeMultiplier และ session sessionBasedAdjustments ออกจาก pipeline (main.py apply ไปแล้ว); เพิ่ม `_applied_regime_sizing`/`_applied_session_sizing` flags ใน EntryInputs
+- **`trading/pipeline.py:75-98`** — เพิ่ม assertion guard: ถ้า flags=False จะ log warning ใน pipeline audit trail
+- **`main.py:6709-6710`** — ตั้ง `_applied_regime_sizing=True, _applied_session_sizing=True` เมื่อ construct EntryInputs
+
+### Safeguard: Prevent future multiplier stacking
+- `EntryInputs` มี `_applied_regime_sizing`/`_applied_session_sizing` flags
+- `main.py` ตั้ง flags=True เมื่อ apply แล้ว
+- `pipeline.py` ตรวจ flags แล้ว log warning ถ้า False (audit trail)
+- Pipeline ไม่มี regime/session sizing code อีกต่อไป — ป้องกัน double-count ถาวร
+
+### Verification
+- py_compile: 2 files OK
+- `tests/test_risk.py` + `test_pipeline.py` + `test_regime.py`: **24 passed**
+- `tests/` (full suite): **51 passed**
+- integration tests: **81 passed**
+- Functional probe: pipeline ไม่ re-apply regime/session, guard warnings ทำงานถูกต้อง
+
+### ผลกระทบ
+- **Funding gate:** trade ที่มี funding rate สูง (เช่น long ตอน longs จ่าย 0.05%) จะถูก block → จำนวนเทรดลดลง แต่ quality เพิ่ม
+- **Session fix:** margin เพิ่ม ~15-27% ใน Asian/Evening sessions → trade ที่เคยถูก block เพราะ margin ต่ำเกินไปก็เปิดได้
+- **Regime fix:** margin เพิ่ม ~28% สำหรับ VOLATILE regime (0.72 → ไม่ double-count)
+- **ไม่กระทบ config** — ทั้งหมดเป็น code change เท่านั้น
+
 ## Session: Fix dual TP/SL system — align order placement with pipeline ±2 USDT targets (เสร็จ, commit 9579064)
 
 ### ปัญหา

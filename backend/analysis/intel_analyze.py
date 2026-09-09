@@ -528,6 +528,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
     except Exception:
         _live_cfg = req_cfg
     _tv_res = None
+    _tv_blocked_by_intel = False
     if final_signal in ("LONG", "SHORT") and bool(_live_cfg.get("tradingviewEnabled", False)):
         try:
             from trading.tradingview_mcp import get_tv_mcp
@@ -553,7 +554,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
                         _tv_res = None  # stale + no refresh → treat as unavailable
                 _tv_boost = _tv_client.confirm_signal(_tv_res, final_signal) if _tv_res else 0.0
                 _tv_strength = float((_tv_res.metadata or {}).get("strength", 0.0) or 0.0)
-                _tv_blocked_by_intel = False
+                _tv_blocked_by_intel = False  # reset per-iteration; may be set True below
                 # Redundant directional-conflict guard (2026-08-15): if TV and
                 # the internal signal are OPPOSITE sides (LONG vs SHORT) and TV
                 # strength clears tvConflictBlockStrength, block regardless of

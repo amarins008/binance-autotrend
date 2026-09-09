@@ -148,7 +148,107 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 _BINANCE_HTTP: httpx.AsyncClient | None = None
 _APP_STARTED_AT = time.time()
 _BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8020"))
+_BACKEND_PID_FILE = Path(__file__).resolve().parent / ".standalone" / "backend.pid"
 _BINANCE_DATA_HTTP: httpx.AsyncClient | None = None  # dedicated client for public mainnet data
+
+
+# ── PID file guard (prevent duplicate instances) ───────────────────────────
+_STATE_DIR = Path(__file__).resolve().parent / ".standalone"
+
+
+def _pid_is_running(pid: int) -> bool:
+    """Check if a process with *pid* is alive (cross-platform)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, check=False,
+            )
+            out = (proc.stdout or "").strip()
+            return bool(out and "No tasks are running" not in out and f'"{pid}"' in out)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _read_backend_pid() -> int | None:
+    if not _BACKEND_PID_FILE.exists():
+        return None
+    try:
+        return int(_BACKEND_PID_FILE.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _write_backend_pid(pid: int) -> None:
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _BACKEND_PID_FILE.write_text(str(pid), encoding="utf-8")
+
+
+def _clear_backend_pid() -> None:
+    _BACKEND_PID_FILE.unlink(missing_ok=True)
+
+
+def _port_in_use(port: int) -> bool:
+    """Return True if *port* is already bound (TCP listener present)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _kill_pid(pid: int) -> bool:
+    """Force-kill a process by PID. Returns True if kill signal was sent."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+            return True
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 9)  # SIGKILL
+        return True
+    except OSError:
+        return False
+
+
+def _wait_port_free(port: int, timeout: float = 5.0) -> bool:
+    """Wait until *port* is no longer bound. Returns True if freed within timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.2)
+    return not _port_in_use(port)
+
+
+def _ensure_single_instance() -> None:
+    """
+    Startup guard: ensure no other backend instance is already running.
+    - If PID file exists and process is alive → kill it, wait for port free
+    - If port is in use but no valid PID → wait for port free (stale listener)
+    - Write our own PID file
+    """
+    existing_pid = _read_backend_pid()
+    if existing_pid and _pid_is_running(existing_pid):
+        _log.warning("Another backend instance detected (PID %d) — killing it", existing_pid)
+        _kill_pid(existing_pid)
+        _wait_port_free(_BACKEND_PORT, timeout=5.0)
+    elif _port_in_use(_BACKEND_PORT):
+        _log.warning("Port %d in use but no valid PID file — waiting for port free", _BACKEND_PORT)
+        _wait_port_free(_BACKEND_PORT, timeout=5.0)
+    _write_backend_pid(os.getpid())
 
 
 def _resolve_umfutures_class():
@@ -2683,6 +2783,8 @@ async def _data_get(path: str) -> httpx.Response:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _BINANCE_HTTP, _BINANCE_DATA_HTTP
+    # ── Single-instance guard (kill stale/duplicate before binding port) ─────
+    _ensure_single_instance()
     timeout = httpx.Timeout(30.0, connect=10.0)
     limits = httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0)
     _BINANCE_HTTP = httpx.AsyncClient(timeout=timeout, limits=limits)
@@ -2848,6 +2950,7 @@ async def _lifespan(app: FastAPI):
         yield
     finally:
         _persist_autotrade_snapshot(force=True)
+        _clear_backend_pid()
         _configure_binance_clients(None, None)
         await _BINANCE_HTTP.aclose()
         await _BINANCE_DATA_HTTP.aclose()
@@ -3593,22 +3696,23 @@ async def debug_direction_bias(symbol: str = "BTCUSDT"):
         }
 
 
-async def _exit_after_restart(delay: float = 0.9):
-    await asyncio.sleep(delay)
+async def _exit_after_restart():
+    """Wait briefly for new process to bind port, then kill current process."""
+    await asyncio.sleep(0.5)
+    _clear_backend_pid()
     os._exit(0)
 
 
 async def system_restart():
-    """Spawn a detached uvicorn on the same port, then exit (Windows-friendly)."""
+    """Spawn a fresh backend, then kill the current instance (safe order)."""
     backend_dir = Path(__file__).parent
     py = backend_dir / ".venv" / "Scripts" / "python.exe"
     if not py.exists():
         py = Path(sys.executable)
     port = str(_BACKEND_PORT)
-    # Honor BACKEND_HOST so external devices (e.g. phone via Tailscale) can
-    # reach the dashboard. Default stays 127.0.0.1 for backward compatibility.
     host = os.getenv("BACKEND_HOST", "127.0.0.1")
     cmd = [str(py), "-m", "uvicorn", "main:app", "--host", host, "--port", port]
+    # 1) Spawn fresh instance FIRST (new uvicorn retries port for ~2s internally)
     try:
         subprocess.Popen(
             cmd,
@@ -3618,6 +3722,9 @@ async def system_restart():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not spawn backend: {_format_loop_error(e)}")
+    # 2) Kill current process after short delay (lets new process bind port)
+    my_pid = os.getpid()
+    _log.info("system_restart: spawning done, will kill PID %d in 0.5s", my_pid)
     asyncio.create_task(_exit_after_restart())
     return {"ok": True, "message": f"Restarting backend on port {port}…"}
 
@@ -6707,6 +6814,8 @@ async def _autotrade_loop():
                 wait_override_imbalance=wait_imb,
                 scan_chase_speed=str(eff_prof.get("scan_chase_speed", "normal")),
                 scan_long_bias=float(eff_prof.get("scan_long_bias", 0.50) or 0.50),
+                _applied_regime_sizing=True,
+                _applied_session_sizing=True,
             )
             plan = evaluate_entry_plan(entry_inp)
 

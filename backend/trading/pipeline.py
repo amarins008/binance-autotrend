@@ -45,6 +45,10 @@ class EntryInputs:
     wait_override_imbalance: float = 0.0
     scan_chase_speed: str = "normal"
     scan_long_bias: float = 0.5
+    # Tracks which sizing multipliers were already applied upstream (main.py)
+    # to prevent double-counting. Pipeline must NOT re-apply these.
+    _applied_regime_sizing: bool = False
+    _applied_session_sizing: bool = False
 
 
 @dataclass
@@ -72,12 +76,28 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     """
     Run synchronous entry gates after async context (intel, htf, candles) is ready.
     Returns audit trail in plan.pipeline for dashboard / logs.
+
+    SAFEGUARD: Regime and session sizing multipliers are applied upstream in
+    main.py BEFORE this function is called. Pipeline must NOT re-apply them.
+    The _applied_regime_sizing / _applied_session_sizing flags on EntryInputs
+    track what was applied. If you need to add a new sizing multiplier here,
+    first check that it isn't already applied in main.py's sizing chain.
     """
     pipeline: list[dict] = []
     cfg = inp.cfg
     signal = str(inp.signal).upper()
     conf = float(inp.confidence)
     regime = inp.regime or {}
+
+    # SAFEGUARD: assert that upstream multipliers were applied.
+    # If main.py didn't apply them, pipeline should NOT silently re-apply —
+    # that would be a silent sizing change. Fail loudly instead.
+    if not inp._applied_regime_sizing:
+        _step(pipeline, "sizing_guard", False,
+              "WARNING: regime sizing not applied upstream — pipeline will NOT apply it")
+    if not inp._applied_session_sizing:
+        _step(pipeline, "sizing_guard", False,
+              "WARNING: session sizing not applied upstream — pipeline will NOT apply it")
 
     if not _step(pipeline, "signal", signal in ("LONG", "SHORT"), signal):
         return EntryPlan(False, "signal_wait", "Skip: signal WAIT", signal, conf, pipeline=pipeline)
@@ -96,6 +116,24 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             conf,
             pipeline=pipeline,
         )
+
+    # Volatility ceiling: block entry when 15-30m realized vol exceeds threshold.
+    # Replaces static deny list — dynamic, adapts to current market conditions.
+    # movePct5m = RMS(std15m, std30m) of 5-minute returns.
+    vol_ceiling = float(cfg.get("volatilityCeilingPct", 0.0) or 0.0)
+    if vol_ceiling > 0.0:
+        _p = inp.intel.get("precision") if isinstance(inp.intel, dict) else None
+        _mv = float((_p or {}).get("movePct5m", 0.0) or 0.0) if isinstance(_p, dict) else 0.0
+        if _mv > vol_ceiling:
+            if not _step(pipeline, "vol_ceiling", False, f"movePct5m={_mv:.4f}% > ceiling {vol_ceiling:.4f}%"):
+                return EntryPlan(
+                    False,
+                    "vol_ceiling",
+                    f"Skip: volatility {_mv:.4f}% exceeds ceiling {vol_ceiling:.4f}%",
+                    signal,
+                    conf,
+                    pipeline=pipeline,
+                )
 
     if not _step(
         pipeline,
@@ -389,39 +427,12 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         trade_usdt *= (1.0 - reduction_pct)
         _step(pipeline, "adaptive_sizing", True, f"Loss streak {inp.live_loss_streak}: size reduced by {reduction_pct*100:.1f}%")
 
-    # Apply regime-based size multiplier
-    regime_multiplier = regime.get("sizeMultiplier", 1.0)
-    if regime_multiplier != 1.0:
-        trade_usdt *= regime_multiplier
-        _step(pipeline, "regime_sizing", True, f"Regime {regime.get('name')}: size multiplier {regime_multiplier:.2f}")
-
-    # Apply session-based adjustments if enabled
-    if bool(cfg.get("sessionBasedAdjustments", True)):
-        import time
-        now_local = time.localtime(time.time())
-        hour = now_local.tm_hour
-        session_mult = 1.0
-        session_name = "normal"
-        
-        if 0 <= hour < 8:
-            session_mult = float(cfg.get("sessionAsianMultiplier", 0.85))
-            session_name = "Asian"
-        elif 8 <= hour < 12:
-            session_mult = float(cfg.get("sessionLondonMultiplier", 1.15))
-            session_name = "London"
-        elif 12 <= hour < 16:
-            session_mult = float(cfg.get("sessionUSOverlapMultiplier", 1.2))
-            session_name = "US overlap"
-        elif 16 <= hour < 20:
-            session_mult = float(cfg.get("sessionUSAfternoonMultiplier", 1.05))
-            session_name = "US afternoon"
-        elif 20 <= hour < 24:
-            session_mult = float(cfg.get("sessionAsianEveningMultiplier", 0.9))
-            session_name = "Asian evening"
-        
-        if session_mult != 1.0:
-            trade_usdt *= session_mult
-            _step(pipeline, "session_sizing", True, f"Session {session_name}: multiplier {session_mult:.2f}")
+    # NOTE: Regime and session sizing multipliers are applied upstream in
+    # main.py BEFORE EntryInputs is constructed. Pipeline must NOT re-apply
+    # them here — doing so caused double-counting that reduced margin by
+    # 30-50% (e.g. regime 0.72 applied twice = 0.52). The audit trail in
+    # main.py logs all sizing decisions. Pipeline only applies adaptive
+    # loss-streak reduction (above) which is unique to the pipeline stage.
 
     # Order flow confirmation for micro-structure analysis
     imbalance = float(inp.intel.get("imbalance", 0.0) or 0.0) if isinstance(inp.intel, dict) else None
@@ -490,12 +501,14 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     # cost must be scaled by effective leverage (notional) to match TP/SL which
     # land on ±2 USDT of the notional.
     notional_u = max(1e-9, float(trade_usdt) * inp.eff_leverage)
+    _funding_rate = float(inp.ex.get("lastFundingRate", 0.0) or 0.0) if isinstance(inp.ex, dict) else 0.0
     gross_u, est_cost_u, net_u = estimate_trade_edge_usdt(
         notional_u,
         eff_tp,
         float(cfg.get("maxSlippageBps", 18)),
         taker_fee_bps_per_side=inp.taker_fee_bps,
         extra_cost_bps=inp.extra_cost_bps,
+        funding_rate=_funding_rate,
     )
     min_net = effective_min_net_profit_usdt(
         cfg,
@@ -504,6 +517,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         taker_fee_bps=inp.taker_fee_bps,
         extra_cost_bps=inp.extra_cost_bps,
         notional_usdt=notional_u,
+        funding_rate=_funding_rate,
     )
     if inp.live_loss_streak >= 2:
         min_net *= 1.0 + (0.18 * min(3, inp.live_loss_streak - 1))

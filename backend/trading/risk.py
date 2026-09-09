@@ -13,12 +13,14 @@ def fee_edge_min_net_usdt(
     cfg: dict | None,
     est_cost_usdt: float = 0.0,
     notional_usdt: float = 0.0,
+    funding_rate: float = 0.0,
 ) -> float:
     cfg = cfg if isinstance(cfg, dict) else {}
     configured = float(cfg.get("feeMinNetProfitUSDT", AUTOTRADE_MIN_NET_PROFIT_USDT) or AUTOTRADE_MIN_NET_PROFIT_USDT)
     multiple = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.0) or 1.0))
     taker_roundtrip = max(0.0, float(notional_usdt or 0.0)) * ((2.0 * AUTOTRADE_TAKER_FEE_BPS_PER_SIDE) / 10000.0)
-    return round(max(configured, float(est_cost_usdt or 0.0) * multiple, taker_roundtrip * multiple), 6)
+    funding_cost = max(0.0, float(notional_usdt or 0.0)) * abs(float(funding_rate or 0.0))
+    return round(max(configured, float(est_cost_usdt or 0.0) * multiple, (taker_roundtrip + funding_cost) * multiple), 6)
 
 
 def estimate_trade_edge_usdt(
@@ -28,9 +30,14 @@ def estimate_trade_edge_usdt(
     *,
     taker_fee_bps_per_side: float = 4.0,
     extra_cost_bps: float = 2.0,
+    funding_rate: float = 0.0,
 ) -> tuple[float, float, float]:
     gross_profit = float(usdt_amount) * (float(tp_pct) / 100.0)
     cost_bps = (2.0 * taker_fee_bps_per_side) + extra_cost_bps + max(0.0, float(max_slippage_bps) * 0.5)
+    # Funding cost: rate is per 8hr; assume avg hold ~1 funding period (conservative).
+    # funding_rate is signed (positive = longs pay), use abs for cost estimate.
+    funding_cost_bps = abs(float(funding_rate or 0.0)) * 10000.0
+    cost_bps += funding_cost_bps
     est_cost = float(usdt_amount) * (cost_bps / 10000.0)
     return gross_profit, est_cost, gross_profit - est_cost
 
@@ -43,6 +50,7 @@ def effective_min_net_profit_usdt(
     taker_fee_bps: float = 4.0,
     extra_cost_bps: float = 2.0,
     notional_usdt: float | None = None,
+    funding_rate: float = 0.0,
 ) -> float:
     # When feeMinNetProfitUSDT is set to 0 or below, skip fee gate entirely.
     _raw_fee_floor = cfg.get("feeMinNetProfitUSDT")
@@ -57,6 +65,7 @@ def effective_min_net_profit_usdt(
         float(cfg.get("maxSlippageBps", 28.0) or 28.0),
         taker_fee_bps_per_side=taker_fee_bps,
         extra_cost_bps=extra_cost_bps,
+        funding_rate=funding_rate,
     )
     req = max(base_floor, est_cost * mul)
     if bool(cfg.get("feeAdaptiveNetEnabled", True)) and realized_vol_pct is not None:
