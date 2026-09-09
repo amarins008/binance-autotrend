@@ -1510,7 +1510,7 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         mark = float(p.get("markPrice", 0.0) or 0.0)
         upnl = float(p.get("unRealizedProfit", 0.0) or 0.0)
         notional = abs(float(p.get("notionalUsdtApprox", 0.0) or 0.0))
-        fee_min_capture = float(st.pop("_fee_min", _fee_edge_min_net_usdt(cfg, 0.0, notional)))
+        fee_min_capture = _fee_edge_min_net_usdt(cfg, 0.0, notional)
         lock_trigger = float(st.pop("_lk_trigger", fee_min_capture * 1.35))
         bk_floor = float(st.pop("_bk_floor", 0.03))
         lock_policy_lock_usdt = float(st.pop("_lock_policy_lockUsdt", 0.0))
