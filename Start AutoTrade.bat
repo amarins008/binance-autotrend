@@ -22,8 +22,11 @@ set "DATA_GET_CONNECT_TIMEOUT_SEC=2.0"
 REM Use custom signed-request path (avoids SDK drift / recvWindow issues)
 set "CONNECTOR_MODE=legacy"
 
-REM Explicit notional cap (matches config default)
-set "MAX_NOTIONAL_USDT=200"
+REM Explicit notional cap (matches .env / margin-based sizing: 20m x 25lev = up to 500)
+set "MAX_NOTIONAL_USDT=500"
+
+REM Disable learning auto-apply (stop AI tuner writing config silently)
+set "LEARNING_AUTO_APPLY_PROMOTED=false"
 
 REM Enable TradingView MCP integration inside the backend
 set "TRADINGVIEW_ENABLED=true"

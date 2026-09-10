@@ -119,7 +119,6 @@ class TestCandlestickMultiTimeframe(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(layers["schema"], "hermes-decision-data-v1")
         self.assertEqual(layers["marketCore"]["signal"], "LONG")
-        self.assertEqual(layers["newsSentimentGuard"]["decisionImpact"], "none_until_news_agent_is_connected")
         self.assertIn("riskGuards", layers["policy"])
         self.assertTrue(any(x["name"] == "volatility" and x["state"] == "block_bias" for x in layers["riskGuards"]["guards"]))
 
@@ -143,7 +142,6 @@ class TestCandlestickMultiTimeframe(unittest.IsolatedAsyncioTestCase):
         agents = new_agent_state()["agents"]
 
         self.assertIn("data_quality_guard", agents)
-        self.assertIn("news_sentiment_guard", agents)
 
 if __name__ == "__main__":
     unittest.main()

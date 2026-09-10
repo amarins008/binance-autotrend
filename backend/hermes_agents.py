@@ -12,7 +12,6 @@ HERMES_AGENT_PIPELINE = (
     ("hermes_supervisor", "Hermes Supervisor", "Control-plane governor, agent cadence, delegation policy"),
     ("market_analyst", "Market Analyst", "Market scan, momentum, symbol ranking"),
     ("data_quality_guard", "Data Quality Guard", "Data freshness, missing fields, stale/analyze-error protection"),
-    ("news_sentiment_guard", "News Sentiment Guard", "News/event risk as guard-only; never opens trades"),
     ("risk_manager", "Risk Manager", "Risk gates, cooldowns, exposure limits"),
     ("portfolio_manager", "Portfolio Manager", "Portfolio capacity, position count, symbol/day caps"),
     ("position_guardian", "Position Guardian", "Open-position monitoring, profit lock, reversal protection"),

@@ -4366,8 +4366,6 @@ function renderHermesKanban(bot) {
 
     data_quality_guard: { hair: "#0e7490", color: "#22d3ee", skin: "#e8c4a8", tool: "✓", short: "Liquidity QC", role: "ตรวจคุณภาพข้อมูล" },
 
-    news_sentiment_guard: { hair: "#713f12", color: "#60a5fa", skin: "#d4a574", tool: "📰", short: "News Pulse", role: "วิเคราะห์ sentiment" },
-
     risk_manager: { hair: "#14532d", color: "#22c55e", skin: "#f0c9a6", tool: "🛡", short: "Risk Gate", role: "กรองความเสี่ยง" },
 
     portfolio_manager: { hair: "#166534", color: "#4ade80", skin: "#e8b896", tool: "📊", short: "Size Desk", role: "จัดสรรขนาดพอร์ต" },
@@ -4550,7 +4548,7 @@ function renderHermesKanban(bot) {
 
     { key: "control", title: "Control", color: "#f43f5e", ids: ["hermes_supervisor"] },
 
-    { key: "market", title: "Intel Core", color: "#2563eb", ids: ["market_analyst", "data_quality_guard", "news_sentiment_guard"] },
+    { key: "market", title: "Intel Core", color: "#2563eb", ids: ["market_analyst", "data_quality_guard"] },
 
     { key: "risk", title: "Risk Core", color: "#16a34a", ids: ["risk_manager", "portfolio_manager", "position_guardian"] },
 

@@ -342,6 +342,8 @@ def _commit_supervisor_config_tune(
     reason: str,
 ) -> dict:
     """Apply tuning changes to live config, record history, and persist snapshot."""
+    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
     now = int(time.time())
     delegations[key] = {
         "at": now,

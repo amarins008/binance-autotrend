@@ -4022,7 +4022,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 51,
             "data_quality_guard": 39,
-            "news_sentiment_guard": 39,
+
             "risk_manager": 1158,
             "portfolio_manager": 45,
             "position_guardian": 1559,
@@ -4058,7 +4058,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 31,
             "data_quality_guard": 31,
-            "news_sentiment_guard": 31,
+
             "risk_manager": 31,
             "portfolio_manager": 27,
             "position_guardian": 31,
@@ -4088,7 +4088,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 22,
             "data_quality_guard": 2,
-            "news_sentiment_guard": 2,
+
             "risk_manager": 28,
             "portfolio_manager": 54,
             "position_guardian": 16,
@@ -4127,7 +4127,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 59,
             "data_quality_guard": 8,
-            "news_sentiment_guard": 8,
+
             "risk_manager": 45,
             "portfolio_manager": 21,
             "position_guardian": 37,
@@ -4162,7 +4162,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 31,
             "data_quality_guard": 3,
-            "news_sentiment_guard": 3,
+
             "risk_manager": 15,
             "portfolio_manager": 1,
             "position_guardian": 14,
@@ -4264,7 +4264,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         runs = {
             "market_analyst": 5,
             "data_quality_guard": 5,
-            "news_sentiment_guard": 5,
+
             "risk_manager": 11,
             "portfolio_manager": 30,
             "position_guardian": 1,

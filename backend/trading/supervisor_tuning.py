@@ -80,6 +80,8 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     """
     if not isinstance(cfg, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
 
     from trading.tradingview_mcp import get_tv_client, reset_tv_client
 
@@ -383,6 +385,8 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     """
     if not isinstance(cfg, dict) or not bool(cfg.get("supervisorSizeStreakEnabled", True)):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state = _recent_live_result_streak_state(trades, int(cfg.get("supervisorSizeLookbackTrades", 12) or 12))
     kind = str(state.get("kind", "") or "")
     streak = int(state.get("streak", 0) or 0)

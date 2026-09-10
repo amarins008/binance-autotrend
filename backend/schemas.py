@@ -185,11 +185,6 @@ class AutoTradeStartRequest(BaseModel):
     volumeAlignedBoost: float = Field(default=0.05, ge=0.0, le=0.4)
     volumeBreakoutBoost: float = Field(default=0.04, ge=0.0, le=0.4)
     volumeRequireForLiteEntry: bool = True
-    newsDailyEnabled: bool = True
-    newsRefreshHours: int = Field(default=6, ge=1, le=24)
-    newsMinHeadlines: int = Field(default=5, ge=1, le=50)
-    newsMaxHeadlines: int = Field(default=25, ge=5, le=100)
-    newsConfidenceMaxBoostPct: float = Field(default=8.0, ge=0.0, le=30.0)
     qualityLessonsLiveOnly: bool = True
     qualityLessonsUseRegime: bool = True
     qualityRecencyHalfLifeDays: float = Field(default=7.0, ge=1.0, le=60.0)

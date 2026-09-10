@@ -601,6 +601,8 @@ def _maybe_lock_symbol_drag_from_review(review: dict, cfg: dict | None = None) -
 def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled", "signature": ""}
     cfg = cfg if isinstance(cfg, dict) else {}
     try:
         trades_n = int(review.get("trades", 0) or 0)
@@ -829,6 +831,8 @@ def _enforce_min_conf_brake(cfg: dict, ceiling: float | None = None) -> None:
 
 
 def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str) -> dict:
+    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
     now = int(time.time())
     delegations[key] = {
         "at": now,
@@ -946,6 +950,8 @@ def _maybe_clear_bad_utc_hour_from_config(skip_code: str, skip_msg: str, cfg: di
 def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: list[dict] | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("low_entry_activity", cfg, 30)
 
     if _tuning_should_rollback("low_entry_activity"):
@@ -1117,6 +1123,8 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
 def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("scan_timeout", cfg, 20)
     if active:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
@@ -1269,6 +1277,8 @@ def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, n
 def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(daily_review, dict) or not isinstance(cfg, dict) or not bool(daily_review.get("degraded")):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("daily_entry_regression", cfg, 30)
 
     if _tuning_should_rollback("daily_entry_regression"):
@@ -1372,6 +1382,8 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
 def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     try:
         trades_n = int(review.get("trades", 0) or 0)
         small_wins = int(review.get("smallWins", 0) or 0)
@@ -1448,6 +1460,8 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
 def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     try:
         trades_n = int(review.get("trades", 0) or 0)
         win_rate = float(review.get("winRatePct", 0.0) or 0.0)
@@ -3388,6 +3402,8 @@ def _arm_symbol_risk_cooldown(
 
 def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: dict | None = None) -> dict:
     out = dict(cfg or {})
+    if not bool(out.get("supervisorAutoTuneEnabled", True)):
+        return out
     actions: list[str] = []
     cause = cause if isinstance(cause, dict) else {}
     cause_category = str(cause.get("category", "") or "").strip()
@@ -4439,6 +4455,8 @@ def _restore_fapi_agreement_locks_from_logs(cfg: dict, messages: list[str]) -> d
 def _maybe_auto_heal_scan_config_drift(cfg: dict) -> dict:
     if not isinstance(cfg, dict) or not bool(cfg.get("supervisorAutoHealScanDriftEnabled", True)):
         return {"applied": False}
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+        return {"applied": False, "reason": "supervisor_autotune_disabled"}
     symbol = str(cfg.get("symbol", "") or "").upper().strip()
     primary = str(cfg.get("primarySymbol", "") or "").upper().strip()
     if not symbol or symbol in {"AUTO", "SCAN"} or bool(cfg.get("marketScan")):
@@ -4571,19 +4589,6 @@ def _intel_data_quality_guard(intel: dict | None) -> dict:
         "symbol": symbol,
         "signal": signal,
         "confidence": round(max(0.0, min(1.0, confidence)), 4) if confidence >= 0 else 0.0,
-    }
-
-
-def _news_sentiment_guard_state(cfg: dict | None, intel: dict | None) -> dict:
-    cfg = cfg if isinstance(cfg, dict) else {}
-    enabled = bool(cfg.get("newsDailyEnabled", True))
-    decision_data = intel.get("decisionData") if isinstance(intel, dict) and isinstance(intel.get("decisionData"), dict) else {}
-    guard = decision_data.get("newsSentimentGuard") if isinstance(decision_data.get("newsSentimentGuard"), dict) else {}
-    return {
-        "enabled": enabled,
-        "wired": bool(guard.get("enabled", False)),
-        "status": str(guard.get("status", "not_wired") or "not_wired"),
-        "decisionImpact": str(guard.get("decisionImpact", "guard_only") or "guard_only"),
     }
 
 
@@ -6309,20 +6314,6 @@ async def _autotrade_loop():
                 _autotrade_skip("data_quality", f"Skip: data quality failed · {dq.get('reason')}")
                 await asyncio.sleep(cfg.get("intervalSec", 20))
                 continue
-            news_guard = _news_sentiment_guard_state(cfg, intel)
-            if bool(news_guard.get("enabled")):
-                guard_status = str(news_guard.get("status", "not_wired")).lower()
-                if guard_status in ("adverse", "negative", "high_risk"):
-                    _agent_mark("news_sentiment_guard", "blocked", "news guard adverse", guard_status, news_guard)
-                    _autotrade_skip("news_sentiment", f"Skip: news sentiment guard adverse ({guard_status})")
-                    await asyncio.sleep(cfg.get("intervalSec", 20))
-                    continue
-                if guard_status == "not_wired":
-                    _agent_mark("news_sentiment_guard", "todo", "news guard ENABLED but NOT WIRED — inactive (no blocking)", guard_status, news_guard)
-                else:
-                    _agent_mark("news_sentiment_guard", "done", "news guard neutral", guard_status, news_guard)
-            else:
-                _agent_mark("news_sentiment_guard", "done", "news guard disabled", "", news_guard)
             if risk_cooldown_enabled and bool(cfg.get("riskCooldownPauseOnVolatile", True)):
                 regime = _risk_cooldown_regime(intel)
                 regime_name = str(regime.get("name", "UNKNOWN")).upper()
@@ -7891,7 +7882,6 @@ def _hermes_supervisor_review(bot_state: dict | None = None) -> dict:
         cadence_agents = {
             "market_analyst",
             "data_quality_guard",
-            "news_sentiment_guard",
             "risk_manager",
             "portfolio_manager",
             "position_guardian",
@@ -7907,7 +7897,7 @@ def _hermes_supervisor_review(bot_state: dict | None = None) -> dict:
         if max_agent == "market_analyst":
             market_core_runs = [
                 runs_by_agent.get(agent_id, 0)
-                for agent_id in ("data_quality_guard", "news_sentiment_guard", "risk_manager", "position_guardian")
+                for agent_id in ("data_quality_guard", "risk_manager", "position_guardian")
                 if runs_by_agent.get(agent_id, 0) > 0
             ]
             if market_core_runs:

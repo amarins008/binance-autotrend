@@ -119,15 +119,9 @@ def _decision_data_layers(
             "bias": round(candle_bias, 6),
             "tags": (candle_ctx.get("tags", []) if isinstance(candle_ctx, dict) else [])[:8],
         },
-        "newsSentimentGuard": {
-            "enabled": False,
-            "status": "not_wired",
-            "decisionImpact": "none_until_news_agent_is_connected",
-            "rule": "news may pause, reduce size, or raise confidence threshold; it must not open trades",
-        },
         "learningQuality": {
             "status": "record_for_reward_scoring",
-            "features": ["marketCore", "riskGuards", "patternContext", "newsSentimentGuard"],
+            "features": ["marketCore", "riskGuards", "patternContext"],
             "rule": "features that repeatedly precede losses should lose weight or become guards",
         },
         "summary": notes[:4],
