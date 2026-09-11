@@ -68,6 +68,8 @@ for %%P in (8020 8021) do (
     )
 )
 powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $re='run_backend\.py|launcher\.py|uvicorn main:app'; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'cmd.exe') -and $_.CommandLine -match $re } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+REM --- Clear PID files (safety net for single-instance guard) ---
+if exist "%BACKEND%\.standalone\backend.pid" del /f "%BACKEND%\.standalone\backend.pid" >nul 2>&1
 call :wait_port_free 8020 10
 call :wait_port_free 8021 10
 echo       done.
