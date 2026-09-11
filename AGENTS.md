@@ -48,6 +48,36 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Supervisor autotune kill switch + TV confidence gate (เสร็จ, commit 598a4ea)
+
+### ปัญหา
+- Supervisor autotune เขียน config ทับค่าที่ reset ทุก ~90s แม้ set cooldown 525600 ไว้ (weak_payoff: stopLossPct 0.28→0.196, supervisorSizeMultiplier 1.0→0.75, maxOpenPositions 3→6)
+- Cooldown เป็น signature-based (main.py:615-619): block เฉพาะ window ที่ signature เดิม; window ใหม่ → re-tune ต่อ
+- **Root cause จริง:** tuners mutate `cfg` (= reference ของ AUTO_TRADE["config"]) แบบ in-place ผ่าน set_float/set_int ก่อนเรียก `_commit_supervisor_config_tune` → guard ที่ commit อย่างเดียวไม่พอ (ค่า drift ไปแล้วก่อนถึง commit)
+- ไม่มี master switch เดิม: `supervisorAutoTuneEnabled` เป็น key ตาย (อ้างอิงที่เดียวใน `apply_loss_minimize_tune.py:102` ไม่มีใคร enforce)
+
+### Fix (2 files)
+- **`backend/main.py`** — เพิ่ม early-return guard `supervisorAutoTuneEnabled=False` ที่ entry ของทุก tuner: `_maybe_tune_weak_payoff_from_review` (601), `_maybe_tune_low_entry_activity` (950), `_maybe_tune_scan_timeout_from_skip` (1123), `_maybe_tune_daily_entry_regression` (1277), `_maybe_tune_small_profit_capture_from_review` (1382), `_maybe_tune_negative_expectancy_from_review` (1460), `_loss_streak_self_review_tune` (3402 — guard คืน `out` เดิม ไม่ใช่ {} เพราะ caller เปรียบเทียบ `tuned_cfg != cfg`), `_maybe_auto_heal_scan_config_drift` (4455) + `_commit_supervisor_config_tune` (831)
+- **`backend/trading/supervisor_tuning.py`** — guard `_maybe_tune_tradingview_health` (75) + `_maybe_tune_size_multiplier_from_streak` (386)
+- **`backend/trading/supervisor_state.py`** — guard `_commit_supervisor_config_tune` copy ที่ 2 (336)
+- Guard pattern ใช้ `(cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)` — รองรับ cfg=None
+
+### Verification
+- py_compile: main.py + supervisor_tuning.py + supervisor_state.py OK
+- Live verify: หลัง restart + reset → config นิ่งผ่าน 2+ review windows (190s+) — `stopLossPct=0.28, supervisorSizeMultiplier=1.0, takeProfitPct=0.4, maxOpenPositions=3, supervisorAutoTuneEnabled=False`, delegations ว่าง
+- LIVE == snapshot ตรงกัน, savedAt อัปเดต
+- Test: `tests/` 66 passed + integration 283 passed
+
+### หลัง kill switch: TV confidence gate (09-11)
+- Live config มี `tvEntryMinConfidence=0.60` / `shortTvMinConfidence=0.60` ต่ำเกินไป (telemetry ใน code: tvConf<0.7 = net -4.78 USDT / WR ต่ำ, SHORT WR 25%)
+- ไม้ VTHOUSDT LONG (TV conf 0.6, momentum 0, pattern bias 0.024) เข้ารอบ → ปิดขาดทุน -0.28 USDT (PAYOFF_LOSS_GUARD ที่ 357s)
+- **แก้:** POST /bot/config `tvEntryMinConfidence=0.70`, `shortTvMinConfidence=0.70` → LIVE+snapshot คงตรง, tuner ไม่ทับ
+- bonus: ลบ `_check_budget.py` (debug probe ที่ commit ค้าง)
+
+### การตัดสินใจ (09-11)
+- `usdtAmount` คง **50** ไว้ (ค่า "วันผลดี" 25 ต่ำไปเมื่อเทียบกับ fee ±2 USDT)
+- perfLocks ปล่อยครบทั้ง 6 (WLD/SOL/ADA/PUMP/ETH/ARB) ให้หมดเวลาตามธรรมชาติ — ไม่ lock เพิ่ม
+
 ## Session: Fix margin erosion — funding rate + session/regime double-count (เสร็จ, 2026-09-09)
 
 ### ปัญหา
