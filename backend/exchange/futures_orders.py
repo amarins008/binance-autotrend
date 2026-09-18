@@ -407,81 +407,105 @@ async def _set_leverage_margin(symbol: str, key: str, secret: str, base: str, le
 
 async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp_pct: float, sl_pct: float, key: str, secret: str, base: str, tick_size: float, tick_size_str: str, hedge_mode: bool, position_side: str | None):
     close_side = "SELL" if side == "LONG" else "BUY"
-    tp_price = entry_mark * (1 + tp_pct / 100) if side == "LONG" else entry_mark * (1 - tp_pct / 100)
-    sl_price = entry_mark * (1 - sl_pct / 100) if side == "LONG" else entry_mark * (1 + sl_pct / 100)
-    tp_price = _round_to_tick(tp_price, tick_size)
-    sl_price = _round_to_tick(sl_price, tick_size)
-    tp_price_str = _format_price_by_tick(tp_price, tick_size_str)
-    sl_price_str = _format_price_by_tick(sl_price, tick_size_str)
 
-    async def _submit_exit_order(kind: str, stop_price_str: str):
+    async def _submit_exit_order(kind: str, base_pct: float):
         market_type = "TAKE_PROFIT_MARKET" if kind == "tp" else "STOP_MARKET"
         limit_type = "TAKE_PROFIT" if kind == "tp" else "STOP"
 
-        # --- Strategy 1: Algo Order API (current Binance standard) ---
-        algo_params = {
-            "symbol": symbol,
-            "side": close_side,
-            "type": market_type,
-            "algoType": "CONDITIONAL",
-            "triggerPrice": stop_price_str,
-            "workingType": "MARK_PRICE",
-        }
-        if hedge_mode and position_side:
-            algo_params["positionSide"] = position_side
-            algo_params["quantity"] = str(qty)
-        else:
-            algo_params["closePosition"] = "true"
+        # -2021 "Order would immediately trigger": the trigger price is too close
+        # to (or past) current mark, so Binance rejects the STOP/TP outright and
+        # the position could open with NO exchange-side SL.  Retry with a widened
+        # stop distance (moves the trigger away from mark) up to a few steps so the
+        # protective order lands even during a fast move; the caller's local
+        # guardian lock remains as a secondary backstop at the original level.
+        _widen_bps = 0.25   # added to distance (%) per retry — wider for low-price coins
+        _max_tries = 6
 
-        # --- Strategy 2: Legacy /fapi/v1/order (fallback) ---
-        legacy_primary = {
-            "symbol": symbol,
-            "side": close_side,
-            "type": market_type,
-            "stopPrice": stop_price_str,
-            "workingType": "MARK_PRICE",
-        }
-        legacy_fallback = {
-            "symbol": symbol,
-            "side": close_side,
-            "type": limit_type,
-            "stopPrice": stop_price_str,
-            "price": stop_price_str,
-            "timeInForce": "GTC",
-            "workingType": "MARK_PRICE",
-        }
-        if hedge_mode and position_side:
-            legacy_primary["positionSide"] = position_side
-            legacy_primary["quantity"] = str(qty)
-            legacy_fallback["positionSide"] = position_side
-            legacy_fallback["quantity"] = str(qty)
-        else:
-            legacy_primary["closePosition"] = "true"
-            legacy_fallback["closePosition"] = "true"
-
-        # Try Algo Order API first
-        try:
-            return await _signed_request("POST", base, "/fapi/v1/algoOrder", key, secret, algo_params)
-        except Exception as e:
-            algo_err = str(e)
-            _autotrade_log(f"Algo order ({kind}) failed: {algo_err[:200]}; trying legacy endpoint")
-
-        # Fallback: legacy /fapi/v1/order
-        client = _get_um_client(key, secret, base)
-        try:
+        async def _submit(params: dict, use_algo: bool):
+            if use_algo:
+                return await _signed_request("POST", base, "/fapi/v1/algoOrder", key, secret, params)
+            client = _get_um_client(key, secret, base)
             if client:
-                return await asyncio.to_thread(client.new_order, **legacy_primary)
-            return await _signed_request("POST", base, "/fapi/v1/order", key, secret, legacy_primary)
-        except Exception as e:
-            txt = str(e)
-            if ("-4120" not in txt) and ("Order type not supported" not in txt):
-                raise
-            if client:
-                return await asyncio.to_thread(client.new_order, **legacy_fallback)
-            return await _signed_request("POST", base, "/fapi/v1/order", key, secret, legacy_fallback)
+                return await asyncio.to_thread(client.new_order, **params)
+            return await _signed_request("POST", base, "/fapi/v1/order", key, secret, params)
 
-    tp = await _submit_exit_order("tp", tp_price_str)
-    sl = await _submit_exit_order("sl", sl_price_str)
+        last_err = None
+        for attempt in range(_max_tries):
+            cur_pct = base_pct + attempt * _widen_bps
+            if kind == "tp":
+                cur_price = entry_mark * (1 + cur_pct / 100) if side == "LONG" else entry_mark * (1 - cur_pct / 100)
+            else:
+                cur_price = entry_mark * (1 - cur_pct / 100) if side == "LONG" else entry_mark * (1 + cur_pct / 100)
+            cur_price = _round_to_tick(cur_price, tick_size)
+            cur_price_str = _format_price_by_tick(cur_price, tick_size_str)
+
+            # --- Strategy 1: Algo Order API (current Binance standard) ---
+            algo_params = {
+                "symbol": symbol,
+                "side": close_side,
+                "type": market_type,
+                "algoType": "CONDITIONAL",
+                "triggerPrice": cur_price_str,
+                "workingType": "MARK_PRICE",
+            }
+            if hedge_mode and position_side:
+                algo_params["positionSide"] = position_side
+                algo_params["quantity"] = str(qty)
+            else:
+                algo_params["closePosition"] = "true"
+
+            # --- Strategy 2: Legacy /fapi/v1/order (fallback) ---
+            legacy_primary = {
+                "symbol": symbol,
+                "side": close_side,
+                "type": market_type,
+                "stopPrice": cur_price_str,
+                "workingType": "MARK_PRICE",
+            }
+            legacy_fallback = {
+                "symbol": symbol,
+                "side": close_side,
+                "type": limit_type,
+                "stopPrice": cur_price_str,
+                "price": cur_price_str,
+                "timeInForce": "GTC",
+                "workingType": "MARK_PRICE",
+            }
+            if hedge_mode and position_side:
+                legacy_primary["positionSide"] = position_side
+                legacy_primary["quantity"] = str(qty)
+                legacy_fallback["positionSide"] = position_side
+                legacy_fallback["quantity"] = str(qty)
+            else:
+                legacy_primary["closePosition"] = "true"
+                legacy_fallback["closePosition"] = "true"
+
+            # Try Algo Order API first
+            try:
+                return await _submit(algo_params, True)
+            except Exception as e:
+                algo_err = str(e)
+                _autotrade_log(f"Algo order ({kind}) failed: {algo_err[:200]}; trying legacy endpoint")
+
+            # Fallback: legacy /fapi/v1/order
+            try:
+                return await _submit(legacy_primary, False)
+            except Exception as e:
+                txt = str(e)
+                last_err = e
+                if ("-2021" in txt) or ("would immediately trigger" in txt.lower()):
+                    if attempt < _max_tries - 1:
+                        _autotrade_log(f"{kind} -2021 trigger too close; retry {attempt + 1}/{_max_tries} widen +{attempt * _widen_bps:.2f}%")
+                        await asyncio.sleep(0.8)
+                        continue
+                    raise
+                if ("-4120" not in txt) and ("Order type not supported" not in txt):
+                    raise
+                return await _submit(legacy_fallback, False)
+        raise last_err or RuntimeError(f"{kind} protective order failed after {_max_tries} attempts")
+
+    tp = await _submit_exit_order("tp", tp_pct)
+    sl = await _submit_exit_order("sl", sl_pct)
     return {"tp": tp, "sl": sl}
 
 async def _place_trailing_stop(symbol: str, side: str, key: str, secret: str, base: str, trailing_pct: float):

@@ -418,7 +418,11 @@ def effective_tpsl_pct_for_trade(
     tp_min_u = max(0.05, float(cfg.get("tpTargetMinUsdt", 0.5) or 0.5))
     tp_max_u = max(tp_min_u, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
     rr = max(0.35, min(1.0, float(cfg.get("slToTpRatio", 1.0) or 1.0)))
-    target_u = (tp_min_u + tp_max_u) * 0.5
+    # Default TP target = fee floor (min). When live vol is present Phase A
+    # below overrides it upward to track the symbol's realized move; keeping
+    # the vol-missing fallback at the floor (instead of the band midpoint)
+    # avoids huge hard-to-reach TP on precision-pack timeouts (DEAD_ZONE).
+    target_u = tp_min_u
     _mv = 0.0
     # Phase A: per-symbol realized-vol target (movePct5m %) → USDT TP target.
     # When a live volatility estimate is present it wins over the interpolation

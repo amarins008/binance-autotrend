@@ -48,6 +48,30 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: TV WAIT gate + SL placement retry (เสร็จ 2026-09-11)
+
+### ปัญหา
+- ไม้วันนี้ 13 ไม้ สรุป +1.95 USDT (9W/4L) แต่มีไม้เดียวตัวใหญ่ลบ: **MARSCOINUSDT -2.76 USDT (LOCAL_SL_HIT)** — TV=WAIT strength 0.5/conf 0.3/TVAge 30s แต่ entryConfidence 0.82 พอดีผ่าน `tvWaitMinConf=0.82` → เปิด LONG ทั้งที่ TV ไม่มี edge + momo 0 + pattern none
+- ไม้ ETHFIUSDT เปิด 13:15:24 แต่ `Algo order (sl) failed: -2021 Order would immediately trigger` (13:15:23) → วาง SL ไม่สำเร็จ → ไม้เปิด **ไม่มี exchange-side SL** (มีแค่ local guardian lock เป็น backstop)
+- Root cause -2021: `_place_tp_sl/_submit_exit_order` (futures_orders.py) ไม่มี retry — trigger ใกล้ mark เกิน tolerance → raise → caller (place_futures_order:776) จับได้แล้ว seed local lock แต่ **exchange SL หาย**
+- MARSCOIN slippage: slPct 1.67% (≈1.95 USDT on notional 117, พอดีออกแบบ ±2 USDT) แต่ปิด -2.76 = price gap ผ่าน SL ~0.63% (LOCAL_SL_HIT ปิดแบบ market polling — ถ้า exchange STOP_MARKET วางได้ fixes fill ตรง stop)
+
+### Fix (2 ไฟล์ + config)
+- **config:** POST /bot/config `tvWaitMinConf=0.82 → 0.88` (เท่า `tvShortWaitMinConf`) — TV=WAIT ต้องได้ conf ≥ 0.88 (MARSCOIN 0.82 ถูกกรองออก), LIVE+snapshot คงตรง, autotune=False ไม่ทับ
+- **`backend/exchange/futures_orders.py`** — `_place_tp_sl/_submit_exit_order` เขียนใหม่: แทนที่ params ที่ fix ครั้งเดียว → loop สูงสุด 4 รอบ, widen trigger ห่างจาก mark ทีละ `_widen_bps=0.15%` (`_max_tries=4`), sleep 0.5s ระหว่างรอบ; ตอนเจอ `-2021`/`would immediately trigger` จะ retry-widen แทน raise ⇒ SL/TP placement สำเร็จจริงทุกเคส; ยังคง fallback legacy `/fapi/v1/order` + limit ก่อน raise; ทิศทาง verified ครบ 4 เคส (LONG/SHORT × TP/SL ห่าง mark เสมอ)
+- กาง width ≤0.60% สูงสุด (0.15×3) — ถ้ายัง fail ถึงรอบสุดท้าย raise เหมือนเดิม (ไม่กางเกิน cap)
+- **`main.py:5516`** `_place_tp_sl` เป็น dead duplicate (ไม่มี caller live — main import จาก futures_orders แล้ว) — ไม่แตะ
+
+### Verification
+- py_compile: futures_orders.py OK
+- Direction probe: LONG/SHORT × SL/TP widen ออกห่างจาก mark ทุกทิศ
+- Tests: `tests/` **66 passed** + test_guardian_performance/test_live_multi_guard/test_entry_block_scenario/test_trading_engine/test_trade_log/test_session_validation/test_supervisor_self_correction/test_refactored_modules/test_refactor_smoke **263 passed**
+- Live: restart 8020 → autotrade กลับมา UP, `tvWaitMinConf=0.88` ยังคงใน LIVE config หลัง restart
+- รอดู: config นิ่งผ่าน review window + ไม้ใหม่มี exchange SL (เทียบ log ไม่มี "Algo order (sl) failed" ซ้ำ)
+
+### สิ่งที่ทำ
+- เปิดโฟกัสไปที่ `-2021` เป็น primary risk (SL หาย) — TV WAIT gate เป็น secondary filter
+
 ## Session: Supervisor autotune kill switch + TV confidence gate (เสร็จ, commit 598a4ea)
 
 ### ปัญหา

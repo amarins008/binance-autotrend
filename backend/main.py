@@ -2815,6 +2815,18 @@ async def _lifespan(app: FastAPI):
     _configure_binance_clients(_BINANCE_HTTP, _BINANCE_DATA_HTTP)
     _load_autotrade_snapshot()
 
+    # ── Startup: warm public IP cache so the dashboard shows it on first load ─────
+    def _startup_warm_public_ip():
+        try:
+            _refresh_public_ip_background()
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_startup_warm_public_ip, daemon=True).start()
+    except Exception:
+        pass
+
     # ── Startup: rotate old SCAN entries to reduce data bloat ──────────────
     def _startup_rotate_scan_entries():
         try:
@@ -5077,7 +5089,7 @@ async def _margin_aware_trade_usdt(cfg: dict) -> float:
     max_open = max(1, int(cfg.get("maxOpenPositions", 3) or 3))
     frac = max(0.05, min(0.95, float(cfg.get("marginRiskFraction", 0.33) or 0.33)))
     per_trade = avail / max_open * frac
-    floor = max(1.0, float(cfg.get("marginSizingMinUsdt", 5.0) or 5.0))
+    floor = max(0.1, float(cfg.get("marginSizingMinUsdt", 1.0) or 1.0))
     _inner = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
     cap = max(floor, float(cfg.get("marginSizingMaxUsdt", _inner)))
     per_trade = max(floor, min(cap, per_trade))
@@ -6668,7 +6680,7 @@ async def _autotrade_loop():
             # Clamp the FINAL margin to marginSizingMaxUsdt so notional stays in
             # the ±2 USDT-fee-viable band (≈500 at lev 25 = net 1.05 > min 0.95).
             if bool(cfg.get("marginBasedSizing", False)):
-                _margin_cap = max(20.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
+                _margin_cap = max(1.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
                 trade_cap = min(trade_cap, _margin_cap)
             if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
                 trade_cap = min(
@@ -6889,7 +6901,7 @@ async def _autotrade_loop():
                 )
                 avail = float(acct.get("availableBalance", 0) or 0)
                 cfg["_liveAvailableBalance"] = avail
-                required = trade_usdt / max(eff_leverage, 1)
+                required = trade_usdt
                 if avail < required * 1.05:  # 5% buffer
                     # Boss directive: do NOT auto-reduce — SKIP this symbol and let
                     # scan mode try the next one. Count consecutive balance-skips so we
@@ -9886,6 +9898,14 @@ _PUBLIC_IP_CACHE: dict[str, Any] = {}
 _PUBLIC_IP_LOCK = threading.Lock()
 _ACCESS_HOST: str | None = None  # last host the dashboard was actually accessed from (e.g. Tailscale IP)
 
+# Multiple independent sources so a single provider outage does not blank the dashboard.
+_PUBLIC_IP_SOURCES = (
+    "https://api.ipify.org",
+    "https://ifconfig.me/ip",
+    "https://icanhazip.com/",
+    "https://ipinfo.io/ip",
+)
+
 
 def _local_publish_hint() -> str:
     candidates: list[ipaddress.IPv4Address] = []
@@ -9924,35 +9944,49 @@ def _local_publish_hint() -> str:
 
 
 def _fetch_public_ip() -> tuple[str | None, str | None]:
-    sources = ("https://api.ipify.org",)
-    for src in sources:
+    for src in _PUBLIC_IP_SOURCES:
         try:
-            with urllib.request.urlopen(src, timeout=2) as r:
+            with urllib.request.urlopen(src, timeout=4) as r:
                 txt = r.read().decode("utf-8", errors="ignore").strip()
                 ip = txt.splitlines()[0].strip() if txt else ""
                 if ip and len(ip) <= 64:
                     return ip, src
         except Exception:
-            pass
+            continue
     return None, None
+
+
+def _refresh_public_ip_background() -> None:
+    """Background fetch: keep last-known-good IP on failure (never null out)."""
+    ip, src = _fetch_public_ip()
+    with _PUBLIC_IP_LOCK:
+        try:
+            prev = str(_PUBLIC_IP_CACHE.get("ip") or "")
+        except Exception:
+            prev = ""
+        if ip:
+            was_change = bool(prev) and prev != ip
+            _PUBLIC_IP_CACHE["ip"] = ip
+            _PUBLIC_IP_CACHE["source"] = src
+            _PUBLIC_IP_CACHE["ts"] = int(time.time())
+        else:
+            # Do not overwrite a good value with None; bump ts anyway so we
+            # retry after TTL instead of spinning on every request.
+            _PUBLIC_IP_CACHE["ts"] = int(time.time())
+            was_change = False
+        _PUBLIC_IP_CACHE["inflight"] = False
+    if was_change:
+        print(f"[IP-CHANGE] Public IP changed: {prev} → {ip} — update Binance whitelist!", flush=True)
 
 
 def _ip_info_snapshot() -> dict[str, Any]:
     now = int(time.time())
     cached = _PUBLIC_IP_CACHE
     cache_fresh = (now - int(cached.get("ts", 0) or 0)) < 300
-    if not cache_fresh:
-        old_ip = str(cached.get("ip") or "")
-        def _bg():
-            ip, src = _fetch_public_ip()
-            with _PUBLIC_IP_LOCK:
-                _PUBLIC_IP_CACHE["ip"] = ip
-                _PUBLIC_IP_CACHE["source"] = src
-                _PUBLIC_IP_CACHE["ts"] = int(time.time())
-            if ip and old_ip and ip != old_ip:
-                print(f"[IP-CHANGE] Public IP changed: {old_ip} → {ip} — update Binance whitelist!", flush=True)
+    if not cache_fresh and not cached.get("inflight"):
         with _PUBLIC_IP_LOCK:
-            threading.Thread(target=_bg, daemon=True).start()
+            cached["inflight"] = True
+        threading.Thread(target=_refresh_public_ip_background, daemon=True).start()
     lan_ip = _local_publish_hint()
     access_ip = _ACCESS_HOST
     publish_host = access_ip or lan_ip
