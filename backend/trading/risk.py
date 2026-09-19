@@ -247,13 +247,17 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     base_tp_min = float(cfg.get("tpTargetMinUsdt", 0.55) or 0.55)
     base_tp_max = float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0)
 
+    # Pre-compute ratio-enforced SL for early-return path (uses base_tp).
+    _rr = max(0.35, min(1.0, float(cfg.get("slToTpRatio", 1.0) or 1.0)))
+    _sl_ratio_base = round(max(0.13, base_tp * _rr), 4) if _rr >= 0.99 else round(base_sl, 4)
+
     if not intel_present:
         return {
             "symbol": str(symbol or "").upper().strip(),
             "tier": "unknown",
             "tpMult": 1.0, "slMult": 1.0, "capMult": 1.0, "lockMult": 1.0,
             "tpPct": round(base_tp, 4),
-            "slPct": round(base_sl, 4),
+            "slPct": _sl_ratio_base,
             "notionalCapUsdt": round(base_cap, 4),
             "profitLockTriggerUsdt": round(base_lock_trigger, 4),
             "profitLockKeepUsdt": round(base_lock_keep, 4),
@@ -305,6 +309,15 @@ def _effective_tp_sl(symbol: str, cfg: dict, intel: dict | None = None) -> dict:
     # Fallback chain: symbol_profile → group base → global cfg → hardcoded default
     ret["holdTrailPct"] = round(float(sym_overrides.get("holdTrailPct", sym_profile.get("holdTrail_base", float(cfg.get("holdTrailPct", 0.25) or 0.25)))), 4)
     ret["holdMinConfidence"] = round(float(sym_overrides.get("holdMinConfidence", sym_profile.get("holdMinConf_base", float(cfg.get("holdMinConfidence", 0.72) or 0.72)))), 4)
+
+    # Enforce SL = TP × slToTpRatio when ratio is ~1.0 (symmetric TP/SL).
+    # Without this, base_sl (floored at supervisorStopLossFloor/slMinPct) always
+    # exceeds base_tp (0.4 takeProfitPct), making SL 2× wider than TP →
+    # losses eat wins even at 80% WR.  The ratio wins over slMinPct so
+    # SL tracks TP exactly (minimum 0.13% absolute floor).
+    if _rr >= 0.99:
+        _tp_final = float(ret.get("tpPct", base_tp))
+        ret["slPct"] = round(max(0.13, _tp_final * _rr), 4)
 
     # Fee-based TP% floor: ensure gross profit covers round-trip fees + min net edge.
     # Without this, tight TP% (e.g. 0.35%) on small notional loses money to fees.
@@ -473,6 +486,12 @@ def effective_tpsl_pct_for_trade(
     tp_pct = min(6.0, max(0.13, tp_pct))
     sl_pct = min(4.5, max(0.13, sl_pct))
     tp_pct, sl_pct, atr_meta = blend_tpsl_with_atr(tp_pct, sl_pct, precision, cfg)
+    # Re-enforce symmetric SL after ATR/candle overrides. Without this,
+    # blend_tpsl_with_atr can raise tp_pct via max(tp, atr_tp) without
+    # adjusting sl_pct, breaking the slToTpRatio contract (observed on
+    # ONDOUSDT/ARBUSDT 16:32-17:02 where tp=3.35% sl=3.0% r=0.9).
+    if rr >= 0.99:
+        sl_pct = max(0.13, round(tp_pct * rr, 4))
     meta = {
         "enabled": True,
         "tpTargetUsdt": round(tp_u, 4),
