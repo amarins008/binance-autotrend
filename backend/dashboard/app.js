@@ -1,20 +1,21 @@
+
 const $ = (id) => document.getElementById(id);
 
 const defaultBaseUrl = window.location.origin || "http://127.0.0.1:8020";
 
-const MODE_KEY = "dashboard_cfg_mode";
+const MODE_KEY = "bot_dashboard_cfg_mode";
 
-const LEV_MIN_KEY = "dashboard_lev_min";
+const LEV_MIN_KEY = "bot_dashboard_lev_min";
 
-const LEV_MAX_KEY = "dashboard_lev_max";
+const LEV_MAX_KEY = "bot_dashboard_lev_max";
 
 let SERVER_MAX_LEVERAGE = 25;
 
-const PAIR_LOCK_ENABLED_KEY = "dashboard_pair_lock_enabled";
+const PAIR_LOCK_ENABLED_KEY = "bot_dashboard_pair_lock_enabled";
 
-const PAIR_LOCK_STREAK_KEY = "dashboard_pair_lock_streak";
+const PAIR_LOCK_STREAK_KEY = "bot_dashboard_pair_lock_streak";
 
-const PAIR_LOCK_MINUTES_KEY = "dashboard_pair_lock_minutes";
+const PAIR_LOCK_MINUTES_KEY = "bot_dashboard_pair_lock_minutes";
 
 const ui = {
 
@@ -32,9 +33,8 @@ const ui = {
 
   pipelineSkip: $("pipelineSkip"), openPositions: $("openPositions"),
 
-  hermesKanban: $("hermesKanban"), hermesKanbanMeta: $("hermesKanbanMeta"), hermesMission: $("hermesMission"),
-
-  hermesSupervisorReview: $("hermesSupervisorReview"),
+  sessionOverview: $("sessionOverview"),
+  supervisorReview: $("supervisorReview"),
 
   botToggle: $("botToggle"), serviceToggle: $("serviceToggle"),
 
@@ -88,7 +88,11 @@ document.querySelectorAll(".vo-tab").forEach((btn) => {
 
 if ($("cfgMode")) {
 
-  $("cfgMode").addEventListener("change", () => localStorage.setItem(MODE_KEY, $("cfgMode").value || "LIVE"));
+  const savedMode = localStorage.getItem(MODE_KEY);
+
+  if (savedMode === "LIVE" || savedMode === "PAPER") $("cfgMode").value = savedMode;
+
+  $("cfgMode").addEventListener("change", () => localStorage.setItem(MODE_KEY, $("cfgMode").value || "PAPER"));
 
 }
 
@@ -132,7 +136,7 @@ if ($("cfgPairLockEnabled")) {
 
 if ($("cfgTradingViewEnabled")) {
 
-  const saved = localStorage.getItem("dashboard_tv_enabled");
+  const saved = localStorage.getItem("bot_dashboard_tv_enabled");
 
   if (saved === "true" || saved === "false") $("cfgTradingViewEnabled").checked = saved === "true";
 
@@ -156,7 +160,7 @@ if ($("cfgTradingViewEnabled")) {
 
   $("cfgTradingViewEnabled").addEventListener("change", async () => {
 
-    localStorage.setItem("dashboard_tv_enabled", $("cfgTradingViewEnabled").checked ? "true" : "false");
+    localStorage.setItem("bot_dashboard_tv_enabled", $("cfgTradingViewEnabled").checked ? "true" : "false");
 
     // Update status immediately
     updateTVStatusUI();
@@ -229,8 +233,6 @@ if ($("cfgPairLockMinutes")) {
 
 let activeActionCount = 0, actionLockUntil = 0, levUpdateInFlight = false, toastId = 0, lastSeenPublicIp = null, lastSeenLanIp = null;
 
-let staleConsecutiveCount = 0;
-
 let kpiSticky = { liveWinAll: 0, livePnlAll: 0, liveWinsToday: 0, liveLossToday: 0, liveWinToday: 0, livePnlToday: 0, lastTradeAt: 0 };
 
 let learningAutoTrainInFlight = false;
@@ -248,6 +250,8 @@ let lastRichBotStatus = null;
 let statusRefreshInFlight = false;
 
 let lastStatusToastAt = 0;
+
+let staleConsecutiveCount = 0;
 
 const num0 = (v, d = 0) => {
 
@@ -353,11 +357,41 @@ function scanTickerPayload(bot) {
 
     const skipCode = String(bot?.lastSkip?.code || "").toLowerCase();
 
-    let text = "รอ market scan · Hermes กำลังเตรียมข้อมูล";
+    const skipMsg = String(bot?.lastSkip?.msg || "");
+
+    const infra = bot?.infraHealth || {};
+
+    const infraIssues = Array.isArray(infra.issues) ? infra.issues : [];
+
+    const infraScore = Number(infra.score || 100);
+
+    const lastCycleAt = Number(bot?.lastCycleAt || 0);
+
+    const cycleAgeSec = lastCycleAt > 0 ? Math.max(0, Math.floor(Date.now() / 1000 - lastCycleAt)) : -1;
+
+    const cycleStalled = cycleAgeSec >= 90;
+
+    let text = "รอ market scan · AutoTrend กำลังเตรียมข้อมูล";
 
     if (!bot?.running) {
 
       text = "บอทหยุดทำงาน";
+
+    } else if (skipCode === "timeout" && infraIssues.length) {
+
+      const shortIssue = infraIssues[0] === "binance_time_sync_stale" ? "Binance time sync หลุด" : infraIssues[0];
+
+      text = `market scan timeout · ${shortIssue} (infra ${infraScore}) · กำลัง recovery`;
+
+    } else if (skipCode === "timeout") {
+
+      text = "market scan timeout · กำลังลองใหม่";
+
+    } else if (cycleStalled && infraIssues.length) {
+
+      const shortIssue = infraIssues[0] === "binance_time_sync_stale" ? "Binance time sync หลุด" : infraIssues[0];
+
+      text = `รอ cycle ถัดไป · ${shortIssue} (infra ${infraScore})`;
 
     } else if (!scanMode && decisionSignal) {
 
@@ -471,596 +505,227 @@ function updateSymbolOptions(bot) {
 
 
 
-function hasHermesOfficeState(bot) {
-
-  const agents = bot?.hermesAgents?.agents;
-
-  return !!(agents && typeof agents === "object" && Object.keys(agents).length);
-
+function hasRichBotStatus(bot) {
+  return !!(bot?.config && typeof bot.config === "object");
 }
-
-
 
 function withLastRichBotStatus(data) {
-
   if (!data || typeof data !== "object") return data;
-
   const bot = data.bot && typeof data.bot === "object" ? data.bot : {};
-
-  if (hasHermesOfficeState(bot)) {
-
+  if (hasRichBotStatus(bot)) {
     lastRichBotStatus = { ...bot };
-
     return data;
-
   }
-
-  if (!lastRichBotStatus || !hasHermesOfficeState(lastRichBotStatus)) return data;
-
+  if (!lastRichBotStatus || !hasRichBotStatus(lastRichBotStatus)) return data;
   const mergedBot = {
-
     ...lastRichBotStatus,
-
     ...bot,
-
-    hermesAgents: lastRichBotStatus.hermesAgents,
-
-    hermesSupervisorReview: bot.hermesSupervisorReview || lastRichBotStatus.hermesSupervisorReview,
-
     scanBoard: Array.isArray(bot.scanBoard) && bot.scanBoard.length ? bot.scanBoard : lastRichBotStatus.scanBoard,
-
     openLivePositions: Array.isArray(bot.openLivePositions) && bot.openLivePositions.length
-
       ? bot.openLivePositions
-
       : lastRichBotStatus.openLivePositions,
-
     log: Array.isArray(bot.log) && bot.log.length ? bot.log : lastRichBotStatus.log,
-
     lastDecision: bot.lastDecision && typeof bot.lastDecision === "object" && Object.keys(bot.lastDecision).length
-
       ? bot.lastDecision
-
       : lastRichBotStatus.lastDecision,
-
   };
-
-  return { ...data, bot: mergedBot, dashboardOfficeCached: true };
-
+  return { ...data, bot: mergedBot };
 }
 
-
-
-function renderHermesKanban(bot) {
-
-  if (!ui.hermesKanban) return;
-
-  const state = bot?.hermesAgents || {};
-
-  const agents = state.agents && typeof state.agents === "object" ? state.agents : {};
-
-  const _fp = (() => {
-    const keys = Object.keys(agents).sort();
-    let hash = 0;
-    for (const id of keys) {
-      const a = agents[id];
-      const str = `${id}:${a.state || "todo"}:${a.runs || 0}:${a.updatedAt || 0}:${a.lastAction || ""}:${a.lastReason || ""}`;
-      for (let i = 0; i < str.length; i++) {
-        hash = ((hash << 5) - hash) + str.charCodeAt(i);
-        hash |= 0;
-      }
-    }
-    return hash.toString(36);
-  })();
-
-  if (_fp === ui._kanbanFingerprint && ui.hermesKanban.querySelector(".office-room")) return;
-
-  const agentSkin = {
-
-    hermes_supervisor: { hair: "#111827", color: "#f43f5e", skin: "#f0c9a6", tool: "S", short: "Supervisor", role: "คุมจังหวะและ policy ของทีม" },
-
-    market_analyst: { hair: "#1e3a5f", color: "#3b82f6", skin: "#f5d0b5", tool: "🔎", short: "Scan Lead", role: "สแกนตลาดหาโอกาส" },
-
-    data_quality_guard: { hair: "#0e7490", color: "#22d3ee", skin: "#e8c4a8", tool: "✓", short: "Liquidity QC", role: "ตรวจคุณภาพข้อมูล" },
-
-    risk_manager: { hair: "#14532d", color: "#22c55e", skin: "#f0c9a6", tool: "🛡", short: "Risk Gate", role: "กรองความเสี่ยง" },
-
-    portfolio_manager: { hair: "#166534", color: "#4ade80", skin: "#e8b896", tool: "📊", short: "Size Desk", role: "จัดสรรขนาดพอร์ต" },
-
-    position_guardian: { hair: "#064e3b", color: "#86efac", skin: "#f7c59f", tool: "👁", short: "Pos Watch", role: "เฝ้า position ค้าง" },
-
-    strategy_builder: { hair: "#581c87", color: "#a78bfa", skin: "#f5d0b5", tool: "🧩", short: "Plan Maker", role: "สร้างแผนเข้าเทรด" },
-
-    backtest_agent: { hair: "#4c1d95", color: "#c4b5fd", skin: "#d4a574", tool: "🧪", short: "WF Tester", role: "ทดสอบ walk-forward" },
-
-    execution_agent: { hair: "#92400e", color: "#f59e0b", skin: "#f0c9a6", tool: "⚡", short: "Order Exec", role: "ส่งคำสั่งซื้อขาย" },
-
-    reflection_agent: { hair: "#78350f", color: "#fbbf24", skin: "#e8c4a8", tool: "💭", short: "Trade Review", role: "ทบทวนผลเทรด" },
-
-    memory_agent: { hair: "#374151", color: "#34d399", skin: "#f7c59f", tool: "📚", short: "Lesson Bank", role: "เก็บบทเรียน" },
-
-  };
-
-  const roomProps = {
-
-    market: ["shelf", "map", "plant"],
-
-    risk: ["clock", "plant", "shelf"],
-
-    strategy: ["shelf", "clock", "plant"],
-
-    ops: ["map", "clock", "plant"],
-
-  };
-
-  const orderedIds = [
-
-    "hermes_supervisor",
-
-    "market_analyst",
-
-    "risk_manager",
-
-    "portfolio_manager",
-
-    "position_guardian",
-
-    "strategy_builder",
-
-    "backtest_agent",
-
-    "execution_agent",
-
-    "reflection_agent",
-
-    "memory_agent",
-
-  ];
-
-  const rawAgentState = (agent) => {
-
-    const s = String(agent?.state || "todo").toLowerCase();
-
-    return ["todo", "doing", "done", "blocked"].includes(s) ? s : "todo";
-
-  };
-
-  const agentDisplayState = (agent) => {
-
-    const raw = rawAgentState(agent);
-
-    const runs = Number(agent?.completions ?? agent?.runs ?? 0);
-
-    if (raw === "blocked") return { cls: "blocked", badge: "BLOCKED", label: "ติดเงื่อนไข" };
-
-    if (raw === "doing") return { cls: "active", badge: "ACTIVE", label: "กำลังทำ" };
-
-    if (raw === "done") return { cls: "done", badge: "DONE", label: "งานล่าสุดผ่าน" };
-
-    if (runs > 0) return { cls: "idle", badge: "IDLE", label: "รอรอบถัดไป" };
-
-    return { cls: "todo", badge: "TODO", label: "รอเริ่ม" };
-
-  };
-
-  const actionText = (agentId, agent) => {
-
-    const display = agentDisplayState(agent);
-
-    const runs = Number(agent?.completions ?? agent?.runs ?? 0);
-
-    const isFreshTodo = display.cls === "todo";
-
-    const skin = agentSkin[agentId] || {};
-
-    const fallbackRole = skin.role || agent.role || "รอรอบทำงาน";
-
-    const action = isFreshTodo ? fallbackRole : (agent.lastAction || fallbackRole);
-
-    const idleProgress = display.cls === "idle" && runs > 0 ? ` · เคยทำ ${runs} รอบ` : "";
-
-    const reason = !isFreshTodo && agent.lastReason ? ` · ${agent.lastReason}` : "";
-
-    return String(action + idleProgress + reason).slice(0, 62);
-
-  };
-
-  const renderAgentCard = (agentId, idx) => {
-
-    const agent = agents[agentId] || {};
-
-    const skin = agentSkin[agentId] || { hair: "#334155", color: "#38bdf8", skin: "#f7c59f", tool: "•", short: agentId };
-
-    const display = agentDisplayState(agent);
-
-    const name = skin.short || agent.name || agentId;
-
-    const runs = Number(agent?.completions ?? agent?.runs ?? 0);
-
-    const runBadge = runs > 0 ? `<span class="trading-runs">×${runs}</span>` : "";
-
-    const delay = ((idx % 5) * 0.42).toFixed(2);
-
-    return `
-
-      <div class="trading-agent ${display.cls}" style="--agent-hair:${skin.hair};--agent-color:${skin.color};--skin-tone:${skin.skin || "#f7c59f"};--agent-delay:${delay}s">
-
-        <span class="trading-status-badge" title="${esc(name)} ${esc(display.badge)}">${esc(display.badge)}</span>
-
-        <span class="trading-state"></span>
-
-        <div class="trading-desk" aria-hidden="true">
-
-          <div class="trading-monitor"><div class="trading-screen"></div></div>
-
-          <div class="trading-chair"></div>
-
-        </div>
-
-        <div class="trading-avatar" aria-hidden="true">
-
-          <div class="trading-hair"></div>
-
-          <div class="trading-head">
-
-            <div class="trading-eye left"></div>
-
-            <div class="trading-eye right"></div>
-
-            <div class="trading-blush left"></div>
-
-            <div class="trading-blush right"></div>
-
-            <div class="trading-mouth"></div>
-
-          </div>
-
-          <div class="trading-body"></div>
-
-          <div class="trading-leg left"></div>
-
-          <div class="trading-leg right"></div>
-
-          <div class="trading-arm left"></div>
-
-          <div class="trading-arm right"></div>
-
-          <div class="trading-tool">${skin.tool}</div>
-
-        </div>
-
-        <div class="trading-name">${esc(name)}${runBadge}</div>
-
-        <div class="trading-action"><b>${esc(display.label)}</b>${esc(actionText(agentId, agent))}</div>
-
-      </div>`;
-
-  };
-
-  const rooms = [
-
-    { key: "control", title: "Control", color: "#f43f5e", ids: ["hermes_supervisor"] },
-
-    { key: "market", title: "Intel Core", color: "#2563eb", ids: ["market_analyst", "data_quality_guard"] },
-
-    { key: "risk", title: "Risk Core", color: "#16a34a", ids: ["risk_manager", "portfolio_manager", "position_guardian"] },
-
-    { key: "strategy", title: "Strategy Lab", color: "#7c3aed", ids: ["strategy_builder", "backtest_agent"] },
-
-    { key: "ops", title: "Trade Ops", color: "#d97706", ids: ["execution_agent", "reflection_agent", "memory_agent"] },
-
-  ];
-
-  const flatIds = rooms.flatMap((r) => r.ids);
-
-  const counts = flatIds.reduce((acc, id) => {
-
-    const display = agentDisplayState(agents[id] || {});
-
-    acc.total += 1;
-
-    acc[display.cls] = (acc[display.cls] || 0) + 1;
-
-    return acc;
-
-  }, { total: 0 });
-
-  const openPositions = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions.length : 0;
-
-  const activeTasks = (counts.active || 0) + openPositions;
-
-    const statusText = bot?.running
-      ? (counts.blocked ? "Operational · Entry Gate Blocked" : "All Systems Operational")
-      : "Standby";
-
+function renderSessionOverview(bot) {
+  if (!ui.sessionOverview) return;
+  const running = !!bot?.running;
+  const cfg = bot?.config || {};
+  const mode = String(cfg.executionMode || "PAPER").toUpperCase();
+  const statusText = running ? "ALL SYSTEMS OPERATIONAL" : "STANDBY";
+  
   const winsToday = num0(kpiSticky.liveWinsToday);
-
   const lossesToday = num0(kpiSticky.liveLossToday);
-
   const tradesToday = winsToday + lossesToday;
-
   const winToday = tradesToday > 0 ? num0(kpiSticky.liveWinToday).toFixed(0) : "—";
-
+  
   const pnlTodayAll = num0(kpiSticky.livePnlToday);
   const pnlTodaySymbol = num0(bot?.liveStats?.realizedPnlToday);
   const pnlToday = pnlTodayAll !== 0 ? pnlTodayAll : pnlTodaySymbol;
-
   const pnlTone = pnlToday < 0 ? "bad" : pnlToday > 0 ? "good" : "";
 
-  const roomHtml = rooms.map((room) => `
+  const activeSymbol = (cfg.activeScanSymbol || cfg.symbol || "AUTO").toUpperCase();
+  const leverageMax = cfg.leverageMax || cfg.leverage || 25;
 
-    <section class="office-room room-${room.key}" style="--room-color:${room.color}">
-
-      <div class="room-title">${esc(room.title)}</div>
-
-      ${(roomProps[room.key] || []).map((p) => `<div class="room-prop ${p}" aria-hidden="true"></div>`).join("")}
-
-      <div class="room-agents">
-
-        ${room.ids.map((id) => renderAgentCard(id, flatIds.indexOf(id))).join("")}
-
+  ui.sessionOverview.innerHTML = `
+    <div class="session-topbar">
+      <div class="session-brand">
+        <b>AutoTrend Engine Core</b>
+        <span>Trading Loop Active · Monitoring ${esc(activeSymbol)}</span>
       </div>
-
-    </section>
-
-  `).join("");
-
-  const engine = state.engine && typeof state.engine === "object" ? state.engine : {};
-
-  const mission = engine.mission || "analyze → plan → learn → hypothesize → reflect → optimize";
-
-  const existingTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
-
-  ui.hermesKanban.innerHTML = `
-
-    <div class="office-topbar">
-
-      <div class="office-brand"><b>Hermes Trading Lab Virtual Office</b><span>${esc(counts.total)} AI agents working together · ${esc(mission)}</span></div>
-
-      <div class="office-status"><b><span class="dot"></span>${esc(statusText)}</b><span id="hermesKanbanMeta">cycle ${Number(state.cycle || 0) || "—"}</span></div>
-
-      <div class="office-daily-kpis" title="Daily live trade performance">
-
-        <div class="office-daily-kpi"><b>${esc(winToday)}${tradesToday > 0 ? "%" : ""}</b><span>Win วันนี้ · ${winsToday}/${lossesToday}</span></div>
-
-        <div class="office-daily-kpi ${pnlTone}"><b>${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)}</b><span>PnL วันนี้ (Live) USDT</span></div>
-
+      <div class="session-status">
+        <span class="status-indicator ${running ? 'running' : 'standby'}"></span>
+        <b>${esc(statusText)}</b>
       </div>
-
     </div>
+    
+    <div class="session-metrics-grid">
+      <div class="session-metric-card">
+        <span class="card-lbl">Engine Mode</span>
+        <b class="card-val mode-${mode.toLowerCase()}">${esc(mode)}</b>
+        <span class="card-sub">Max Leverage: x${leverageMax}</span>
+      </div>
+      <div class="session-metric-card">
+        <span class="card-lbl">Daily Realized PnL</span>
+        <b class="card-val ${pnlTone}">${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)} USDT</b>
+        <span class="card-sub">Live closed trades PnL</span>
+      </div>
+      <div class="session-metric-card">
+        <span class="card-lbl">Daily Win Rate</span>
+        <b class="card-val">${esc(winToday)}${tradesToday > 0 ? "%" : ""}</b>
+        <span class="card-sub">Ratio: ${winsToday}W / ${lossesToday}L</span>
+      </div>
+      <div class="session-metric-card">
+        <span class="card-lbl">Active Watchlist Cooldowns</span>
+        <b class="card-val">${Object.keys(bot?.cooldownWatchlist || {}).length} pairs</b>
+        <span class="card-sub">Problematic tokens paused</span>
+      </div>
+    </div>
+    
+    <div class="trading-scan-ticker"><span class="trading-scan-track"></span></div>
+  `;
 
-    <div class="office-main">${roomHtml}</div>
+  // Update sidebar
+  const panel = $("officeStatusPanel");
+  const title = $("officeStatusTitle");
+  const officeMode = $("officeMode");
+  const activeEl = $("officeActiveTasks");
+  const activityEl = $("officeTodayActivity");
+  
+  if (officeMode) officeMode.textContent = mode;
+  if (activeEl) {
+    const openPositions = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions.length : 0;
+    activeEl.textContent = String(openPositions);
+  }
+  if (activityEl) {
+    activityEl.textContent = tradesToday > 0 ? `${winToday}% win` : (pnlToday !== 0 ? `${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)} USDT` : "—");
+  }
 
-    <div class="trading-scan-ticker"><span class="trading-scan-track"></span></div>`;
+  if (panel && title) {
+    panel.classList.remove("standby", "error");
+    if (running) {
+      title.textContent = "ACTIVE";
+    } else {
+      panel.classList.add("standby");
+      title.textContent = "STANDBY";
+    }
+  }
 
-  const freshTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
-
-  if (existingTicker && freshTicker) freshTicker.replaceWith(existingTicker);
-
-  updateOfficeSidebar(bot, counts, activeTasks);
-
-  const scAgents = $("sc-agents");
-  if (scAgents) scAgents.textContent = `${counts.total - (counts.blocked || 0)}/${counts.total}`;
-
+  // Handle ticker
+  const existingTicker = ui.sessionOverview.querySelector(".trading-scan-ticker");
   const ticker = scanTickerPayload(bot);
-
-  const tickerTrack = ui.hermesKanban.querySelector(".trading-scan-track");
-
+  const tickerTrack = ui.sessionOverview.querySelector(".trading-scan-track");
   const tickerAge = Date.now() - Number(scanTickerCache.updatedAt || 0);
-
   const shouldUpdateTicker = ticker.key !== scanTickerCache.key && tickerAge >= Number(scanTickerCache.durationMs || 56000);
 
   if (tickerTrack && (!scanTickerCache.key || shouldUpdateTicker || !tickerTrack.innerHTML.trim())) {
-
     tickerTrack.innerHTML = scanTickerLoopHtml(ticker.html);
-
     tickerTrack.style.setProperty("--ticker-duration", `${Math.round(ticker.durationMs / 1000)}s`);
-
     scanTickerCache = { key: ticker.key, html: ticker.html, updatedAt: Date.now(), durationMs: ticker.durationMs };
-
   }
-
-  ui._kanbanFingerprint = _fp;
 }
 
-
-
-function updateOfficeSidebar(bot, counts, activeTasks) {
-
-  const panel = $("officeStatusPanel");
-
-  const title = $("officeStatusTitle");
-
-  const agentsOnline = $("officeAgentsOnline");
-
-  const activeEl = $("officeActiveTasks");
-
-  const activityEl = $("officeTodayActivity");
-
-  if (!panel || !title) return;
-
-  const total = Number(counts?.total || 0);
-
-    const online = total;
-
-  const running = !!bot?.running;
-
-  const pnlToday = num0(kpiSticky.livePnlToday);
-
-  const winsToday = num0(kpiSticky.liveWinsToday);
-
-  const lossesToday = num0(kpiSticky.liveLossToday);
-
-  const activityPct = winsToday + lossesToday > 0
-
-    ? `${((winsToday / (winsToday + lossesToday)) * 100).toFixed(0)}% win`
-
-    : pnlToday !== 0 ? `${pnlToday >= 0 ? "+" : ""}${pnlToday.toFixed(2)} USDT` : "—";
-
-  if (agentsOnline) agentsOnline.textContent = `${online}/${total}`;
-
-  if (activeEl) activeEl.textContent = String(activeTasks ?? 0);
-
-  if (activityEl) activityEl.textContent = activityPct;
-
-  panel.classList.remove("standby", "error");
-
-  if (running) {
-
-    title.textContent = "OPEN & ACTIVE";
-
-  } else if (counts?.blocked) {
-
-    panel.classList.add("error");
-
-    title.textContent = "BLOCKED";
-
-  } else {
-
-    panel.classList.add("standby");
-
-    title.textContent = "STANDBY";
-
-  }
-
-}
-
-
-
-function renderHermesSupervisor(bot) {
-
-  if (!ui.hermesSupervisorReview) return;
-
-  const review = bot?.hermesSupervisorReview && typeof bot.hermesSupervisorReview === "object"
-
-    ? bot.hermesSupervisorReview
-
+function renderSupervisorReview(bot) {
+  if (!ui.supervisorReview) return;
+  const review = bot?.supervisorReview && typeof bot.supervisorReview === "object"
+    ? bot.supervisorReview
     : null;
-
+  
   if (!review) {
-
-    ui.hermesSupervisorReview.innerHTML = `
-
-      <div class="supervisor-head"><span>Supervisor</span><span class="supervisor-severity">WAIT</span></div>
-
-      <div class="supervisor-summary">รอข้อมูล review จาก Hermes หลัก</div>`;
-
+    ui.supervisorReview.innerHTML = `
+      <div class="supervisor-head">
+        <span>Guardian Supervisor Review</span>
+        <span class="supervisor-severity">WAIT</span>
+      </div>
+      <div class="supervisor-summary">Waiting for supervisor telemetry...</div>
+    `;
     return;
-
   }
 
   const severity = String(review.severity || "ok").toLowerCase();
-
   const issues = Array.isArray(review.issues) ? review.issues : [];
+  const handoff = Array.isArray(review.autoActions) ? review.autoActions : [];
 
   const issueHtml = issues.length
-
     ? issues.slice(0, 4).map((x) => `
-
       <div class="supervisor-item">
-
-        <div class="supervisor-agent">${esc(x.agent || "hermes")}</div>
-
+        <div class="supervisor-agent">${esc(x.agent || "System")}</div>
         <div>
-
           <div class="supervisor-title">${esc(x.title || "Review issue")}</div>
-
           <div class="supervisor-detail">${esc(x.detail || x.suggestion || "-")}</div>
-
         </div>
+      </div>
+    `).join("")
+    : `
+      <div class="supervisor-item">
+        <div class="supervisor-agent">System</div>
+        <div>
+          <div class="supervisor-title">All Systems Healthy</div>
+          <div class="supervisor-detail">Guardian confirms all parameters within normal bounds.</div>
+        </div>
+      </div>
+    `;
 
-      </div>`).join("")
+  const actionsHtml = handoff.length
+    ? `<div class="supervisor-autoactions"><b>Auto Actions:</b> ${esc(handoff.slice(0, 2).map((x) => x.task || x.agent || "-").join(" · "))}</div>`
+    : "";
 
-    : `<div class="supervisor-item"><div class="supervisor-agent">Hermes</div><div><div class="supervisor-title">Agent team healthy</div><div class="supervisor-detail">Agent ทุกตัวทำงานปกติ</div></div></div>`;
+  const copyHtml = handoff.length
+    ? `<button id="supervisorCopyTask" class="supervisor-copy" type="button">Copy Task</button>`
+    : "";
 
-  ui.hermesSupervisorReview.innerHTML = `
-
+  ui.supervisorReview.innerHTML = `
     <div class="supervisor-head">
-
-      <span>Supervisor</span>
-
+      <span>Guardian Supervisor Review</span>
       <span class="supervisor-severity ${esc(severity)}">${esc(severity.toUpperCase())}</span>
-
     </div>
-
-    <div class="supervisor-summary">${esc(review.summary || "ทีม agent ปกติ")}</div>
-
-    ${issueHtml}`;
+    <div class="supervisor-summary">${esc(review.summary || "System fully healthy")}</div>
+    ${issueHtml}
+    ${actionsHtml}
+    ${copyHtml}
+  `;
 
   const copyBtn = $("supervisorCopyTask");
-
   if (copyBtn) {
-
     copyBtn.addEventListener("click", async () => {
-
-      const prompt = buildHermesSupervisorTaskPrompt(review, bot);
-
+      const prompt = buildSupervisorTaskPrompt(review, bot);
       try {
-
         await copyText(prompt);
-
-        showToast("ok", "Copied Hermes task");
-
+        showToast("ok", "Copied supervisor task");
       } catch (e) {
-
         showToast("err", "Copy failed — select text manually");
-
       }
-
     });
-
   }
-
 }
 
-
-
-function buildHermesSupervisorTaskPrompt(review, bot) {
-
+function buildSupervisorTaskPrompt(review, bot) {
+  const handoff = Array.isArray(review?.autoActions) ? review.autoActions : [];
   const issues = Array.isArray(review?.issues) ? review.issues : [];
-
-  const runs = review?.agentRuns && typeof review.agentRuns === "object" ? review.agentRuns : {};
-
   const lines = [
-
     "Supervisor Review task",
-
     "",
-
     `Severity: ${review?.severity || "unknown"}`,
-
     `Summary: ${review?.summary || "-"}`,
-
     `ReviewedAt: ${review?.reviewedAt || "-"}`,
-
     "",
-
+    "Actions:",
+    ...(handoff.length ? handoff.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "System"} — ${x.task || "-"}`) : ["- ไม่มี action"]),
+    "",
     "Issues:",
-
-    ...(issues.length ? issues.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "hermes"} — ${x.title || "-"} | ${x.detail || "-"} | suggestion: ${x.suggestion || "-"}`) : ["- ไม่มี issue"]),
-
+    ...(issues.length ? issues.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "System"} — ${x.title || "-"} | ${x.detail || "-"} | suggestion: ${x.suggestion || "-"}`) : ["- ไม่มี issue"]),
     "",
-
-    "Issues:",
-
-    ...(issues.length ? issues.map((x, i) => `${i + 1}. [${x.severity || "n/a"}] ${x.agent || "hermes"} — ${x.title || "-"} | ${x.detail || "-"} | suggestion: ${x.suggestion || "-"}`) : ["- ไม่มี issue"]),
-
-    "",
-
-    `Agent runs: ${JSON.stringify(runs)}`,
-
     `Bot running: ${!!bot?.running}`,
-
     `Execution mode: ${bot?.config?.executionMode || bot?.activePosition?.mode || "-"}`,
-
     "",
-
-    "Please use GitNexus impact analysis first, then fix the code or structure safely, add/update tests, restart Hermes if needed, and summarize changed files.",
-
+    "Please use GitNexus impact analysis first, then fix the code or structure safely, add/update tests, and summarize changed files.",
   ];
-
   return lines.join("\n");
-
 }
 
 
@@ -1174,9 +839,7 @@ async function applyLeverageConfigIfRunning() {
 
 
 function backendUnreachableHint(base) {
-
-  return `ไม่เชื่อมต่อ server (${base}) — รัน: cd backend && python main.py`;
-
+  return `ไม่เชื่อมต่อ backend (${base}) — รัน: python run_backend.py`;
 }
 
 
@@ -1190,6 +853,13 @@ function reqTimeoutByPath(path, fallbackMs = 15000) {
   if (p === "/status") return 18000;
 
   if (p.startsWith("/bot/start") || p.startsWith("/service/start")) return 45000;
+
+  // /learning/* parses the full trades_log.jsonl (often > 60s under load).
+  // The dashboard proxy already grants up to 60-180s for these paths; the
+  // frontend must not abort earlier or we get a false "learning error".
+  if (p === "/learning/status" || p === "/learning/report" || p === "/learning/walk-forward") return 60000;
+
+  if (p === "/learning/propose-config") return 30000;
 
   return fallbackMs;
 
@@ -1247,7 +917,7 @@ async function req(path, method = "GET", payload = null, timeoutMs = 15000) {
 
     } catch (e) {
 
-      if (e?.name === "AbortError") lastErr = new Error(`timeout (${base}) — ${backendUnreachableHint(base)}`);
+      if (e?.name === "AbortError") lastErr = new Error(`backend timeout (${base}) — ${backendUnreachableHint(base)}`);
 
       else if (!e?.message || e.message === "Failed to fetch") lastErr = new Error(backendUnreachableHint(base));
 
@@ -1293,7 +963,7 @@ function humanizeErr(detail) {
 
 async function precheckLiveBeforeStart(payload) {
 
-  if (String(payload?.executionMode || "LIVE").toUpperCase() !== "LIVE") return;
+  if (String(payload?.executionMode || "PAPER").toUpperCase() !== "LIVE") return;
 
   let sym = String(payload?.symbol || "BTCUSDT").toUpperCase();
 
@@ -1485,9 +1155,9 @@ function renderOpenPositions(opens, liveCtx) {
 
         lock = armed
 
-          ? ` · <span style="color:var(--good)">🛡️ LOCK ${lockUsdt.toFixed(3)} USDT</span> peak=${peak.toFixed(3)}`
+          ? ` · <span style="color:var(--good)">LOCK ${lockUsdt.toFixed(3)} USDT</span> peak=${peak.toFixed(3)}`
 
-          : ` · <span style="color:var(--muted)">👁️ guarding</span> peak=${peak.toFixed(3)}`;
+          : ` · <span style="color:var(--muted)">guarding</span> peak=${peak.toFixed(3)}`;
 
       }
 
@@ -1516,6 +1186,130 @@ function renderOpenPositions(opens, liveCtx) {
   openPositionsCache = { key, html, updatedAt: Date.now() };
 
 }
+
+
+
+
+
+
+
+
+
+function renderSymbolProfileSummary(bot) {
+
+  const wrap = $("symbolProfileSummary");
+
+  if (!wrap) return;
+
+  const symbols = Array.isArray(bot?.openLivePositions) ? bot.openLivePositions : [];
+
+  const fallback = Array.isArray(bot?.symbolProfiles) ? bot.symbolProfiles : [];
+
+  if (!symbols.length && !fallback.length) {
+
+    wrap.innerHTML = `<div class="metric-sub">ยังไม่มี symbol profile — เริ่ม trade เพื่อสะสม samples หรือตั้ง override ผ่าน /symbol/profile</div>`;
+
+    return;
+
+  }
+
+  const rows = symbols.length ? symbols.map((p) => ({
+
+    symbol: p.symbol || "—",
+
+    group: p.group || (p.state?.entryVolatilityTier) || "—",
+
+    source: p.source || "—",
+
+    samples: p.sampleTrades ?? p.learnedTrades ?? "—",
+
+    winRate: p.perf?.winRatePct ?? p.learnedWinRatePct ?? null,
+
+    pnl: p.perf?.pnl ?? p.learnedPnl ?? null,
+
+    pf: p.learnedProfitFactor ?? null,
+
+    recent: p.learnedRecentScore ?? null,
+
+    minConf: p.minConfidence ?? null,
+
+    tpPct: p.tpPct ?? null,
+
+    slPct: p.slPct ?? null,
+
+    lock: p.profitLockTriggerUsdt ?? null,
+
+  })) : fallback.slice(0, 8);
+
+  rows.sort((a, b) => (Number(b.samples) || 0) - (Number(a.samples) || 0));
+
+  wrap.innerHTML = `
+
+    <div class="vo-profile-head">
+
+      <span>Symbol Profile (3-tier)</span>
+
+      <span class="vo-profile-hint">low-vol → tight TP, high-vol → wide TP, low-liq → tiny cap</span>
+      <span class="vo-profile-hint" style="margin-left:8px;color:var(--accent)">PF = profit factor · Rec = recent score</span>
+
+    </div>
+
+    <div class="vo-profile-list">
+
+      ${rows.slice(0, 8).map((r) => {
+
+        const pf = r.pf !== null && r.pf !== undefined ? Number(r.pf) : null;
+
+        const pfTone = pf === null ? '' : (pf >= 1.2 ? 'good' : pf <= 0.9 ? 'bad' : '');
+
+        const minConf = r.minConf !== null && r.minConf !== undefined ? Number(r.minConf) : null;
+
+        const tpPct = r.tpPct !== null && r.tpPct !== undefined ? Number(r.tpPct) : null;
+
+        const slPct = r.slPct !== null && r.slPct !== undefined ? Number(r.slPct) : null;
+
+        const lock = r.lock !== null && r.lock !== undefined ? Number(r.lock) : null;
+
+        const recent = r.recent !== null && r.recent !== undefined ? Number(r.recent) : null;
+
+        return `
+
+        <div class="vo-profile-row">
+
+          <span class="vo-profile-sym">${esc(r.symbol)}</span>
+
+          <span class="vo-profile-grp">${esc(r.group)}</span>
+
+          <span class="vo-profile-src">${esc(r.source)}</span>
+
+          <span class="vo-profile-n" title="samples learned">${r.samples}</span>
+
+          ${r.winRate !== null ? `<span class="vo-profile-wr">WR ${(r.winRate || 0).toFixed(1)}%</span>` : ''}
+
+          ${r.pnl !== null ? `<span class="vo-profile-pnl ${(r.pnl||0) >= 0 ? 'pos' : 'neg'}">${(r.pnl||0).toFixed(2)}</span>` : ''}
+
+          <span class="vo-profile-meta ${pfTone}" title="profit factor (learned)">PF ${pf === null ? '—' : (pf >= 999 ? '∞' : pf.toFixed(2))}</span>
+
+          <span class="vo-profile-meta" title="min confidence (learned)">Conf ${minConf === null ? '—' : (minConf * 100).toFixed(0)}%</span>
+
+          <span class="vo-profile-meta" title="TP / SL % (learned)">TP/SL ${tpPct === null ? '—' : tpPct.toFixed(2)}% / ${slPct === null ? '—' : slPct.toFixed(2)}%</span>
+
+          <span class="vo-profile-meta" title="profit-lock trigger (learned)">Lock ${lock === null ? '—' : lock.toFixed(2)}$</span>
+
+          <span class="vo-profile-meta" title="recent score (learned)">Rec ${recent === null ? '—' : recent.toFixed(2)}</span>
+
+        </div>
+
+      `;
+
+      }).join("")}
+
+    </div>
+
+  `;
+
+}
+
 
 
 
@@ -1592,7 +1386,7 @@ function updateTradingViewStatus(bot) {
   const checkboxEnabled = checkbox ? checkbox.checked : false;
   
   // Check localStorage as backup
-  const localEnabled = localStorage.getItem("dashboard_tv_enabled") === "true";
+  const localEnabled = localStorage.getItem("bot_dashboard_tv_enabled") === "true";
   
   // Fall back to backend config if neither checkbox nor localStorage is set
   const cfg = bot?.config || {};
@@ -1727,19 +1521,31 @@ function paintStatus(data) {
 
 
 
-  const pub = data?.network?.publicIp;
+  const pub = data?.network?.publicIp || {};
 
-  const ip = pub ? String(pub.ip || "").trim() : "";
+  const ip = String(pub.ip || "").trim();
 
-  if (ip && lastSeenPublicIp && ip !== lastSeenPublicIp) {
-    showToast("warn", `IP เปลี่ยน! ${lastSeenPublicIp} → ${ip} — แก้ whitelist Binance ด่วน!`);
-    const wlEl = document.getElementById("binanceWhitelistIp");
-    if (wlEl) { wlEl.style.color = "#f44"; wlEl.style.fontWeight = "700"; }
-    const warnEl = document.getElementById("ipChangeWarn");
-    if (warnEl) { warnEl.style.display = "flex"; warnEl.textContent = `IP changed ${lastSeenPublicIp} → ${ip} — update Binance whitelist now`; }
+  // Only update from status-poll if refreshIpInfo hasn't populated it yet.
+  // refreshIpInfo runs every 90s and is the authoritative source; don't let
+  // the status poll (every 5s) clear what refreshIpInfo already set.
+  if (ip) {
+    lastSeenPublicIp = ip;
+  }
+  const displayIp = lastSeenPublicIp || ip;
+  const displayLan = lastSeenLanIp || "";
+  const combined = [displayIp ? `Public: ${displayIp}` : "", displayLan ? `LAN: ${displayLan}` : ""].filter(Boolean).join("  |  ");
+
+  if (ui.publicIp) ui.publicIp.textContent = displayIp ? `IP ${displayIp}` : "";
+
+  if (ui.publishIpHeader) {
+
+    ui.publishIpHeader.textContent = combined || "IP —";
+
+    ui.publishIpHeader.title = combined;
+
   }
 
-  if (ip) lastSeenPublicIp = ip;
+  if (ip && lastSeenPublicIp && ip !== lastSeenPublicIp) showToast("info", `IP ${lastSeenPublicIp} → ${ip}`);
 
 
 
@@ -1809,11 +1615,11 @@ function paintStatus(data) {
 
   renderKpiCards(bot);
 
+  renderSymbolProfileSummary(bot);
 
+  renderSessionOverview(bot);
 
-  renderHermesKanban(bot);
-
-  renderHermesSupervisor(bot);
+  renderSupervisorReview(bot);
 
 
 
@@ -2242,6 +2048,70 @@ function paintLearning(report) {
 
 
 
+async function refreshIpInfo() {
+
+  try {
+
+    const base = (ui.baseUrl?.value || "").replace(/\/$/, "") || defaultBaseUrl;
+
+    const ctrl = new AbortController();
+
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+
+    const res = await fetch(`${base}/api/ip-info`, { signal: ctrl.signal, headers: { "Connection": "close" } });
+
+    clearTimeout(timer);
+
+    if (!res.ok) return;
+
+    const d = await res.json();
+
+    const pub = String(d.ip || "").trim();
+
+    const lan = String(d.lanIp || "").trim();
+
+    // Persist both IPs so status-poll can't overwrite them with empty values
+    if (pub) lastSeenPublicIp = pub;
+    if (lan) lastSeenLanIp = lan;
+
+    // Build display text: show both public and LAN IP
+    const pubText  = lastSeenPublicIp ? `Public: ${lastSeenPublicIp}` : "";
+
+    const lanText  = lastSeenLanIp ? `LAN: ${lastSeenLanIp}` : "";
+
+    const combined = [pubText, lanText].filter(Boolean).join("  |  ");
+
+    if (ui.publicIp) ui.publicIp.textContent = lastSeenPublicIp ? `IP ${lastSeenPublicIp}` : "";
+
+    if (ui.publishIpHeader) {
+
+      ui.publishIpHeader.textContent = combined || "IP —";
+
+      ui.publishIpHeader.title = combined;
+
+    }
+
+    // Toast on IP change
+    if (pub && lastSeenPublicIp && pub !== lastSeenPublicIp) {
+
+      showToast("info", `Public IP เปลี่ยน: ${lastSeenPublicIp} → ${pub}`);
+
+    }
+
+  } catch (e) {
+    // Silent — IP display is best-effort; keep showing last known values
+    const pubText  = lastSeenPublicIp ? `Public: ${lastSeenPublicIp}` : "";
+    const lanText  = lastSeenLanIp ? `LAN: ${lastSeenLanIp}` : "";
+    const combined = [pubText, lanText].filter(Boolean).join("  |  ");
+    if (ui.publishIpHeader && combined) {
+      ui.publishIpHeader.textContent = combined;
+    }
+  }
+
+}
+
+
+
 async function refreshStatus() {
 
   if (statusRefreshInFlight) return;
@@ -2461,7 +2331,7 @@ function botPayload() {
 
     lateEntryMaxBbPctB: PRO_FORM_PRESET.lateEntryMaxBbPctB, lateEntryMaxVwapDistancePct: PRO_FORM_PRESET.lateEntryMaxVwapDistancePct,
 
-    executionMode: $("cfgMode").value || "LIVE",
+    executionMode: $("cfgMode").value || "PAPER",
 
     holdWinners: true, holdMinConfidence: 0.78, holdTrailPct: 0.32,
 
@@ -2496,89 +2366,6 @@ function botPayload() {
     orphanAutoAdoptEnabled: true, orphanAutoAdoptForceSingleSymbol: false, orphanAutoAdoptMultiEnabled: true, learningRewardEnabled: true,
 
   };
-
-}
-
-
-
-async function refreshIpInfo() {
-
-  try {
-
-    const base = (ui.baseUrl?.value || "").replace(/\/$/, "") || defaultBaseUrl;
-
-    const ctrl = new AbortController();
-
-    const timer = setTimeout(() => ctrl.abort(), 6000);
-
-    const res = await fetch(`${base}/api/ip-info`, { signal: ctrl.signal, headers: { "Connection": "close" } });
-
-    clearTimeout(timer);
-
-    if (!res.ok) return;
-
-    const d = await res.json();
-
-    const pub = String(d.ip || "").trim();
-
-    const lan = String(d.lanIp || "").trim();
-
-    const publishUrl = String(d.publishUrl || "").trim();
-
-    if (pub) lastSeenPublicIp = pub;
-    if (lan) lastSeenLanIp = lan;
-
-    const binanceIpEl = document.getElementById("binanceWhitelistIp");
-    if (binanceIpEl && pub) binanceIpEl.textContent = pub;
-
-    const pubText  = lastSeenPublicIp ? `Public: ${lastSeenPublicIp}` : "";
-    const lanText  = lastSeenLanIp ? `LAN: ${lastSeenLanIp}` : "";
-    const combined = [pubText, lanText].filter(Boolean).join("  |  ");
-
-    if (ui.publicIp) {
-
-      if (publishUrl) {
-
-        ui.publicIp.innerHTML = `<a href="${publishUrl}" target="_blank" rel="noopener" style="color:var(--accent,#4cf);text-decoration:underline">${publishUrl}</a>`;
-
-      } else if (lastSeenLanIp) {
-
-        ui.publicIp.textContent = `LAN ${lastSeenLanIp}`;
-
-      } else {
-
-        ui.publicIp.textContent = "";
-
-  }
-
-  ui._kanbanFingerprint = _fp;
-}
-
-
-    if (ui.publishIpHeader) {
-
-      ui.publishIpHeader.textContent = combined || "IP —";
-
-      ui.publishIpHeader.title = combined || "กำลังโหลด IP";
-
-    }
-
-    if (pub && lastSeenPublicIp && pub !== lastSeenPublicIp) {
-
-      showToast("info", `Public IP เปลี่ยน: ${lastSeenPublicIp} → ${pub}`);
-
-    }
-
-  } catch (e) {
-
-    const pubText  = lastSeenPublicIp ? `Public: ${lastSeenPublicIp}` : "";
-    const lanText  = lastSeenLanIp ? `LAN: ${lastSeenLanIp}` : "";
-    const combined = [pubText, lanText].filter(Boolean).join("  |  ");
-    if (ui.publishIpHeader && combined) {
-      ui.publishIpHeader.textContent = combined;
-    }
-
-  }
 
 }
 
@@ -2694,8 +2481,9 @@ refreshLearningReport();
 
 ensureLearningAuto();
 
+// Fetch IP immediately, then retry after 5s in case the first call races
+// with the dashboard server's background IP cache warm-up.
 refreshIpInfo();
-
 setTimeout(() => { if (!lastSeenPublicIp) refreshIpInfo(); }, 5000);
-
 setTimeout(() => { if (!lastSeenPublicIp) refreshIpInfo(); }, 15000);
+
