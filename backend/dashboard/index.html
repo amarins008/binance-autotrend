@@ -3490,6 +3490,634 @@
 
     }
 
+    /* ============================================================
+       NEURAL BRAIN — modern neuron-office (replaces pixel-art rooms)
+       Each agent = a neuron cell that pulses with real usage;
+       active agents fire glowing synapses to their downstream peers.
+       ============================================================ */
+
+    .trading-office {
+
+      position: relative;
+
+      overflow: hidden;
+
+      background:
+        radial-gradient(1200px 700px at 78% -12%, rgba(124,58,237,.16), transparent 60%),
+        radial-gradient(900px 600px at -10% 108%, rgba(34,211,238,.10), transparent 60%),
+        radial-gradient(600px 420px at 50% 50%, rgba(30,41,59,.5), transparent 70%),
+        linear-gradient(180deg, #05070e 0%, #070b16 55%, #04060c 100%);
+
+      border: 1px solid rgba(148,163,184,.12);
+
+      border-radius: 16px;
+
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.03), 0 24px 60px rgba(0,0,0,.42);
+
+      image-rendering: auto;
+
+    }
+
+    .trading-office::before {
+
+      content: "";
+
+      position: absolute;
+
+      inset: 0;
+
+      pointer-events: none;
+
+      background-image:
+        radial-gradient(rgba(148,163,184,.05) 1px, transparent 1px);
+
+      background-size: 22px 22px;
+
+      opacity: .55;
+
+    }
+
+    .office-topbar {
+
+      grid-template-columns: minmax(200px, 1fr) minmax(110px, auto) minmax(200px, auto);
+
+      background: linear-gradient(180deg, rgba(10,14,25,.7), rgba(6,9,18,.35));
+
+      border: 1px solid rgba(148,163,184,.1);
+
+      border-radius: 12px;
+
+      padding: 10px 12px;
+
+      backdrop-filter: blur(6px);
+
+    }
+
+    .office-brand,
+
+    .office-status,
+
+    .office-daily-kpis {
+
+      min-height: 42px;
+
+      background: rgba(8,12,22,.55);
+
+      border: 1px solid rgba(148,163,184,.12);
+
+      border-radius: 10px;
+
+      box-shadow: none;
+
+      backdrop-filter: blur(4px);
+
+    }
+
+    .office-brand b {
+
+      font-family: "DM Sans", sans-serif;
+
+      font-weight: 700;
+
+      font-size: 17px;
+
+      color: #f8fafc;
+
+      letter-spacing: .01em;
+
+      text-shadow: none;
+
+      background: linear-gradient(90deg, #7dd3fc, #a78bfa, #f0abfc);
+
+      -webkit-background-clip: text;
+
+      background-clip: text;
+
+      -webkit-text-fill-color: transparent;
+
+    }
+
+    .office-brand span,
+
+    .office-status span {
+
+      font-size: 10px;
+
+      color: #64748b;
+
+      letter-spacing: .04em;
+
+      margin-top: 4px;
+
+    }
+
+    .office-status b {
+
+      font-family: "DM Sans", sans-serif;
+
+      font-weight: 600;
+
+      font-size: 12px;
+
+      color: #6ee7b7;
+
+    }
+
+    .office-status .dot {
+
+      width: 8px;
+
+      height: 8px;
+
+      border-radius: 50%;
+
+      background: #34d399;
+
+      box-shadow: 0 0 12px rgba(52,211,153,.8);
+
+    }
+
+    .office-daily-kpi {
+
+      background: rgba(2,6,17,.55);
+
+      border: 1px solid rgba(148,163,184,.1);
+
+      border-radius: 8px;
+
+    }
+
+    .office-daily-kpi b {
+
+      color: #e2e8f0;
+
+      font-family: "JetBrains Mono", monospace;
+
+      font-weight: 500;
+
+    }
+
+    .office-daily-kpi span {
+
+      color: #64748b;
+
+      font-size: 8px;
+
+    }
+
+    /* brain canvas */
+
+    .neuron-brain {
+
+      position: relative;
+
+      min-height: 560px;
+
+      overflow: hidden;
+
+      border: 1px solid rgba(124,58,237,.14);
+
+      border-radius: 14px;
+
+      background:
+        radial-gradient(700px 460px at 50% 42%, rgba(168,85,247,.07), transparent 65%),
+        radial-gradient(520px 340px at 24% 70%, rgba(34,211,238,.05), transparent 60%),
+        linear-gradient(180deg, rgba(9,13,26,.25), rgba(4,7,14,.45));
+
+    }
+
+    .neuron-brain .synapse-layer {
+
+      position: absolute;
+
+      inset: 0;
+
+      z-index: 0;
+
+      overflow: hidden;
+
+    }
+
+    .neuron-brain svg {
+
+      width: 100%;
+
+      height: 100%;
+
+      display: block;
+
+    }
+
+    .synapse-layer .synapse {
+
+      fill: none;
+
+      stroke-width: 1.6;
+
+      stroke-linecap: round;
+
+      stroke: rgba(148,163,184,.16);
+
+      transition: stroke .4s, opacity .4s, filter .4s;
+
+    }
+
+    .synapse-layer .synapse.fire {
+
+      stroke: rgba(125,211,252,.85);
+
+      filter: drop-shadow(0 0 6px rgba(56,189,248,.55));
+
+      animation: synapsePulse 1.4s ease-in-out infinite;
+
+    }
+
+    .synapse-layer .synapse.fire-downstream {
+
+      stroke: rgba(167,139,250,.8);
+
+      filter: drop-shadow(0 0 6px rgba(139,92,246,.55));
+
+      animation: synapseDownstream 1.6s ease-in-out infinite;
+
+    }
+
+    @keyframes synapsePulse {
+
+      0%, 100% { stroke-opacity: .35; }
+
+      50% { stroke-opacity: 1; }
+
+    }
+
+    @keyframes synapseDownstream {
+
+      0%, 100% { stroke-opacity: .25; }
+
+      50% { stroke-opacity: .85; }
+
+    }
+
+    /* neuron nodes */
+
+    .neuron-nodes {
+
+      position: absolute;
+
+      inset: 0;
+
+      z-index: 1;
+
+    }
+
+    .neuron {
+
+      position: absolute;
+
+      transform: translate(-50%, -50%);
+
+      width: 88px;
+
+      height: 88px;
+
+      cursor: default;
+
+    }
+
+    .neuron .cell {
+
+      position: absolute;
+
+      inset: 6px;
+
+      border-radius: 50%;
+
+      background:
+
+        radial-gradient(circle 26px at 32% 26%, rgba(255,255,255,.14), transparent 60%),
+
+        radial-gradient(circle 40px at 50% 50%, color-mix(in srgb, var(--nc, #38bdf8) 34%, transparent), rgba(8,12,22,.9) 78%);
+
+      border: 1.5px solid color-mix(in srgb, var(--nc, #38bdf8) 55%, transparent);
+
+      box-shadow:
+
+        0 0 18px color-mix(in srgb, var(--nc, #38bdf8) 30%, transparent),
+
+        inset 0 0 14px rgba(2,6,17,.5);
+
+      transition: transform .35s, box-shadow .35s, border-color .35s;
+
+      animation: neuronIdle 5s ease-in-out infinite;
+
+    }
+
+    .neuron .cell::after {
+
+      content: "";
+
+      position: absolute;
+
+      inset: 34%;
+
+      border-radius: 50%;
+
+      background: radial-gradient(circle, rgba(255,255,255,.85), rgba(255,255,255,0) 62%);
+
+      opacity: .5;
+
+    }
+
+    @keyframes neuronIdle {
+
+      0%, 100% { transform: scale(1); }
+
+      50% { transform: scale(.985); }
+
+    }
+
+    .neuron.active .cell {
+
+      animation: neuronPulse 1.1s ease-in-out infinite;
+
+      box-shadow:
+
+        0 0 26px color-mix(in srgb, var(--nc, #38bdf8) 70%, transparent),
+
+        0 0 60px color-mix(in srgb, var(--nc, #38bdf8) 35%, transparent),
+
+        inset 0 0 18px rgba(2,6,17,.35);
+
+      border-color: var(--nc, #38bdf8);
+
+    }
+
+    .neuron.active .cell::after { opacity: .9; }
+
+    @keyframes neuronPulse {
+
+      0%, 100% { transform: scale(1); box-shadow: 0 0 20px color-mix(in srgb, var(--nc, #38bdf8) 55%, transparent), inset 0 0 14px rgba(2,6,17,.4); }
+
+      50% { transform: scale(1.14); box-shadow: 0 0 42px color-mix(in srgb, var(--nc, #38bdf8) 95%, transparent), 0 0 90px color-mix(in srgb, var(--nc, #38bdf8) 40%, transparent), inset 0 0 18px rgba(2,6,17,.3); }
+
+    }
+
+    .neuron.active .ring {
+
+      position: absolute;
+
+      inset: 0;
+
+      border-radius: 50%;
+
+      border: 2px solid color-mix(in srgb, var(--nc, #38bdf8) 60%, transparent);
+
+      animation: neuronRing 1.4s ease-out infinite;
+
+    }
+
+    @keyframes neuronRing {
+
+      0% { transform: scale(.9); opacity: .9; }
+
+      70%, 100% { transform: scale(1.45); opacity: 0; }
+
+    }
+
+    .neuron.done .cell {
+
+      border-color: #34d399;
+
+      box-shadow: 0 0 16px rgba(52,211,153,.5), inset 0 0 12px rgba(2,6,17,.4);
+
+      animation: neuronDone 2.4s ease-in-out infinite;
+
+    }
+
+    .neuron.done .cell::after { opacity: .7; }
+
+    @keyframes neuronDone {
+
+      0%, 100% { box-shadow: 0 0 12px rgba(52,211,153,.35), inset 0 0 10px rgba(2,6,17,.4); }
+
+      50% { box-shadow: 0 0 22px rgba(52,211,153,.65), inset 0 0 12px rgba(2,6,17,.35); }
+
+    }
+
+    .neuron.blocked .cell {
+
+      border-color: #f87171;
+
+      box-shadow: 0 0 18px rgba(248,113,113,.55), inset 0 0 12px rgba(2,6,17,.45);
+
+      animation: neuronBlocked 1s ease-in-out infinite;
+
+    }
+
+    .neuron.blocked .cell::after { opacity: .35; }
+
+    @keyframes neuronBlocked {
+
+      0%, 100% { box-shadow: 0 0 14px rgba(248,113,113,.35), inset 0 0 12px rgba(2,6,17,.45); }
+
+      50% { box-shadow: 0 0 34px rgba(248,113,113,.85), inset 0 0 12px rgba(2,6,17,.4); }
+
+    }
+
+    .neuron .nuke {
+
+      position: absolute;
+
+      top: 50%;
+
+      left: 50%;
+
+      transform: translate(-50%, -50%);
+
+      font-size: 22px;
+
+      line-height: 1;
+
+      z-index: 2;
+
+      filter: drop-shadow(0 2px 4px rgba(2,6,17,.7));
+
+      text-align: center;
+
+    }
+
+    .neuron .label {
+
+      position: absolute;
+
+      left: 50%;
+
+      top: calc(100% + 4px);
+
+      transform: translateX(-50%);
+
+      display: flex;
+
+      flex-direction: column;
+
+      align-items: center;
+
+      gap: 1px;
+
+      width: max-content;
+
+      max-width: 150px;
+
+      text-align: center;
+
+    }
+
+    .neuron .label .nm {
+
+      font-family: "DM Sans", sans-serif;
+
+      font-weight: 600;
+
+      font-size: 11.5px;
+
+      color: #e2e8f0;
+
+      white-space: nowrap;
+
+      text-shadow: 0 1px 6px rgba(2,6,17,.9);
+
+    }
+
+    .neuron .label .rx {
+
+      font-family: "JetBrains Mono", monospace;
+
+      font-size: 8.5px;
+
+      color: #64748b;
+
+      letter-spacing: .06em;
+
+      text-transform: uppercase;
+
+      white-space: nowrap;
+
+    }
+
+    .neuron .state-pill {
+
+      position: absolute;
+
+      top: -6px;
+
+      right: -10px;
+
+      z-index: 3;
+
+      padding: 2px 7px;
+
+      border-radius: 999px;
+
+      font-family: "DM Sans", sans-serif;
+
+      font-weight: 600;
+
+      font-size: 8px;
+
+      letter-spacing: .08em;
+
+      border: 1px solid transparent;
+
+      background: #0b1220;
+
+      box-shadow: 0 2px 10px rgba(2,6,17,.6);
+
+      white-space: nowrap;
+
+    }
+
+    .neuron.active .state-pill { color: #0c4a6e; border-color: #7dd3fc; background: #e0f2fe; }
+
+    .neuron.done .state-pill { color: #14532d; border-color: #86efac; background: #dcfce7; }
+
+    .neuron.blocked .state-pill { color: #7f1d1d; border-color: #fda4af; background: #ffe4e6; }
+
+    .neuron.idle .state-pill, .neuron.todo .state-pill { color: #475569; border-color: rgba(148,163,184,.2); background: rgba(15,23,42,.8); }
+
+    .neuron .act-note {
+
+      position: absolute;
+
+      top: calc(100% + 22px);
+
+      left: 50%;
+
+      transform: translateX(-50%);
+
+      width: 168px;
+
+      font-family: "DM Sans", sans-serif;
+
+      font-size: 9px;
+
+      line-height: 1.35;
+
+      color: #94a3b8;
+
+      text-align: center;
+
+      text-shadow: 0 1px 6px rgba(2,6,17,.9);
+
+      white-space: nowrap;
+
+      overflow: hidden;
+
+      text-overflow: ellipsis;
+
+    }
+
+    .neuron-sup {
+
+      width: 108px;
+
+      height: 108px;
+
+    }
+
+    .neuron-sup .cell { inset: 4px; }
+
+    .neuron-sup .nuke { font-size: 26px; }
+
+    .neuron-sup .label .nm { font-size: 13px; }
+
+    .neuron-sup .ring { border-width: 2.5px; }
+
+    @media (max-width: 760px) {
+
+      .neuron-brain { min-height: 640px; }
+
+      .neuron { transform: translate(-50%, -50%) scale(.78); }
+
+      .neuron-sup { transform: translate(-50%, -50%) scale(.9); }
+
+      .neuron .act-note { display: none; }
+
+    }
+
+    @media (max-width: 520px) {
+
+      .neuron-brain { min-height: 700px; }
+
+      .neuron { transform: translate(-50%, -50%) scale(.62); }
+
+      .neuron-sup { transform: translate(-50%, -50%) scale(.78); }
+
+      .neuron .label .nm { font-size: 10px; }
+
+      .neuron .label .rx { font-size: 7px; }
+
+    }
+
   </style>
 
 </head>
@@ -4384,42 +5012,6 @@ function renderHermesKanban(bot) {
 
   };
 
-  const roomProps = {
-
-    market: ["shelf", "map", "plant"],
-
-    risk: ["clock", "plant", "shelf"],
-
-    strategy: ["shelf", "clock", "plant"],
-
-    ops: ["map", "clock", "plant"],
-
-  };
-
-  const orderedIds = [
-
-    "hermes_supervisor",
-
-    "market_analyst",
-
-    "risk_manager",
-
-    "portfolio_manager",
-
-    "position_guardian",
-
-    "strategy_builder",
-
-    "backtest_agent",
-
-    "execution_agent",
-
-    "reflection_agent",
-
-    "memory_agent",
-
-  ];
-
   const rawAgentState = (agent) => {
 
     const s = String(agent?.state || "todo").toLowerCase();
@@ -4471,12 +5063,11 @@ function renderHermesKanban(bot) {
     return String(action + idleProgress + reason).slice(0, 62);
 
   };
-
-  const renderAgentCard = (agentId, idx) => {
+const renderNeuron = (agentId, idx) => {
 
     const agent = agents[agentId] || {};
 
-    const skin = agentSkin[agentId] || { hair: "#334155", color: "#38bdf8", skin: "#f7c59f", tool: "•", short: agentId };
+    const skin = agentSkin[agentId] || { color: "#38bdf8", tool: "•", short: agentId, role: "รอรอบทำงาน" };
 
     const display = agentDisplayState(agent);
 
@@ -4484,61 +5075,35 @@ function renderHermesKanban(bot) {
 
     const runs = Number(agent?.runs || 0);
 
-    const runBadge = runs > 0 ? `<span class="trading-runs">×${runs}</span>` : "";
+    const tool = skin.tool || "•";
 
-    const delay = ((idx % 5) * 0.42).toFixed(2);
+    const core = agentId === "hermes_supervisor" ? "neuron-sup" : "";
+
+    const cls = display.cls;
+
+    const pill = esc(display.badge);
+
+    const clsFinal = `${core} ${cls}`.trim();
 
     return `
 
-      <div class="trading-agent ${display.cls}" style="--agent-hair:${skin.hair};--agent-color:${skin.color};--skin-tone:${skin.skin || "#f7c59f"};--agent-delay:${delay}s">
+      <div class="neuron ${clsFinal}" style="--nc:${skin.color};left:${pos[agentId].x}%;top:${pos[agentId].y}%">
 
-        <span class="trading-status-badge" title="${esc(name)} ${esc(display.badge)}">${esc(display.badge)}</span>
+        <span class="state-pill" title="${esc(name)} ${esc(display.badge)}">${pill}${runs > 0 ? ` ×${runs}` : ""}</span>
 
-        <span class="trading-state"></span>
+        <span class="ring" aria-hidden="true"></span>
 
-        <div class="trading-desk" aria-hidden="true">
+        <div class="cell" aria-hidden="true"><span class="nuke">${esc(tool)}</span></div>
 
-          <div class="trading-monitor"><div class="trading-screen"></div></div>
+        <div class="label">
 
-          <div class="trading-chair"></div>
+          <span class="nm">${esc(name)}</span>
 
-        </div>
-
-        <div class="trading-avatar" aria-hidden="true">
-
-          <div class="trading-hair"></div>
-
-          <div class="trading-head">
-
-            <div class="trading-eye left"></div>
-
-            <div class="trading-eye right"></div>
-
-            <div class="trading-blush left"></div>
-
-            <div class="trading-blush right"></div>
-
-            <div class="trading-mouth"></div>
-
-          </div>
-
-          <div class="trading-body"></div>
-
-          <div class="trading-leg left"></div>
-
-          <div class="trading-leg right"></div>
-
-          <div class="trading-arm left"></div>
-
-          <div class="trading-arm right"></div>
-
-          <div class="trading-tool">${skin.tool}</div>
+          <span class="rx">${esc(skin.role || agent.role || (agentId === "hermes_supervisor" ? "ORCHESTRATOR" : "IDLE"))}</span>
 
         </div>
 
-        <div class="trading-name">${esc(name)}${runBadge}</div>
-
-        <div class="trading-action"><b>${esc(display.label)}</b>${esc(actionText(agentId, agent))}</div>
+        <div class="act-note" title="${esc(actionText(agentId, agent))}">${esc(actionText(agentId, agent))}</div>
 
       </div>`;
 
@@ -4559,6 +5124,35 @@ function renderHermesKanban(bot) {
   ];
 
   const flatIds = rooms.flatMap((r) => r.ids);
+
+  // Fixed brain coordinates (percent) so synapses are stable across renders.
+  const pos = {
+    "hermes_supervisor": { x: 50, y: 16 },
+    "market_analyst": { x: 20, y: 42 },
+    "data_quality_guard": { x: 20, y: 70 },
+    "risk_manager": { x: 38, y: 42 },
+    "portfolio_manager": { x: 38, y: 70 },
+    "position_guardian": { x: 38, y: 88 },
+    "strategy_builder": { x: 62, y: 42 },
+    "backtest_agent": { x: 62, y: 70 },
+    "execution_agent": { x: 80, y: 42 },
+    "reflection_agent": { x: 80, y: 70 },
+    "memory_agent": { x: 80, y: 88 },
+  };
+
+  // Directed synapses along the data pipeline (parent -> children fan-out).
+  const synapses = [
+    ["hermes_supervisor", "market_analyst"],
+    ["hermes_supervisor", "risk_manager"],
+    ["hermes_supervisor", "strategy_builder"],
+    ["hermes_supervisor", "execution_agent"],
+    ["market_analyst", "data_quality_guard"],
+    ["risk_manager", "portfolio_manager"],
+    ["portfolio_manager", "position_guardian"],
+    ["strategy_builder", "backtest_agent"],
+    ["execution_agent", "reflection_agent"],
+    ["reflection_agent", "memory_agent"],
+  ];
 
   const counts = flatIds.reduce((acc, id) => {
 
@@ -4587,29 +5181,26 @@ function renderHermesKanban(bot) {
   const winToday = tradesToday > 0 ? num0(kpiSticky.liveWinToday).toFixed(0) : "—";
 
   const pnlTodayAll = num0(kpiSticky.livePnlToday);
+
   const pnlTodaySymbol = num0(bot?.liveStats?.realizedPnlToday);
+
   const pnlToday = pnlTodayAll !== 0 ? pnlTodayAll : pnlTodaySymbol;
 
   const pnlTone = pnlToday < 0 ? "bad" : pnlToday > 0 ? "good" : "";
 
-  const roomHtml = rooms.map((room) => `
+  // Mark a synapse "fire" when its source neuron is actively running (or just ran).
+  const synapseClass = (src) => {
+    const d = agentDisplayState(agents[src] || {});
+    if (d.cls === "blocked") return "fire";          // red-hot blocked chain
+    if (d.cls === "active") return "downstream";     // purple — data flowing out
+    if (d.cls === "done") return "fire";             // teal — completed fan-out
+    return "";
+  };
 
-    <section class="office-room room-${room.key}" style="--room-color:${room.color}">
+  const svgSynapses = synapses.map(([a, b]) => `
+    <path class="synapse ${synapseClass(a)}" d="M${pos[a].x},${pos[a].y} C ${pos[a].x + (pos[b].x - pos[a].x) * 0.5},${pos[a].y + (pos[b].y - pos[a].y) * 0.35} ${pos[a].x + (pos[b].x - pos[a].x) * 0.5},${pos[b].y - (pos[b].y - pos[a].y) * 0.35} ${pos[b].x},${pos[b].y}"></path>`).join("");
 
-      <div class="room-title">${esc(room.title)}</div>
-
-      ${(roomProps[room.key] || []).map((p) => `<div class="room-prop ${p}" aria-hidden="true"></div>`).join("")}
-
-      <div class="room-agents">
-
-        ${room.ids.map((id) => renderAgentCard(id, flatIds.indexOf(id))).join("")}
-
-      </div>
-
-    </section>
-
-  `).join("");
-
+  const neuronHtml = flatIds.map((id, i) => renderNeuron(id, i)).join("");
   const engine = state.engine && typeof state.engine === "object" ? state.engine : {};
 
   const mission = engine.mission || "analyze → plan → learn → hypothesize → reflect → optimize";
@@ -4620,7 +5211,7 @@ function renderHermesKanban(bot) {
 
     <div class="office-topbar">
 
-      <div class="office-brand"><b>Hermes Trading Lab Virtual Office</b><span>${esc(counts.total)} AI agents working together · ${esc(mission)}</span></div>
+      <div class="office-brand"><b>Hermes Trading Lab · Neural Core</b><span>${esc(counts.total)} neurons · ${esc(mission)}</span></div>
 
       <div class="office-status"><b><span class="dot"></span>${esc(statusText)}</b><span id="hermesKanbanMeta">cycle ${Number(state.cycle || 0) || "—"}</span></div>
 
@@ -4634,7 +5225,17 @@ function renderHermesKanban(bot) {
 
     </div>
 
-    <div class="office-main">${roomHtml}</div>
+    <div class="neuron-brain">
+
+      <div class="synapse-layer" aria-hidden="true">
+
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none">${svgSynapses}</svg>
+
+      </div>
+
+      <div class="neuron-nodes">${neuronHtml}</div>
+
+    </div>
 
     <div class="trading-scan-ticker"><span class="trading-scan-track"></span></div>`;
 
