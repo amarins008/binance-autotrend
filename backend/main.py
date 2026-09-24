@@ -8184,6 +8184,11 @@ def _hermes_supervisor_review(bot_state: dict | None = None) -> dict:
         )
         if bot is AUTO_TRADE:
             _agent_mark("market_analyst", "blocked", "data provider timeout", str(data_provider_error.get("error", "") or "timeout"))
+    if not infra_auth_active and not safety_hold_active and bot is AUTO_TRADE:
+        _ea = (agents.get("execution_agent") if isinstance(agents, dict) else {}) or {}
+        if str(_ea.get("state", "") or "") == "blocked" and "BINANCE API/IP" in str(_ea.get("lastAction", "") or "").upper():
+            _agent_mark("execution_agent", "idle", "Binance auth recovered", "API key/IP permission ผ่านแล้ว")
+            _autotrade_log("recovered: execution_agent unblocked (Binance auth OK)")
     day_cap_symbol = ""
     day_cap_detail = ""
     if skip_code == "symbol_day_cap" or "reached daily cap" in skip_msg.lower():
