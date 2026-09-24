@@ -2560,7 +2560,7 @@ def _risk_cooldown_regime(intel: dict | None) -> dict:
         return {"name": "UNKNOWN", "confidenceBoost": 0.0, "sizeMultiplier": 1.0, "strictness": "normal"}
 
 
-def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) -> tuple[bool, str]:
+def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None, board: list | None = None) -> tuple[bool, str]:
     if not isinstance(intel, dict):
         return False, "no market intel"
     symbol = str(symbol or intel.get("symbol") or "").upper().strip()
@@ -2615,7 +2615,7 @@ async def _adaptive_risk_cooldown_check(cfg: dict, exclude_symbols: set[str] | N
     scan_mode = bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in ("AUTO", "SCAN")
     if scan_mode:
         picked_symbol, picked_intel, board = await _pick_best_symbol_from_scan(cfg, exclude_symbols)
-        ok, reason = _risk_cooldown_resume_ok(cfg, picked_symbol, picked_intel)
+        ok, reason = _risk_cooldown_resume_ok(cfg, picked_symbol, picked_intel, board)
         return {"resume": ok, "reason": reason, "symbol": picked_symbol, "intel": picked_intel, "board": board}
     primary_symbol = str(cfg.get("primarySymbol") or cfg.get("symbol") or "").upper().strip()
     if not primary_symbol:
