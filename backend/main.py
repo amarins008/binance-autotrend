@@ -4143,12 +4143,26 @@ async def _exchange_filters(symbol: str):
         filters_map = {f["filterType"]: f for f in s.get("filters", [])}
         return {
             "stepSize": float(filters_map.get("LOT_SIZE", {}).get("stepSize", "0")),
+            "stepSizeStr": str(filters_map.get("LOT_SIZE", {}).get("stepSize", "0")),
             "minQty": float(filters_map.get("LOT_SIZE", {}).get("minQty", "0")),
+            "minQtyStr": str(filters_map.get("LOT_SIZE", {}).get("minQty", "0")),
             "tickSize": float(filters_map.get("PRICE_FILTER", {}).get("tickSize", "0")),
+            "tickSizeStr": str(filters_map.get("PRICE_FILTER", {}).get("tickSize", "0")),
             "minNotional": float(filters_map.get("MIN_NOTIONAL", {}).get("notional", filters_map.get("NOTIONAL", {}).get("minNotional", "0"))),
             "maxLeverage": int(os.getenv("MAX_LEVERAGE_DEFAULT", "20")),
             "maxQty": float(filters_map.get("LOT_SIZE", {}).get("maxQty", "0") or 0),
+            "pricePrecision": int(s.get("pricePrecision", 0) or 0),
+            "qtyPrecision": int(s.get("quantityPrecision", 0) or 0),
         }
+
+    # NOTE (2026-09-24): Binance USDT-M /fapi/v1/exchangeInfo IGNORES the
+    # `symbol=` query param and returns the FULL symbol list regardless. The
+    # old code read symbols[0] (= BTCUSDT) for every request, which poisoned
+    # the cache with BTCUSDT filters (tickSize 0.10). Low-priced coins rounded
+    # their TP trigger to 0.0 in _round_to_tick -> -4006; mid-priced coins
+    # rounded onto mark -> -2021. Find the requested symbol BY NAME instead.
+    def _match_symbol(s: dict) -> bool:
+        return str(s.get("symbol") or "").upper().strip() == sym_upper
 
     # Fallback 1: single-symbol endpoint
     payload = None
@@ -4158,11 +4172,13 @@ async def _exchange_filters(symbol: str):
             data = res.json()
             symbols = data.get("symbols", []) if isinstance(data, dict) else []
             if symbols:
-                s = symbols[0]
-                if s.get("status") != "TRADING":
-                    raise HTTPException(status_code=400, detail=f"Symbol not tradable: {sym_upper}")
-                payload = _build_payload(s)
-                _EXCHANGE_FILTERS_CACHE[sym_upper] = (now_ts, payload)
+                matched = [s for s in symbols if _match_symbol(s)]
+                s = matched[0] if matched else None
+                if s is not None:
+                    if s.get("status") != "TRADING":
+                        raise HTTPException(status_code=400, detail=f"Symbol not tradable: {sym_upper}")
+                    payload = _build_payload(s)
+                    _EXCHANGE_FILTERS_CACHE[sym_upper] = (now_ts, payload)
         elif res.status_code == 400:
             raise HTTPException(status_code=400, detail=f"Invalid Binance symbol: {sym_upper}")
     except HTTPException:

@@ -388,6 +388,17 @@ async def _exchange_filters(symbol: str):
             raise HTTPException(status_code=400, detail=f"Symbol not tradable: {symbol}")
         return payload
 
+    # NOTE (2026-09-24): Binance USDT-M /fapi/v1/exchangeInfo IGNORES the
+    # `symbol=` query param and returns the FULL symbol list regardless. The
+    # old code read symbols[0] (= BTCUSDT) for every request, which poisoned
+    # the whole cache with BTCUSDT filters (tickSize 0.10). Low-priced coins
+    # (NOM 0.0019, ARPA 0.0108) then rounded their TP trigger to 0.0 in
+    # _round_to_tick -> triggerPrice="0" -> -4006 "Stop price less than zero";
+    # mid-priced coins rounded onto mark -> -2021. We must find the requested
+    # symbol BY NAME in whatever list the endpoint actually returns.
+    def _match_symbol(s: dict) -> bool:
+        return str(s.get("symbol") or "").upper().strip() == sym_upper
+
     cached = _EXCHANGE_FILTERS_CACHE.get(sym_upper)
     if cached and now_ts - cached[0] < ttl:
         return _payload_for(cached[1])
@@ -409,16 +420,29 @@ async def _exchange_filters(symbol: str):
                 data = res.json()
                 symbols = data.get("symbols", []) if isinstance(data, dict) else []
                 if symbols:
-                    s = symbols[0]
+                    # The endpoint returns the FULL list, so locate our symbol by
+                    # name instead of trusting symbols[0]. Binance ignores the
+                    # `symbol=` param (verified 2026-09-24: 907 rows returned).
+                    matched = [s for s in symbols if _match_symbol(s)]
+                    s = matched[0] if matched else None
+                    if s is None:
+                        if res.status_code == 400:
+                            raise HTTPException(status_code=400, detail=f"Invalid Binance symbol: {sym_upper}")
+                        raise HTTPException(status_code=400, detail=f"Symbol not found on futures: {sym_upper}")
                     filters = {f["filterType"]: f for f in s.get("filters", [])}
                     payload = {
                         "stepSize": float(filters.get("LOT_SIZE", {}).get("stepSize", "0")),
+                        "stepSizeStr": str(filters.get("LOT_SIZE", {}).get("stepSize", "0")),
                         "minQty": float(filters.get("LOT_SIZE", {}).get("minQty", "0")),
+                        "minQtyStr": str(filters.get("LOT_SIZE", {}).get("minQty", "0")),
                         "tickSize": float(filters.get("PRICE_FILTER", {}).get("tickSize", "0")),
+                        "tickSizeStr": str(filters.get("PRICE_FILTER", {}).get("tickSize", "0")),
                         "minNotional": float(filters.get("MIN_NOTIONAL", {}).get("notional", filters.get("NOTIONAL", {}).get("minNotional", "0"))),
                         "maxLeverage": int(os.getenv("MAX_LEVERAGE_DEFAULT", "20")),
                         "maxQty": float(filters.get("LOT_SIZE", {}).get("maxQty", "0") or 0),
                         "contractSize": float(s.get("contractSize", "1") or 1),
+                        "pricePrecision": int(s.get("pricePrecision", 0) or 0),
+                        "qtyPrecision": int(s.get("quantityPrecision", 0) or 0),
                         "status": s.get("status", "BREAK"),
                     }
                     _EXCHANGE_FILTERS_CACHE[sym_upper] = (now_ts, payload)
@@ -454,12 +478,17 @@ async def _exchange_filters(symbol: str):
                         filters = {f["filterType"]: f for f in s.get("filters", [])}
                         entry_payload = {
                             "stepSize": float(filters.get("LOT_SIZE", {}).get("stepSize", "0")),
+                            "stepSizeStr": str(filters.get("LOT_SIZE", {}).get("stepSize", "0")),
                             "minQty": float(filters.get("LOT_SIZE", {}).get("minQty", "0")),
+                            "minQtyStr": str(filters.get("LOT_SIZE", {}).get("minQty", "0")),
                             "tickSize": float(filters.get("PRICE_FILTER", {}).get("tickSize", "0")),
+                            "tickSizeStr": str(filters.get("PRICE_FILTER", {}).get("tickSize", "0")),
                             "minNotional": float(filters.get("MIN_NOTIONAL", {}).get("notional", filters.get("NOTIONAL", {}).get("minNotional", "0"))),
                             "maxLeverage": int(os.getenv("MAX_LEVERAGE_DEFAULT", "20")),
                             "maxQty": float(filters.get("LOT_SIZE", {}).get("maxQty", "0") or 0),
                             "contractSize": float(s.get("contractSize", "1") or 1),
+                            "pricePrecision": int(s.get("pricePrecision", 0) or 0),
+                            "qtyPrecision": int(s.get("quantityPrecision", 0) or 0),
                             "status": s.get("status", "BREAK"),
                         }
                         _EXCHANGE_FILTERS_CACHE[sym_name] = (now_ts, entry_payload)

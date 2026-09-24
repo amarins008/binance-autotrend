@@ -43,6 +43,7 @@ class TestExchangeFiltersCache(unittest.IsolatedAsyncioTestCase):
                 return {
                     "symbols": [
                         {
+                            "symbol": "BTCUSDT",
                             "status": "TRADING",
                             "filters": [
                                 {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
