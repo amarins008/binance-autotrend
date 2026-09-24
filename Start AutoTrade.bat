@@ -8,9 +8,9 @@ REM ===========================================================
 setlocal enableextensions enabledelayedexpansion
 
 REM --- Auto-sync with the other copy (Desktop <-> working folder) ---
-if exist "E:\My Project\Binance autotrend\sync_start_autotrade.bat" call "E:\My Project\Binance autotrend\sync_start_autotrade.bat"
+if exist "D:\Binance autotrend\sync_start_autotrade.bat" call "D:\Binance autotrend\sync_start_autotrade.bat"
 
-set "ROOT=E:\My Project\Binance autotrend"
+set "ROOT=D:\Binance autotrend"
 set "BACKEND=%ROOT%\backend"
 set "HEALTH_TIMEOUT=30"
 

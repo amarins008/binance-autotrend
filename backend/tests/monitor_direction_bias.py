@@ -4,12 +4,12 @@ import os
 import sys
 import time
 
-sys.path.insert(0, r"E:\My Project\Binance autotrend\backend")
+sys.path.insert(0, r"D:\Binance autotrend\backend")
 
 # Load .env so network/cache wiring matches the running app.
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(r"E:\My Project\Binance autotrend\backend\.env")
+load_dotenv(r"D:\Binance autotrend\backend\.env")
 
 WATCH = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
 

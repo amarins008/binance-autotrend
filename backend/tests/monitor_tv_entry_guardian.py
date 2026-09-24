@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"E:\My Project\Binance autotrend\backend")
+sys.path.insert(0, r"D:\Binance autotrend\backend")
 
 
 def section(title: str):
@@ -59,7 +59,7 @@ async def main():
 
     # ── 4. Per-Symbol TV Signals (disk) ───────────────────────────────
     section("4. PER-SYMBOL TV SIGNALS (disk)")
-    symbols_dir = Path(r"E:\My Project\Binance autotrend\obsidian_vault\symbols")
+    symbols_dir = Path(r"D:\Binance autotrend\obsidian_vault\symbols")
     tv_count = 0
     if symbols_dir.exists():
         for sym_dir in sorted(symbols_dir.iterdir()):

@@ -24,16 +24,16 @@ import sys
 import time
 from datetime import datetime, timezone
 
-sys.path.insert(0, r"E:\My Project\Binance autotrend\backend")
+sys.path.insert(0, r"D:\Binance autotrend\backend")
 
 # Load .env so network/cache wiring matches the running app.
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(r"E:\My Project\Binance autotrend\backend\.env")
+load_dotenv(r"D:\Binance autotrend\backend\.env")
 
 from pathlib import Path  # noqa: E402
 
-VAULT_DIR = Path(os.getenv("HERMES_DATA_DIR", Path(r"E:\My Project\Binance autotrend\backend")).resolve()) / "obsidian_vault"
+VAULT_DIR = Path(os.getenv("HERMES_DATA_DIR", Path(r"D:\Binance autotrend\backend")).resolve()) / "obsidian_vault"
 LOG_PATH = VAULT_DIR / "monitor_tv_entry.jsonl"
 EVENT_PATH = VAULT_DIR / "monitor_tv_entry_events.jsonl"
 

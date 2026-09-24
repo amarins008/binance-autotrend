@@ -5,9 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"E:\My Project\Binance autotrend\backend")
+sys.path.insert(0, r"D:\Binance autotrend\backend")
 
-VAULT = Path(r"E:\My Project\Binance autotrend\obsidian_vault")
+VAULT = Path(r"D:\Binance autotrend\obsidian_vault")
 SYMBOLS_DIR = VAULT / "symbols"
 
 RESET = "\033[0m"

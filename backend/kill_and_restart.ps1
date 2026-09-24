@@ -6,7 +6,7 @@ Kills ports 8020/8021/8040, starts run_backend.py, waits for /health.
 
 $ErrorActionPreference = "Stop"
 
-$ROOT = "E:\My Project\Binance autotrend"
+$ROOT = "D:\Binance autotrend"
 $BACKEND = Join-Path $ROOT "backend"
 Set-Location $BACKEND
 
