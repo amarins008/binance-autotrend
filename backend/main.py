@@ -2233,6 +2233,15 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 # Boss 2026-08-28: if the technical SHORT signal is strong & clear
                 # (conf >= shortStrongMinConfidence), relax the TV gate so we still
                 # enter SHORT on a decisive down-signal even without TV confirmation.
+                elif _tv_sig == "SHORT":
+                    # SHORT TV agrees with entry — but weak TV SHORT still loses.
+                    # Stats (2026-09-24, 2523 LIVE trades): SHORT/SHORT n=347
+                    # WR 42.4% -15.4 USDT overall; only tvStrength>=0.9 was
+                    # net-positive (+1.66, WR 61.6%). Block weak TV SHORT signal.
+                    _short_min_str = float(cfg.get("shortTvMinStrength", 0.90) or 0.90)
+                    if _tv_strength < _short_min_str:
+                        qualified = False
+                        reject_reason = "short_tv_low_strength"
                 elif _tv_sig == "WAIT":
                     # SHORT + TV=WAIT: require higher internal confidence.
                     # SHORT with TV=WAIT has WR 28% historically — TV's non-

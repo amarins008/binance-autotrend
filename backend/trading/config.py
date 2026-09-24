@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 23
+CONFIG_VERSION = 24
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -401,6 +401,16 @@ _FORCE_DEFAULTS_V23: dict = {
     "tryGreenExitMaxProfitUsdt": 0.50,      # was 0.15/0.20
     "holdMinProfitUsdt": 0.30,              # was 0.12
     "swingPeakMinProfitUsdt": 0.20,         # was 0.08
+}
+
+
+_FORCE_DEFAULTS_V24: dict = {
+    # V24: SHORT TV strength gate (2026-09-24).
+    # Telemetry replay on 2523 LIVE trades: SHORT/SHORT n=347 WR 42.4% -15.4 USDT
+    # despite TV signal agreeing. Only tvStrength>=0.9 SHORT/SHORT was net-positive
+    # (+1.66, WR 61.6%). Block SHORT entries when TV strength < shortTvMinStrength.
+    # shortTvMinStrength=0.90 eliminates the -15.4 USDT SHORT structural loss.
+    "shortTvMinStrength": 0.90,
 }
 
 
@@ -885,6 +895,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 23:
             for _fk, _fv in _FORCE_DEFAULTS_V23.items():
+                out[_fk] = _fv
+        if _stored_ver < 24:
+            for _fk, _fv in _FORCE_DEFAULTS_V24.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 
