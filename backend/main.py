@@ -7069,20 +7069,6 @@ async def _autotrade_loop():
                 AUTO_TRADE["lastDecision"] = {"intel": intel, "trade": None, "symbol": _sym_decision, "side": signal, "ts": now}
                 AUTO_TRADE.setdefault("lastDecisions", {})[_sym_decision] = {"intel": intel, "trade": None, "symbol": _sym_decision, "side": signal, "ts": now}
             _agent_mark("memory_agent", "done", "decision stored", f"{mode} {cfg['symbol']} {signal}")
-            # Laya System-1 shadow observer (2026-09-25, obs-only): after a real
-            # trade executes, ask the local laya sidecar for its read on the exact
-            # feature pack the bot decided with, and append to laya_shadow.jsonl.
-            # Never gates, never blocks (daemon thread + short connect timeout).
-            # Correlate against trade outcomes later to gate on (Phase 2).
-            try:
-                if bool(cfg.get("layaShadowEnabled", True)):
-                    import trading.laya_shadow as _laya_shadow
-                    _laya_shadow.shadow_observe(
-                        cfg["symbol"], signal, intel,
-                        extra={"notionalUsdt": round(float(trade_usdt) * eff_leverage, 2)},
-                    )
-            except Exception:
-                pass  # shadow observer is strictly best-effort
         except asyncio.TimeoutError:
             # Network timeout — not a logic error, use softer backoff
             AUTO_TRADE["consecutiveErrors"] = min(AUTO_TRADE.get("consecutiveErrors", 0) + 1, 10)

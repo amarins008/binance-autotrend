@@ -597,8 +597,6 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("feeMinEdgeVsCostMultiple", 1.0)
     out.setdefault("feeMinOrderUsdt", 5.0)
     out.setdefault("biasGateEnabled", True)
-    out.setdefault("layaShadowEnabled", True)  # obs-driven: record laya shadow reads per executed trade
-    out.setdefault("layaShadowUrl", "http://127.0.0.1:8790/v1/predict")
     out.setdefault("biasGateMinStrength", 0.0)
     out.setdefault("biasGateNeutralConfMin", 0.0)
     out.setdefault("biasSizeScalingEnabled", False)
