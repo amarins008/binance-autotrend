@@ -618,6 +618,9 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
                 "entrySpreadBps": entry_snapshot.get("entrySpreadBps", 0.0),
                 "entryMomentumPct": entry_snapshot.get("entryMomentumPct", 0.0),
                 "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
+                "entryDirectionBias": entry_snapshot.get("entryDirectionBias", ""),
+                "entryDirectionBiasStrength": entry_snapshot.get("entryDirectionBiasStrength", 0.0),
+                "entryDirectionBiasRegime": entry_snapshot.get("entryDirectionBiasRegime", ""),
             })
     if not close_results:
         return {"message": "No open position"}
@@ -681,6 +684,9 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entrySpreadBps": entry_snapshot.get("entrySpreadBps", 0.0),
                 "entryMomentumPct": entry_snapshot.get("entryMomentumPct", 0.0),
                 "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
+                "entryDirectionBias": entry_snapshot.get("entryDirectionBias", ""),
+                "entryDirectionBiasStrength": entry_snapshot.get("entryDirectionBiasStrength", 0.0),
+                "entryDirectionBiasRegime": entry_snapshot.get("entryDirectionBiasRegime", ""),
             })
     for t in learned:
         _record_learning_trade(symbol, t, "LIVE")

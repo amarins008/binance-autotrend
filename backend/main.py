@@ -2209,6 +2209,30 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 if _tv_fresh and _tv_conf < _min_conf:
                     qualified = False
                     reject_reason = "tv_weak"
+        # LONG-specific TV strength gate (2026-09-25): mirror of the SHORT gate.
+        # 90d replay: LONG WR 66.6% but only tvStrength>=0.90 was robust (WR 72.3%,
+        # +51.78 USDT); sub-0.90 LONG lost money. Require tvStrength >=
+        # tvLongMinStrength when TV signal agrees with the LONG entry.
+        if qualified and sig == "LONG":
+            _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
+            if _tv:
+                _tv_sig = str(_tv.get("signal", "")).upper()
+                _tv_strength = float(_tv.get("strength", 0.0) or 0.0)
+                _long_min_str = float(cfg.get("tvLongMinStrength", 0.90) or 0.90)
+                if _tv_sig == "LONG" and _tv_strength < _long_min_str:
+                    qualified = False
+                    reject_reason = "long_tv_low_strength"
+        # LONG + negative pattern-bias gate (2026-09-25). 90d replay:
+        # patternBias>0 WR 62.8%, patternBias==0 WR 56.5%, patternBias<0 WR 42.6%.
+        # A LONG against a strongly negative candle pattern is structurally
+        # loss-making; block it before it opens. gate uses configurable floor.
+        if qualified and sig == "LONG":
+            _patt_candle = out.get("candles") if isinstance(out.get("candles"), dict) else {}
+            _patt_bias = float(_patt_candle.get("bias", 0.0) or 0.0)
+            _long_pb_min = float(cfg.get("longPatternBiasMin", -0.002) or -0.002)
+            if _patt_bias < _long_pb_min:
+                qualified = False
+                reject_reason = "long_negative_pattern_bias"
         # SHORT-specific TV gate (2026-08-22): telemetry showed SHORT WR 25% /
         # net -5.07 over 7d while only TV-conf>=0.7 SHORT trades were net-positive
         # (WR 62%) and any SHORT entered while TV signal was LONG lost (WR 20%).
@@ -5741,6 +5765,9 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
                 "entrySpreadBps": entry_snapshot.get("entrySpreadBps", 0.0),
                 "entryMomentumPct": entry_snapshot.get("entryMomentumPct", 0.0),
                 "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
+                "entryDirectionBias": entry_snapshot.get("entryDirectionBias", ""),
+                "entryDirectionBiasStrength": entry_snapshot.get("entryDirectionBiasStrength", 0.0),
+                "entryDirectionBiasRegime": entry_snapshot.get("entryDirectionBiasRegime", ""),
             })
     if not close_results:
         return {"message": "No open position"}

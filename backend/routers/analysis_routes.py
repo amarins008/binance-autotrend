@@ -1,4 +1,5 @@
 import asyncio
+import math
 
 from fastapi import APIRouter
 
@@ -131,6 +132,135 @@ def _route_getter(name: str):
     """Lazily resolve a function from main.py when the route is actually called."""
     _m = _lazy_main()
     return getattr(_m, name)
+
+
+def _bucket_key(trade: dict, field: str):
+    """Map a trade to its accuracy-bucket key for one entry-condition field."""
+    try:
+        pnl = float(trade.get("pnl", 0.0) or 0.0)
+    except Exception:
+        return None
+    if field == "side":
+        return str(trade.get("side", "") or "n/a").upper()
+    if field == "tvSignal":
+        raw = (trade.get("tvAtEntry") or trade.get("tvSignal") or "")
+        if not raw:
+            raw = trade.get("tvAtEntryConfidence") is not None and trade.get("tv") or ""
+        sig = str(raw or "").upper()
+        return sig if sig else "n/a"
+    if field == "tvStrength":
+        v = trade.get("tvStrength")
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        return ">=0.90" if v >= 0.90 else "0.45-0.89" if v >= 0.45 else "<0.45"
+    if field == "tvConfidence":
+        v = (trade.get("tvConfidence") if trade.get("tvConfidence") is not None
+             else trade.get("tvAtEntryConfidence"))
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        return ">=0.80" if v >= 0.80 else "0.60-0.79" if v >= 0.60 else "<0.60"
+    if field == "entryConfidence":
+        v = trade.get("entryConfidence")
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        return ">=0.85" if v >= 0.85 else "0.72-0.84" if v >= 0.72 else "<0.72"
+    if field == "momentum":
+        v = trade.get("entryMomentumPct")
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        return ">" if v > 0.0 else "<" if v < 0.0 else "0"
+    if field == "patternBias":
+        v = trade.get("patternBias")
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "n/a"
+        return "pos" if v > 0.0001 else "neg" if v < -0.0001 else "0"
+    if field == "directionBias":
+        raw = str(trade.get("entryDirectionBias", "") or "").upper()
+        return raw if raw else "n/a"
+    return "n/a"
+
+
+def _accuracy_bucket(trades: list, field: str, side_filter: str | None = None):
+    """Aggregate win-rate + pnl per bucket for one entry-condition field."""
+    buckets: dict[str, dict] = {}
+    for t in trades:
+        if side_filter:
+            side = str(t.get("side", "") or "").upper()
+            if side != side_filter:
+                continue
+        key = _bucket_key(t, field)
+        if not key:
+            continue
+        try:
+            pnl = float(t.get("pnl", 0.0) or 0.0)
+        except Exception:
+            continue
+        b = buckets.setdefault(key, {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0})
+        b["trades"] += 1
+        b["pnl"] += pnl
+        if pnl >= 0:
+            b["wins"] += 1
+        else:
+            b["losses"] += 1
+    rows = []
+    for key, b in buckets.items():
+        rows.append({
+            "key": key,
+            "trades": b["trades"],
+            "wins": b["wins"],
+            "losses": b["losses"],
+            "winRatePct": round(100 * b["wins"] / b["trades"], 1) if b["trades"] else 0.0,
+            "pnl": round(b["pnl"], 4),
+        })
+    order = {"n/a": -9, "0": 0, "pos": 1, "neg": 2, ">": 1, "<": 2}
+    rows.sort(key=lambda r: (order.get(r["key"], 99), -r["trades"]))
+    return rows
+
+
+def entry_accuracy():
+    """Entry-condition accuracy: win-rate + pnl grouped by what was known at entry time.
+
+    Reads the LIVE trade log (last 90 days) and buckets realized results by the
+    TV signal, TV strength, TV confidence, entry confidence, momentum, pattern
+    bias — so the operator can see which entry conditions actually produced
+    accurate fills.
+    """
+    _m = _lazy_main()
+    trades = list(_m._live_closed_trades_from_log())
+    total = len(trades)
+    wins = sum(1 for t in trades if float(t.get("pnl", 0.0) or 0.0) >= 0)
+    total_pnl = round(sum(float(t.get("pnl", 0.0) or 0.0) for t in trades), 4)
+    return {
+        "ok": True,
+        "totalTrades": total,
+        "wins": wins,
+        "losses": total - wins,
+        "winRatePct": round(100 * wins / total, 1) if total else 0.0,
+        "totalPnl": total_pnl,
+        "avgPnl": round(total_pnl / total, 4) if total else 0.0,
+        "bucketTvSignal": _accuracy_bucket(trades, "tvSignal"),
+        "bucketTvStrength": _accuracy_bucket(trades, "tvStrength"),
+        "bucketTvConfidence": _accuracy_bucket(trades, "tvConfidence"),
+        "bucketEntryConfidence": _accuracy_bucket(trades, "entryConfidence"),
+        "bucketMomentum": _accuracy_bucket(trades, "momentum"),
+        "bucketPatternBias": _accuracy_bucket(trades, "patternBias"),
+        "bucketDirectionBias": _accuracy_bucket(trades, "directionBias"),
+        "bucketSideLong": _accuracy_bucket(trades, "tvSignal", "LONG"),
+        "bucketSideShort": _accuracy_bucket(trades, "tvSignal", "SHORT"),
+    }
+
+
+router.add_api_route('/entry-accuracy', entry_accuracy, methods=['GET'])
 
 
 router.add_api_route('/risk-config', lambda: _route_getter('get_risk_config')(), methods=['GET'])

@@ -97,6 +97,7 @@ def entry_snapshot_from_intel(
         intel = {}
     candles = intel.get("candles") if isinstance(intel.get("candles"), dict) else {}
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mm = intel.get("momentum") if isinstance(intel.get("momentum"), dict) else {}
     snap = {
         "entrySymbol": str(symbol or intel.get("symbol") or "").upper().strip(),
         "entrySide": str(side or intel.get("signal") or "").upper().strip(),
@@ -106,9 +107,21 @@ def entry_snapshot_from_intel(
         "entryConfidence": float(intel.get("confidence", 0.0) or 0.0),
         "entryScore": float(intel.get("score", intel.get("weightedScore", 0.0)) or 0.0),
         "entrySpreadBps": float(ex.get("spreadBps", 0.0) or 0.0),
-        "entryMomentumPct": float(ex.get("momentumPct", 0.0) or 0.0),
+        "entryMomentumPct": float(mm.get("momentumPct", 0.0) or 0.0),
         "entryDecisionAt": int(time.time()),
     }
+    try:
+        _db = intel.get("directionBias") if isinstance(intel.get("directionBias"), dict) else {}
+        if _db:
+            snap["entryDirectionBias"] = str(_db.get("bias", "") or "").upper()
+            snap["entryDirectionBiasStrength"] = float(_db.get("strength", 0.0) or 0.0)
+            snap["entryDirectionBiasRegime"] = str(_db.get("regime", "") or "").upper()
+            _entry = _db.get("entry") if isinstance(_db.get("entry"), dict) else {}
+            if _entry:
+                snap["entryDirectionBiasAction"] = str(_entry.get("action", "") or "").upper()
+                snap["entryDirectionBiasKeyword"] = str(_entry.get("keyword", "") or "").lower()
+    except Exception:
+        pass
     try:
         _tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
         if not _tv:

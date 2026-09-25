@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 24
+CONFIG_VERSION = 25
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -411,6 +411,20 @@ _FORCE_DEFAULTS_V24: dict = {
     # (+1.66, WR 61.6%). Block SHORT entries when TV strength < shortTvMinStrength.
     # shortTvMinStrength=0.90 eliminates the -15.4 USDT SHORT structural loss.
     "shortTvMinStrength": 0.90,
+}
+
+
+_FORCE_DEFAULTS_V25: dict = {
+    # V25: LONG strength/confidence parity + direction-bias telemetry (2026-09-25).
+    # 90d replay: LONG WR 66.6% but only tvStrength>=0.90 LONG (WR 72.3%) was
+    # robust; sub-0.90 LONG lost money. Emulate the SHORT gate with a LONG one.
+    # tvEntryMinConfidence 0.60 -> 0.70 matches main.py's built-in default and the
+    # SHORT floor (shortTvMinConfidence=0.70); 0.60-0.69 TV-conf LONG was weak.
+    # LONG with a negative pattern bias (< -0.002) was structurally loss-making
+    # (patternBias<0 WR 42.6%); block those entries before they open.
+    "tvLongMinStrength": 0.90,
+    "tvEntryMinConfidence": 0.70,
+    "longPatternBiasMin": -0.002,
 }
 
 
@@ -898,6 +912,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 24:
             for _fk, _fv in _FORCE_DEFAULTS_V24.items():
+                out[_fk] = _fv
+        if _stored_ver < 25:
+            for _fk, _fv in _FORCE_DEFAULTS_V25.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

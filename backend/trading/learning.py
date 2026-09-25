@@ -960,11 +960,12 @@ def _last_decision_entry_metrics(symbol: str | None = None) -> dict:
     if not isinstance(intel, dict):
         return {}
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
+    mm = intel.get("momentum") if isinstance(intel.get("momentum"), dict) else {}
     return {
         "confidence": float(intel.get("confidence", 0.0) or 0.0),
         "score": float(intel.get("score", intel.get("weightedScore", 0.0)) or 0.0),
         "spreadBps": float(ex.get("spreadBps", 0.0) or 0.0),
-        "momentumPct": float(ex.get("momentumPct", 0.0) or 0.0),
+        "momentumPct": float(mm.get("momentumPct", 0.0) or 0.0),
     }
 
 
