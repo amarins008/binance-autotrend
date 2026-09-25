@@ -61,13 +61,17 @@ REM   Must catch BOTH launch styles:
 REM     - run_backend.py / launcher.py (classic bat start)
 REM     - `python -m uvicorn main:app` (spawned by /system/restart)
 REM   Otherwise the restarted uvicorn survives and we get TWO servers on 8020.
-echo [1/5] Stopping any existing services on 8020/8021...
+echo [1/6] Stopping any existing services on 8020/8021...
 for %%P in (8020 8021) do (
     for /f "tokens=5" %%I in ('netstat -aon ^| findstr ":%P " ^| findstr LISTENING 2^>nul') do (
         taskkill /PID %%I /F /T >nul 2>&1
     )
 )
 powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $re='run_backend\.py|launcher\.py|uvicorn main:app'; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'cmd.exe') -and $_.CommandLine -match $re } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+REM --- Stop any laya sidecar (port 8790) for a clean restart ---
+for /f "tokens=5" %%I in ('netstat -aon ^| findstr ":8790 " ^| findstr LISTENING 2^>nul') do (
+    taskkill /PID %%I /F /T >nul 2>&1
+)
 REM --- Clear PID files (safety net for single-instance guard) ---
 if exist "%BACKEND%\.standalone\backend.pid" del /f "%BACKEND%\.standalone\backend.pid" >nul 2>&1
 call :wait_port_free 8020 10
@@ -76,7 +80,7 @@ echo       done.
 echo.
 
 REM --- Step 2: Ensure firewall rule for port 8020 -------------------------
-echo [2/5] Checking firewall rule for port 8020...
+echo [2/6] Checking firewall rule for port 8020...
 netsh advfirewall firewall show rule name="BinanceAutoTrade-8020" >nul 2>&1
 if errorlevel 1 (
     echo       Creating firewall rule...
@@ -91,8 +95,23 @@ if errorlevel 1 (
 )
 echo.
 
-REM --- Step 3: Start backend on port 8020 ----------------------------
-echo [3/5] Starting backend (port 8020, binding 0.0.0.0)...
+REM --- Step 3: Start laya sidecar (port 8790, shadow observer) ----------
+echo [3/6] Starting laya sidecar (port 8790)...
+if exist "%USERPROFILE%\.venv\Scripts\python.exe" (
+    start /min "Laya sidecar (8790)" "%USERPROFILE%\.venv\Scripts\python.exe" "%BACKEND%\laya_sidecar.py" --port 8790
+    powershell -NoProfile -Command "for($i=0;$i -lt 25;$i++){ try{ (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8790/health' -TimeoutSec 1).StatusCode | Out-Null; exit 0 }catch{ Start-Sleep -Seconds 1 } }; exit 1" >nul 2>&1
+    if errorlevel 1 (
+        echo       [WARN] laya sidecar not healthy on 8790 after 25s (first run downloads checkpoint; shadow observer will skip until it is up).
+    ) else (
+        echo       laya sidecar ready.
+    )
+) else (
+    echo       [WARN] laya venv not found at %USERPROFILE%\.venv — shadow observer disabled.
+)
+echo.
+
+REM --- Step 4: Start backend on port 8020 ----------------------------
+echo [4/6] Starting backend (port 8020, binding 0.0.0.0)...
 set "PYTHONUTF8=1"
 start /min "Binance Backend (8020)" ".venv\Scripts\python.exe" run_backend.py
 echo       waiting for port 8020...
@@ -105,8 +124,8 @@ if errorlevel 1 (
 echo       backend ready.
 echo.
 
-REM --- Step 4: Start launcher on port 8021 ---------------------------
-echo [4/5] Starting launcher (port 8021)...
+REM --- Step 5: Start launcher on port 8021 ---------------------------
+echo [5/6] Starting launcher (port 8021)...
 start /min "Binance Launcher (8021)" ".venv\Scripts\python.exe" launcher.py
 echo       waiting for port 8021...
 call :wait_for_port 8021 %HEALTH_TIMEOUT%
@@ -118,8 +137,8 @@ if errorlevel 1 (
 )
 echo.
 
-REM --- Step 5: Open dashboard in browser -----------------------------
-echo [5/5] Opening dashboard...
+REM --- Step 6: Open dashboard in browser -----------------------------
+echo [6/6] Opening dashboard...
 start "" "http://127.0.0.1:8020/dashboard/"
 echo.
 
@@ -129,8 +148,9 @@ echo     - Dashboard (local)  : http://127.0.0.1:8020/dashboard/
 echo     - Dashboard (mobile) : use this PC's Tailscale IP
 echo     - Backend health     : http://127.0.0.1:8020/health
 echo     - Launcher (8021)    : watchdog target
-echo     - TradingView MCP    : ENABLED
-echo     - Direction bias dbg : http://127.0.0.1:8020/debug/direction-bias?symbol=BTCUSDT
+    echo     - TradingView MCP    : ENABLED
+    echo     - Laya shadow sidecar: http://127.0.0.1:8790/health
+    echo     - Direction bias dbg : http://127.0.0.1:8020/debug/direction-bias?symbol=BTCUSDT
 echo.
 echo   To stop: run "Kill Binance AutoTrade.bat" from Desktop.
 echo =====================================================
