@@ -4118,6 +4118,129 @@
 
     }
 
+    /* ============================================================
+       MOBILE-FIRST OVERRIDES — appended LAST so they win the cascade
+       no matter what earlier (possibly conflicting) rules declared.
+       ============================================================ */
+
+    @media (max-width: 1100px) {
+
+      .office-topbar {
+
+        grid-template-columns: 1fr;
+
+        gap: 6px;
+
+      }
+
+      .office-topbar > .office-daily-kpis {
+
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+
+        min-width: 0;
+
+      }
+
+      .office-daily-kpi { min-width: 0; }
+
+      .kanban-row { grid-template-columns: repeat(2, 1fr); }
+
+    }
+
+    @media (max-width: 920px) {
+
+      .vo-app { grid-template-columns: 1fr; }
+
+      .vo-sidebar {
+
+        position: relative;
+
+        top: auto;
+
+        width: 100%;
+
+        height: auto;
+
+        max-height: none;
+
+        border-right: 0;
+
+        border-bottom: 2px solid #123b63;
+
+      }
+
+      .vo-sidebar .vo-status-grid { grid-template-columns: repeat(3, 1fr); }
+
+      .vo-sidebar .vo-kpi-mini {
+
+        grid-template-columns: repeat(3, 1fr);
+
+      }
+
+      .vo-sidebar .vo-kpi-mini .metric.margin { grid-column: auto; }
+
+      .vo-main { padding: 8px 10px 14px; }
+
+    }
+
+    @media (max-width: 760px) {
+
+      .trading-office-card { padding: 8px; }
+
+      .neuron-brain { min-height: 520px; }
+
+      .office-brand b { font-size: 14px; }
+
+      .office-brand span, .office-status span { font-size: 9px; }
+
+      .office-status { min-height: 0; }
+
+    }
+
+    @media (max-width: 560px) {
+
+      /* Slim sidebar: brand + tabs on one row, hide dense status rows. */
+
+      .vo-sidebar .vo-status-panel { display: none; }
+
+      .vo-sidebar .vo-controls .conn { flex-wrap: wrap; }
+
+      .vo-field-grid { grid-template-columns: 1fr 1fr; }
+
+      .vo-sidebar .vo-kpi-mini .metric .val { font-size: 10px; }
+
+    }
+
+    @media (max-width: 520px) {
+
+      .neuron-brain { min-height: 480px; }
+
+      .neuron { transform: translate(-50%, -50%) scale(.55); }
+
+      .neuron-sup { transform: translate(-50%, -50%) scale(.72); }
+
+      .neuron .label .nm { font-size: 9.5px; }
+
+      .kanban-row { grid-template-columns: 1fr; }
+
+      .office-daily-kpis { grid-template-columns: 1fr 1fr; }
+
+      .vo-main { padding: 4px 6px 10px; }
+
+      .log { font-size: 9.5px; }
+
+    }
+
+    @media (max-width: 390px) {
+
+      .neuron-brain { min-height: 440px; }
+
+      .office-daily-kpis { grid-template-columns: 1fr; }
+
+      .office-room .trading-agent { min-height: 110px; }
+
+    }
+
   </style>
 
 </head>

@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <title>System Monitor — Autotrend Lab</title>
+  <title>Monitor — TV / Bias / Entry Gate</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
@@ -63,11 +63,11 @@
     .btn.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
 
     /* ── Layout ── */
-    .main { padding: 12px; max-width: 960px; margin: 0 auto; }
+    .main { padding: 12px; max-width: 1040px; margin: 0 auto; }
     .grid { display: grid; gap: 8px; }
     .g2 { grid-template-columns: 1fr 1fr; }
     .g3 { grid-template-columns: 1fr 1fr 1fr; }
-    @media (max-width: 600px) { .g2, .g3 { grid-template-columns: 1fr; } }
+    @media (max-width: 640px) { .g2, .g3 { grid-template-columns: 1fr; } }
     .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px;
       color: var(--muted); padding: 12px 0 6px; display: flex; align-items: center; gap: 6px; }
     .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -78,12 +78,13 @@
     .card:hover { border-color: var(--border-2); }
     .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .card-title { font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 5px; }
-    .card-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: var(--r-full); }
+    .card-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: var(--r-full); white-space: nowrap; }
     .badge-ok { background: var(--green-dim); color: var(--green); }
     .badge-err { background: var(--red-dim); color: var(--red); }
     .badge-warn { background: var(--amber-dim); color: var(--amber); }
     .badge-info { background: var(--accent-dim); color: var(--accent); }
     .badge-purple { background: var(--purple-dim); color: var(--purple); }
+    .badge-cyan { background: var(--cyan-dim); color: var(--cyan); }
 
     /* ── KPI Row ── */
     .kpi-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -95,6 +96,18 @@
     .kpi-value.warn { color: var(--amber); }
     .kpi-value.accent { color: var(--accent); }
 
+    /* ── Gate verdict rows ── */
+    .gate-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+    .gate-row:last-child { border-bottom: none; }
+    .gate-ico { width: 18px; text-align: center; font-size: 12px; flex-shrink: 0; }
+    .gate-name { font-weight: 600; color: var(--text-2); min-width: 74px; }
+    .gate-obs { font-family: 'JetBrains Mono', monospace; color: var(--text); }
+    .gate-th { font-family: 'JetBrains Mono', monospace; color: var(--muted); font-size: 10px; }
+    .gate-detail { margin-left: auto; font-size: 9px; text-align: right; color: var(--muted); }
+    .verdict-ok { color: var(--green); font-weight: 700; }
+    .verdict-no { color: var(--red); font-weight: 700; }
+    .verdict-warn { color: var(--amber); font-weight: 700; }
+
     /* ── Table ── */
     .tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
     .tbl th { text-align: left; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
@@ -103,6 +116,7 @@
       font-size: 11px; white-space: nowrap; }
     .tbl tr:last-child td { border-bottom: none; }
     .tbl tr:hover td { background: var(--surface-2); }
+    .tbl-wrap { margin-top: 8px; overflow-x: auto; }
     .mono { font-family: 'JetBrains Mono', monospace; }
     .dim { color: var(--muted); }
     .text-right { text-align: right; }
@@ -124,6 +138,13 @@
     .error-banner { background: var(--red-dim); border: 1px solid rgba(239,68,68,.3); border-radius: var(--r);
       padding: 10px 14px; color: var(--red); font-size: 12px; margin-bottom: 8px; }
 
+    /* ── Skip / message banner ── */
+    .skip-banner { margin-top: 8px; padding: 7px 10px; border-radius: var(--r-sm); font-size: 11px;
+      border: 1px solid var(--border); }
+    .skip-banner.block { background: var(--red-dim); border-color: rgba(239,68,68,.25); color: var(--red); }
+    .skip-banner.warn { background: var(--amber-dim); border-color: rgba(245,158,11,.25); color: var(--amber); }
+    .skip-banner.ok { background: var(--green-dim); border-color: rgba(34,197,94,.25); color: var(--green); }
+
     /* ── Footer ── */
     .footer { text-align: center; padding: 16px; font-size: 10px; color: var(--dim); }
 
@@ -137,7 +158,7 @@
   <header class="hdr">
     <div class="hdr-left">
       <div class="brand-icon">🔍</div>
-      <span class="brand-name">System Monitor</span>
+      <span class="brand-name">Monitor</span>
       <span class="brand-sub" id="lastUpdate">—</span>
     </div>
     <div class="hdr-right">
@@ -152,12 +173,13 @@
     <div class="loading" id="loadingState">กำลังโหลดข้อมูล...</div>
   </div>
 
-  <div class="footer">Autotrend Lab · System Monitor · Auto-refresh every 5s</div>
+  <div class="footer">Autotrend Lab · TV / Direction Bias / Entry Gate Monitor · Auto-refresh every 5s</div>
 
   <script>
     let autoRefresh = true;
     let refreshTimer = null;
     let paused = false;
+    let lastData = null;
 
     function toggleAuto() {
       autoRefresh = !autoRefresh;
@@ -175,308 +197,478 @@
       else if (autoRefresh) startRefresh();
     }
 
-    function startRefresh() {
-      stopRefresh();
-      refreshTimer = setInterval(fetchData, 5000);
-    }
-
-    function stopRefresh() {
-      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-    }
+    function startRefresh() { stopRefresh(); refreshTimer = setInterval(fetchData, 5000); }
+    function stopRefresh() { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } }
 
     async function fetchData() {
       try {
-        const r = await fetch('/monitor');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const d = await r.json();
-        render(d);
+        const [s, c, a] = await Promise.all([
+          fetch('/autotrade/status-lite').then(r => { if (!r.ok) throw new Error('status-lite HTTP ' + r.status); return r.json(); }),
+          fetch('/autotrade/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(r => { if (!r.ok) throw new Error('config HTTP ' + r.status); return r.json(); }),
+          fetch('/entry-accuracy').then(r => { if (!r.ok) throw new Error('accuracy HTTP ' + r.status); return r.json(); })
+        ]);
+        lastData = { s, cfg: (c && c.config) || {}, acc: a };
+        render(lastData);
       } catch (e) {
         document.getElementById('sysStatus').className = 'status-pill err';
         document.getElementById('sysStatusText').textContent = 'ERROR';
         document.getElementById('loadingState').innerHTML =
-          `<div class="error-banner">เชื่อมต่อไม่ได้: ${e.message}</div>`;
+          `<div class="error-banner">เชื่อมต่อไม่ได้: ${esc(e.message)}</div>`;
       }
     }
 
     function render(d) {
       const app = document.getElementById('app');
       document.getElementById('loadingState')?.remove();
-
-      // Update header
-      document.getElementById('lastUpdate').textContent =
-        new Date(d.ts * 1000).toLocaleTimeString('th-TH', { hour12: false });
+      const s = d.s;
+      document.getElementById('lastUpdate').textContent = `· ${new Date().toLocaleTimeString('th-TH', { hour12: false })}`;
       const sp = document.getElementById('sysStatus');
-      if (d.system.running) { sp.className = 'status-pill ok'; document.getElementById('sysStatusText').textContent = 'RUNNING'; }
-      else if (d.system.paused) { sp.className = 'status-pill warn'; document.getElementById('sysStatusText').textContent = 'PAUSED'; }
+      if (s.running) { sp.className = 'status-pill ok'; document.getElementById('sysStatusText').textContent = 'RUNNING'; }
+      else if (s.pauseUntil && s.pauseUntil * 1000 > Date.now()) { sp.className = 'status-pill warn'; document.getElementById('sysStatusText').textContent = 'PAUSED'; }
       else { sp.className = 'status-pill err'; document.getElementById('sysStatusText').textContent = 'STOPPED'; }
-
       app.innerHTML = buildHTML(d);
     }
 
     function esc(s) { return String(s ?? '—').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function ago(sec) { return sec != null ? (sec < 60 ? `${Math.round(sec)}s` : `${Math.round(sec/60)}m`) : '—'; }
+    function pct(v) { return v != null ? (v).toFixed(2) + '%' : '—'; }
     function pnlColor(v) { return v > 0 ? 'good' : v < 0 ? 'bad' : ''; }
-    function fmtPnl(v) { return v > 0 ? `+$${v.toFixed(2)}` : v < 0 ? `-$${Math.abs(v).toFixed(2)}` : '$0.00'; }
+    function fmtPnl(v) { return v != null ? (v > 0 ? `+$${v.toFixed(2)}` : v < 0 ? `-$${Math.abs(v).toFixed(2)}` : '$0.00') : '—'; }
+    function num(v, n = 2) { return v != null ? Number(v).toFixed(n) : '—'; }
+
+    // ── Gate verdicts ──────────────────────────────────────────────
+    // side: decision side ('LONG'/'SHORT'), intel: lastDecision.intel
+    function gateRows(s, cfg, intel, side) {
+      const rows = [];
+      const tv = intel?.tv || {};
+      const bias = intel?.directionBias || {};
+      const conf = intel?.confidence;
+      const confGateEnabled = cfg.allowShorts ? (side === 'SHORT' ? (cfg.shortMinConfidence ?? cfg.minConfidence) : cfg.minConfidence) : cfg.minConfidence;
+
+      // ── 1. Confidence gate
+      {
+        const min = cfg.minConfidence;
+        const shortMin = cfg.shortMinConfidence;
+        const eff = side === 'SHORT' && shortMin != null ? shortMin : min;
+        const pass = conf != null && conf >= eff;
+        rows.push({
+          ico: pass ? '✅' : '⛔',
+          name: 'Confidence',
+          obs: pct(conf),
+          th: `≥ ${pct(eff)}`,
+          verdict: pass ? 'PASS' : 'FAIL',
+          vCls: pass ? 'verdict-ok' : 'verdict-no'
+        });
+      }
+      // ── 2. TV strength / confidence gate
+      {
+        const tvSig = tv.signal || '—';
+        const needStrength = side === 'SHORT' ? (cfg.shortTvMinStrength ?? 0.9) : null;
+        const needConf = side === 'SHORT' ? (cfg.shortTvMinConfidence ?? cfg.tvEntryMinConfidence) : cfg.tvEntryMinConfidence;
+        const maxAge = cfg.tvEntryMaxAgeSec;
+        const pass = tvSig !== 'WAIT' && tv.blocked === false &&
+          (tv.confidence >= needConf) &&
+          (needStrength == null || tv.strength >= needStrength) &&
+          (tv.age <= maxAge);
+        rows.push({
+          ico: pass ? '✅' : '⛔',
+          name: 'TV Gate',
+          obs: `${esc(tvSig)} ${pct(tv.confidence)}${needStrength != null ? ' S:' + num(tv.strength) : ''}`,
+          th: needStrength != null ? `conf≥${pct(needConf)} S≥${num(needStrength)} age≤${maxAge}s` : `conf≥${pct(needConf)} age≤${maxAge}s`,
+          verdict: pass ? 'PASS' : tv.blocked ? 'BLOCKED' : 'FAIL',
+          vCls: pass ? 'verdict-ok' : 'verdict-no'
+        });
+      }
+      // ── 3. Direction bias gate
+      {
+        const on = cfg.biasGateEnabled === true;
+        const bs = bias.bias || '—';
+        const st = bias.strength ?? 0;
+        const minSt = cfg.biasGateMinStrength ?? 0.25;
+        const neutralMin = cfg.biasGateNeutralConfMin ?? 0.8;
+        let pass, note;
+        if (!on) {
+          pass = true; note = 'gate disabled';
+        } else if (bs === side) {
+          pass = true; note = `${bs} matches side`;
+        } else if (bs === 'NEUTRAL') {
+          pass = conf != null && conf >= neutralMin;
+          note = `NEUTRAL needs conf≥${pct(neutralMin)}`;
+        } else {
+          pass = false; note = `${bs} opposes ${side}`;
+        }
+        rows.push({
+          ico: on ? (pass ? '✅' : '⛔') : '➖',
+          name: 'Bias Gate',
+          obs: `${esc(bs)} ${pct(st)}${bias.regime ? ' [' + esc(bias.regime) + ']' : ''}`,
+          th: on ? `minSt≥${num(minSt)} ${note}` : 'off',
+          verdict: pass ? 'PASS' : 'FAIL',
+          vCls: pass ? 'verdict-ok' : 'verdict-no'
+        });
+      }
+      // ── 4. Momentum gate (soft)
+      {
+        const momo = intel?.momentum?.momentumPct;
+        const pass = momo == null || momo >= -0.5; // soft floor, guard vs strong reversal
+        rows.push({
+          ico: pass ? '✅' : '⚠️',
+          name: 'Momentum',
+          obs: momo != null ? pct(momo) : '—',
+          th: 'soft ≥ -0.5%',
+          verdict: pass ? 'OK' : 'WEAK',
+          vCls: pass ? 'verdict-ok' : 'verdict-warn'
+        });
+      }
+      // ── 5. TV freshness
+      {
+        const age = tv.age;
+        const maxAge = cfg.tvEntryMaxAgeSec ?? 30;
+        const pass = age != null && age <= maxAge;
+        rows.push({
+          ico: pass ? '✅' : '⛔',
+          name: 'TV Age',
+          obs: `${ago(age)}`,
+          th: `≤ ${maxAge}s`,
+          verdict: pass ? 'PASS' : 'STALE',
+          vCls: pass ? 'verdict-ok' : 'verdict-no'
+        });
+      }
+      return rows;
+    }
+
+    function biasTimeframe(tf) {
+      if (!tf) return '';
+      const dir = (tf.emaDir || '—').toString();
+      const c = dir === 'UP' ? 'good' : dir === 'DOWN' ? 'bad' : 'warn';
+      return `<span class="kpi-value ${c}">${dir}</span>`;
+    }
+
+    // ── Entry-accuracy bucket table ────────────────────────────────
+    function accTable(title, rows) {
+      if (!rows || !rows.length) return '';
+      const maxN = Math.max(...rows.map(r => r.trades));
+      let out = `<div style="margin-top:8px">
+        <div style="font-size:10px;font-weight:700;color:var(--accent);margin-bottom:4px">${esc(title)}</div>
+        <div class="tbl-wrap"><table class="tbl"><tr><th>Condition</th><th>N</th><th>W/L</th><th>WR%</th><th>PnL</th></tr>`;
+      for (const r of rows) {
+        const bar = maxN > 0 ? Math.max(4, Math.round(60 * r.trades / maxN)) : 0;
+        const wrHot = r.winRatePct >= 60;
+        const wrMid = r.winRatePct >= 45;
+        out += `<tr>
+          <td style="font-weight:600">${esc(r.key)}</td>
+          <td><span style="display:inline-block;min-width:0;vertical-align:middle">
+            ${r.trades}</span><span style="display:inline-block;height:6px;width:${bar}px;border-radius:3px;margin-left:5px;background:${r.winRatePct >= 55 ? 'var(--green)' : r.winRatePct >= 45 ? 'var(--amber)' : 'var(--red)'};opacity:.5"></span></td>
+          <td class="dim">${r.wins}/${r.losses}</td>
+          <td style="color:${wrHot ? 'var(--green)' : wrMid ? 'var(--amber)' : 'var(--red)'};font-weight:600">${r.winRatePct}%</td>
+          <td class="${r.pnl >= 0 ? 'good' : 'bad'}" style="font-weight:600">${fmtPnl(r.pnl)}</td>
+        </tr>`;
+      }
+      out += `</table></div></div>`;
+      return out;
+    }
 
     function buildHTML(d) {
+      const s = d.s;
+      const cfg = d.cfg;
+      const acc = d.acc || {};
+      const intel = s.lastDecision?.intel || {};
+      const side = intel.signal || '—';
+      const tv = intel.tv || {};
+      const bias = intel.directionBias || {};
+      const lastSkip = s.lastSkip || {};
+      const board = s.scanBoard || [];
+      const positions = s.openLivePositions || [];
+      const agents = s.hermesAgents || [];
+      const review = s.hermesSupervisorReview || {};
+      const kpi = s.kpiToday?.live || {};
+      const risk = s.riskLimits || {};
+      const gates = gateRows(s, cfg, intel, side);
+
       let h = '';
 
-      // ═══════ SYSTEM HEALTH ═══════
+      // ═══════ SYSTEM ═══════
       h += `<div class="section-title">⚡ สถานะระบบ</div>`;
       h += `<div class="card fade-in">
         <div class="card-header">
-          <div class="card-title">🖥️ System Health</div>
-          <div class="card-badge ${d.system.running ? 'badge-ok' : d.system.paused ? 'badge-warn' : 'badge-err'}">
-            ${d.system.running ? 'RUNNING' : d.system.paused ? 'PAUSED' : 'STOPPED'}
-          </div>
+          <div class="card-title">🖥️ Bot Status</div>
+          <div class="card-badge ${s.running ? 'badge-ok' : 'badge-err'}">${s.running ? 'RUNNING' : 'STOPPED'}</div>
         </div>
         <div class="kpi-row">
-          <div class="kpi"><span class="kpi-label">Mode</span><span class="kpi-value ${d.system.mode === 'LIVE' ? 'good' : 'warn'}">${d.system.mode}</span></div>
-          <div class="kpi"><span class="kpi-label">Uptime</span><span class="kpi-value">${d.system.uptimeMin}m</span></div>
-          <div class="kpi"><span class="kpi-label">Session</span><span class="kpi-value mono" style="font-size:10px">${esc(d.system.sessionId?.slice(0,12))}</span></div>
-          <div class="kpi"><span class="kpi-label">Trades</span><span class="kpi-value">${d.system.tradesThisSession}</span></div>
-          <div class="kpi"><span class="kpi-label">Daily PnL</span><span class="kpi-value ${pnlColor(d.system.dailyPnl)}">${fmtPnl(d.system.dailyPnl)}</span></div>
-          <div class="kpi"><span class="kpi-label">Errors</span><span class="kpi-value ${d.system.errorStreakCritical ? 'bad' : d.system.consecutiveErrors > 0 ? 'warn' : ''}">${d.system.consecutiveErrors}</span></div>
-          <div class="kpi"><span class="kpi-label">Last Trade</span><span class="kpi-value dim">${ago(d.system.lastTradeAgeSec)}</span></div>
-          <div class="kpi"><span class="kpi-label">Open Only</span><span class="kpi-value ${d.system.manageOpenOnly ? 'warn' : ''}">${d.system.manageOpenOnly ? 'YES' : 'No'}</span></div>
+          <div class="kpi"><span class="kpi-label">Mode</span><span class="kpi-value ${(cfg.executionMode || '')==='LIVE' ? 'good' : 'warn'}">${esc(cfg.executionMode || '—')}</span></div>
+          <div class="kpi"><span class="kpi-label">Decision</span><span class="kpi-value">${intel.symbol ? `${esc(intel.symbol)}` : '—'}</span></div>
+          <div class="kpi"><span class="kpi-label">Side</span><span class="kpi-value ${side === 'LONG' ? 'good' : side === 'SHORT' ? 'bad' : 'warn'}">${esc(side)}</span></div>
+          <div class="kpi"><span class="kpi-label">Conf</span><span class="kpi-value accent">${pct(intel.confidence)}</span></div>
+          <div class="kpi"><span class="kpi-label">Trades/hour</span><span class="kpi-value">${s.tradesLastHour ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">Daily PnL</span><span class="kpi-value ${pnlColor(s.liveDailyPnl)}">${fmtPnl(s.liveDailyPnl)}</span></div>
+          <div class="kpi"><span class="kpi-label">Errors</span><span class="kpi-value ${s.consecutiveErrors > 3 ? 'bad' : s.consecutiveErrors > 0 ? 'warn' : 'good'}">${s.consecutiveErrors ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">Session</span><span class="kpi-value mono" style="font-size:10px">${esc(String(s.sessionId || '—').slice(0, 8))}</span></div>
         </div>
       </div>`;
 
-      // ═══════ TRADINGVIEW ═══════
-      h += `<div class="section-title">📡 TradingView</div>`;
-      const tv = d.tradingview;
-      const tvOk = tv.healthy && !tv.autoDisabled && !tv.failCountCritical;
+      // ═══════ ENTRY GATES (last decision) ═══════
+      h += `<div class="section-title">🚪 Entry Gates — ${intel.symbol || 'last decision'}</div>`;
       h += `<div class="card fade-in">
         <div class="card-header">
-          <div class="card-title">📊 TV Integration</div>
-          <div class="card-badge ${tvOk ? 'badge-ok' : tv.autoDisabled ? 'badge-err' : 'badge-warn'}">
-            ${tvOk ? 'HEALTHY' : tv.autoDisabled ? 'DISABLED' : tv.enabled ? 'DEGRADED' : 'OFF'}
+          <div class="card-title">🧮 Gate Verdict · ${esc(side)}</div>
+          <div class="card-badge ${gates.every(g => g.verdict === 'PASS' || g.verdict === 'OK') ? 'badge-ok' : 'badge-err'}">
+            ${gates.filter(g => g.verdict === 'PASS' || g.verdict === 'OK').length}/${gates.length} PASS
           </div>
-        </div>
-        <div class="kpi-row">
-          <div class="kpi"><span class="kpi-label">Enabled</span><span class="kpi-value ${tv.enabled ? 'good' : 'bad'}">${tv.enabled ? 'Yes' : 'No'}</span></div>
-          <div class="kpi"><span class="kpi-label">Failures</span><span class="kpi-value ${tv.failCountCritical ? 'bad' : tv.failCount > 0 ? 'warn' : ''}">${tv.failCount ?? 0}/${tv.tradingviewMaxFailures ?? 5}</span></div>
-          <div class="kpi"><span class="kpi-label">Cache</span><span class="kpi-value">${tv.cacheSize ?? 0}</span></div>
-          <div class="kpi"><span class="kpi-label">TA Available</span><span class="kpi-value ${tv.tradingviewTaAvailable ? 'good' : 'bad'}">${tv.tradingviewTaAvailable ? 'Yes' : 'No'}</span></div>
-          <div class="kpi"><span class="kpi-label">Last Check</span><span class="kpi-value dim">${ago(tv.lastCheckAgeSec)}</span></div>
         </div>`;
-      // TV Features
-      if (tv.features) {
-        h += `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">`;
-        for (const [k, v] of Object.entries(tv.features)) {
-          h += `<span class="card-badge ${v ? 'badge-ok' : 'badge-err'}" style="font-size:9px">${k}: ${v ? 'ON' : 'OFF'}</span>`;
-        }
-        h += `</div>`;
+      for (const g of gates) {
+        h += `<div class="gate-row">
+          <span class="gate-ico">${g.ico}</span>
+          <span class="gate-name">${g.name}</span>
+          <span class="gate-obs">${g.obs}</span>
+          <span class="gate-th">${g.th}</span>
+          <span class="gate-detail ${g.vCls}">${g.verdict}</span>
+        </div>`;
       }
-      // Recent signals
-      if (tv.recentSignals?.length) {
-        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Signal</th><th>Conf</th><th>Age</th></tr>`;
-        for (const s of tv.recentSignals) {
-          const sigColor = s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--muted)';
-          h += `<tr><td>${esc(s.symbol)}</td><td style="color:${sigColor};font-weight:600">${esc(s.signal)}</td><td>${(s.confidence*100).toFixed(1)}%</td><td class="dim">${ago(s.ageSec)}</td></tr>`;
-        }
-        h += `</table></div>`;
+      // Last skip banner
+      if (lastSkip.code) {
+        const isBlock = /block|fail|reject/i.test(lastSkip.code || '');
+        h += `<div class="skip-banner ${isBlock ? 'block' : 'warn'}">
+          <b>lastSkip:</b> [${esc(lastSkip.code)}] ${ago(Math.round(Date.now()/1000) - (lastSkip.ts||0))} ago — ${esc(lastSkip.msg || '')}
+        </div>`;
+      } else {
+        h += `<div class="skip-banner ok"><b>No skip recorded</b> — decision passed gates</div>`;
       }
       h += `</div>`;
 
-      // ═══════ ENTRY PIPELINE ═══════
-      h += `<div class="section-title">🚪 Entry Pipeline</div>`;
-      const en = d.entry;
+      // ═══════ DIRECTION BIAS ═══════
+      h += `<div class="section-title">🧭 Direction Bias</div>`;
+      const biasColors = { LONG: 'good', SHORT: 'bad', NEUTRAL: 'warn' };
       h += `<div class="card fade-in">
         <div class="card-header">
-          <div class="card-title">📋 Pipeline Status</div>
-          <div class="card-badge badge-info">${en.scanBoardQualified}/${en.scanBoardCount} qualified</div>
+          <div class="card-title">📈 M15/M30 Structure</div>
+          <div class="card-badge ${(bias.bias || '—') === (side || '—') ? 'badge-ok' : (bias.bias || '') === 'NEUTRAL' ? 'badge-warn' : 'badge-err'}">${esc(bias.bias || '—')}</div>
         </div>
         <div class="kpi-row">
-          <div class="kpi"><span class="kpi-label">Last Decision</span><span class="kpi-value">${en.lastDecisionSymbol ? `${esc(en.lastDecisionSymbol)} ${esc(en.lastDecisionSide)}` : '—'}</span></div>
-          <div class="kpi"><span class="kpi-label">Decision Age</span><span class="kpi-value dim">${ago(en.lastDecisionAgeSec)}</span></div>
-          <div class="kpi"><span class="kpi-label">Has Trade</span><span class="kpi-value ${en.lastDecisionHasTrade ? 'good' : ''}">${en.lastDecisionHasTrade ? 'Yes' : 'No'}</span></div>
-          <div class="kpi"><span class="kpi-label">Last Skip</span><span class="kpi-value ${en.lastSkipCode ? 'warn' : ''}">${en.lastSkipCode ? esc(en.lastSkipCode) : '—'}</span></div>
-          <div class="kpi"><span class="kpi-label">Skip Age</span><span class="kpi-value dim">${ago(en.lastSkipAgeSec)}</span></div>
+          <div class="kpi"><span class="kpi-label">Bias</span><span class="kpi-value ${biasColors[bias.bias] || ''}">${esc(bias.bias)}</span></div>
+          <div class="kpi"><span class="kpi-label">Strength</span><span class="kpi-value ${bias.strength >= (cfg.biasGateMinStrength||0.25) ? 'good' : 'warn'}">${num(bias.strength)}</span></div>
+          <div class="kpi"><span class="kpi-label">Regime</span><span class="kpi-value accent">${esc(bias.regime || '—')}</span></div>
+          <div class="kpi"><span class="kpi-label">Zone Action</span><span class="kpi-value">${esc(bias.entry?.action || '—')}</span></div>
+          <div class="kpi"><span class="kpi-label">Keyword</span><span class="kpi-value warn" style="font-size:10px">${esc(bias.entry?.keyword || '—')}</span></div>
+          <div class="kpi"><span class="kpi-label">Padding</span><span class="kpi-value">${bias.entry?.pullbackDistAtr ? num(bias.entry.pullbackDistAtr) : '—'}</span></div>
         </div>`;
-      // Scan board
-      if (en.scanBoardSymbols?.length) {
-        h += `<div style="margin-top:8px;"><span class="dim" style="font-size:10px">Scan Board:</span> `;
-        h += en.scanBoardSymbols.map(s => `<span class="card-badge badge-info" style="font-size:10px">${esc(s)}</span>`).join(' ');
+        // M15 / M30 cards
+        const tfHtml = (label, tf) => {
+          if (!tf) return '';
+          const dir = (tf.emaDir || '—').toString();
+          const dCls = dir === 'UP' ? 'good' : dir === 'DOWN' ? 'bad' : 'warn';
+          const struct = (tf.structure || '—').toString();
+          const sCls = struct === 'UP' ? 'good' : struct === 'DOWN' ? 'bad' : 'warn';
+          return `<div class="card" style="flex:1">
+            <div class="card-header"><div class="card-title">${label}</div>
+              <div class="card-badge ${dCls === 'good' ? 'badge-ok' : dCls === 'bad' ? 'badge-err' : 'badge-warn'}">EMA ${dir}</div>
+            </div>
+            <div class="kpi-row">
+              <div class="kpi"><span class="kpi-label">Structure</span><span class="kpi-value ${sCls}">${struct}</span></div>
+              <div class="kpi"><span class="kpi-label">EMA Gap</span><span class="kpi-value">${pct(tf.emaGapPct)}</span></div>
+              <div class="kpi"><span class="kpi-label">Confirms</span><span class="kpi-value">${tf.confirmations ?? 0}</span></div>
+              <div class="kpi"><span class="kpi-label">ATR</span><span class="kpi-value dim">${num(tf.atrLast)}</span></div>
+            </div>
+          </div>`;
+        };
+        h += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">`;
+        h += tfHtml('15m', bias.timeframes?.['15m']);
+        h += tfHtml('30m', bias.timeframes?.['30m']);
         h += `</div>`;
-      }
-      // Per-symbol decisions
-      const syms = Object.entries(en.perSymbolDecisions || {});
-      if (syms.length) {
-        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Signal</th><th>Conf</th><th>Trade</th><th>Age</th></tr>`;
-        for (const [sym, dec] of syms.slice(0, 10)) {
-          h += `<tr><td>${esc(sym)}</td><td>${esc(dec.signal ?? '—')}</td><td>${dec.confidence ? (dec.confidence*100).toFixed(1)+'%' : '—'}</td><td>${dec.hasTrade ? '✅' : '—'}</td><td class="dim">${ago(dec.ageSec)}</td></tr>`;
+      h += `</div>`;
+
+      // ═══════ TRADINGVIEW SIGNAL ═══════
+      h += `<div class="section-title">📡 TradingView Signal</div>`;
+      const tvSig = tv.signal || '—';
+      const tvBlocked = tv.blocked === true;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">📊 TV Gauge · ${intel.symbol || 'last decision'}</div>
+          <div class="card-badge ${tvBlocked ? 'badge-warn' : tvSig === 'WAIT' ? 'badge-cyan' : 'badge-ok'}">${tvBlocked ? 'BLOCKED' : tvSig}</div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Signal</span><span class="kpi-value ${tvSig === 'LONG' ? 'good' : tvSig === 'SHORT' ? 'bad' : 'warn'}">${esc(tvSig)}</span></div>
+          <div class="kpi"><span class="kpi-label">Confidence</span><span class="kpi-value ${tv.confidence >= (side==='SHORT' ? (cfg.shortTvMinConfidence ?? cfg.tvEntryMinConfidence) : cfg.tvEntryMinConfidence) ? 'good' : 'bad'}">${pct(tv.confidence)}</span></div>
+          <div class="kpi"><span class="kpi-label">Strength</span><span class="kpi-value ${tv.strength >= (cfg.shortTvMinStrength ?? 0.9) ? 'good' : 'warn'}">${num(tv.strength)}</span></div>
+          <div class="kpi"><span class="kpi-label">Age</span><span class="kpi-value ${(tv.age || 999) <= (cfg.tvEntryMaxAgeSec || 30) ? 'good' : 'bad'}">${ago(tv.age)}</span></div>
+          <div class="kpi"><span class="kpi-label">Status</span><span class="kpi-value">${esc(tv.status || '—')}</span></div>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">
+          <span class="card-badge badge-info">longMinConf ${pct(cfg.tvEntryMinConfidence)}</span>
+          <span class="card-badge badge-info">shortMinConf ${pct(cfg.shortTvMinConfidence)}</span>
+          <span class="card-badge badge-cyan">shortMinSt ${num(cfg.shortTvMinStrength)}</span>
+          <span class="card-badge badge-purple">waitConf ${pct(cfg.tvWaitMinConf)}</span>
+          <span class="card-badge badge-purple">shortWaitConf ${pct(cfg.tvShortWaitMinConf)}</span>
+          <span class="card-badge badge-warn">maxAge ${cfg.tvEntryMaxAgeSec ?? 30}s</span>
+          <span class="card-badge ${cfg.biasGateEnabled ? 'badge-ok' : 'badge-err'}">biasGate ${cfg.biasGateEnabled ? 'ON' : 'OFF'}</span>
+        </div>
+      </div>`;
+
+      // ═══════ SCAN BOARD ═══════
+      h += `<div class="section-title">📋 Scan Board & Rejections</div>`;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">🔭 ${board.length} symbols</div>
+          <div class="card-badge badge-info">${board.filter(b => b.qualified).length} qualified</div>
+        </div>`;
+      if (board.length) {
+        h += `<div class="tbl-wrap"><table class="tbl"><tr>
+            <th>Symbol</th><th>Side</th><th>Conf</th><th>Needs</th><th>Quality</th><th>Result</th><th>Reason</th>
+          </tr>`;
+        for (const b of board) {
+          const needs = b.adaptiveMinConf != null ? pct(b.adaptiveMinConf) : '—';
+          const pass = b.qualified;
+          h += `<tr>
+            <td style="font-weight:600">${esc(b.symbol)}</td>
+            <td style="color:${b.signal === 'LONG' ? 'var(--green)' : b.signal === 'SHORT' ? 'var(--red)' : 'var(--muted)'}">${esc(b.signal || '—')}</td>
+            <td>${pct(b.confidence)}</td>
+            <td class="dim">${needs}</td>
+            <td>${num(b.score)}</td>
+            <td>${pass ? '<span style="color:var(--green);font-weight:600">PASS</span>' : '<span style="color:var(--amber);font-weight:600">WAIT</span>'}</td>
+            <td class="dim" style="font-size:10px">${esc(b.rejectReason || '')}</td>
+          </tr>`;
         }
         h += `</table></div>`;
+      } else {
+        h += `<div class="dim" style="padding:8px;text-align:center">no scan board</div>`;
+      }
+      h += `</div>`;
+
+      // ═══════ ENTRY ACCURACY ═══════
+      h += `<div class="section-title">🎯 ความแม่นยำตอนเข้าตำแหน่ง</div>`;
+      h += `<div class="card fade-in">
+        <div class="card-header">
+          <div class="card-title">📊 Entry Conditions vs Result</div>
+          <div class="card-badge ${(acc.winRatePct ?? 0) >= 55 ? 'badge-ok' : (acc.winRatePct ?? 0) >= 48 ? 'badge-warn' : 'badge-err'}">${acc.totalTrades ?? 0} trades · ${acc.winRatePct ?? '—'}%</div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-label">Overall WR</span><span class="kpi-value ${acc.winRatePct >= 55 ? 'good' : acc.winRatePct >= 48 ? 'warn' : 'bad'}">${acc.winRatePct ?? '—'}%</span></div>
+          <div class="kpi"><span class="kpi-label">W/L</span><span class="kpi-value">${acc.wins ?? 0}/${acc.losses ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">Net PnL</span><span class="kpi-value ${pnlColor(acc.totalPnl)}">${fmtPnl(acc.totalPnl)}</span></div>
+          <div class="kpi"><span class="kpi-label">Avg/Trade</span><span class="kpi-value ${pnlColor(acc.avgPnl)}">${fmtPnl(acc.avgPnl)}</span></div>
+        </div>`;
+      if (acc.bucketTvSignal?.length || acc.bucketEntryConfidence?.length) {
+        h += `<div class="grid g2">`;
+        h += `<div>${accTable('TV Signal ที่ Entry', acc.bucketTvSignal)}</div>`;
+        h += `<div>${accTable('Entry Confidence', acc.bucketEntryConfidence)}</div>`;
+        h += `<div>${accTable('TV Strength', acc.bucketTvStrength)}</div>`;
+        h += `<div>${accTable('TV Confidence', acc.bucketTvConfidence)}</div>`;
+        h += `<div>${accTable('TV Signal × LONG side', acc.bucketSideLong)}</div>`;
+        h += `<div>${accTable('TV Signal × SHORT side', acc.bucketSideShort)}</div>`;
+        h += `<div>${accTable('Momentum ที่ Entry', acc.bucketMomentum)}</div>`;
+        h += `<div>${accTable('Pattern Bias ที่ Entry', acc.bucketPatternBias)}</div>`;
+        h += `<div>${accTable('Direction Bias ที่ Entry', acc.bucketDirectionBias)}</div>`;
+        h += `</div>`;
+      } else {
+        h += `<div class="dim" style="padding:8px;text-align:center">ยังไม่มี trades พอวิเคราะห์</div>`;
       }
       h += `</div>`;
 
       // ═══════ GUARDIAN ═══════
       h += `<div class="section-title">🛡️ Guardian</div>`;
-      const g = d.guardian;
       h += `<div class="card fade-in">
         <div class="card-header">
           <div class="card-title">🔒 Open Positions</div>
-          <div class="card-badge ${g.positionCount > 0 ? 'badge-ok' : 'badge-info'}">${g.positionCount} position${g.positionCount !== 1 ? 's' : ''}</div>
-        </div>
-        <div class="kpi-row">
-          <div class="kpi"><span class="kpi-label">Armed</span><span class="kpi-value ${g.armedCount > 0 ? 'good' : ''}">${g.armedCount}</span></div>
-          <div class="kpi"><span class="kpi-label">Guarding</span><span class="kpi-value warn">${g.guardingCount}</span></div>
-          <div class="kpi"><span class="kpi-label">Total UPnL</span><span class="kpi-value ${pnlColor(g.totalUpnl)}">${fmtPnl(g.totalUpnl)}</span></div>
-          <div class="kpi"><span class="kpi-label">Peak PnL</span><span class="kpi-value ${pnlColor(g.totalPeakPnl)}">${fmtPnl(g.totalPeakPnl)}</span></div>
-          <div class="kpi"><span class="kpi-label">Net Exposure</span><span class="kpi-value ${pnlColor(g.netExposure)}">${fmtPnl(g.netExposure)}</span></div>
+          <div class="card-badge ${positions.length ? 'badge-ok' : 'badge-info'}">${positions.length}</div>
         </div>`;
-      // Position details
-      if (g.positions?.length) {
-        h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Lev</th><th>UPnL</th><th>Peak</th><th>TP</th><th>SL</th><th>State</th></tr>`;
-        for (const p of g.positions) {
-          const state = p.armed ? '🟢 Armed' : p.peak > 0 ? '👁️ Guarding' : '⬜ Open';
+      if (positions.length) {
+        let tpUpnl = 0;
+        h += `<div class="tbl-wrap"><table class="tbl"><tr>
+            <th>Symbol</th><th>Side</th><th>Notional</th><th>UPnL</th><th>Peak</th><th>TP</th><th>SL</th><th>Locks</th>
+          </tr>`;
+        for (const p of positions) {
+          tpUpnl += p.unRealizedProfit || 0;
           h += `<tr>
             <td style="font-weight:600">${esc(p.symbol)}</td>
             <td style="color:${p.side === 'LONG' ? 'var(--green)' : 'var(--red)'}">${esc(p.side)}</td>
-            <td>${p.qty}</td>
-            <td>${p.leverage}×</td>
+            <td>$${num(p.notionalUsdtApprox)}</td>
             <td class="${pnlColor(p.unRealizedProfit)}" style="font-weight:600">${fmtPnl(p.unRealizedProfit)}</td>
-            <td class="${pnlColor(p.peak)}">${fmtPnl(p.peak)}</td>
-            <td class="dim">${p.tp ? p.tp.toFixed(8) : '—'}</td>
-            <td class="dim">${p.sl ? p.sl.toFixed(8) : '—'}</td>
-            <td>${state}</td>
+            <td class="${pnlColor(p.peakUnrealizedPnl)}">${fmtPnl(p.peakUnrealizedPnl)}</td>
+            <td class="dim">${p.localTp ? num(p.localTp, 4) : '—'}</td>
+            <td class="dim">${p.localSl ? num(p.localSl, 4) : '—'}</td>
+            <td>${p.profitLockArmed ? '<span style="color:var(--amber)">🔒</span>' : ''}${p.learnedWinRatePct ? `<span class="dim" style="font-size:10px"> ${p.learnedWinRatePct}%W</span>` : ''}</td>
           </tr>`;
         }
         h += `</table></div>`;
-        // Per-position guardian stats
-        h += `<div style="margin-top:8px;">`;
-        for (const p of g.positions) {
-          if (!p.volatilityTier && !p.holdWinnerActivated && !p.tpExtensionCount) continue;
-          h += `<div style="display:flex;gap:6px;align-items:center;padding:3px 0;font-size:11px;">
-            <span style="font-weight:600;min-width:70px">${esc(p.symbol)}</span>
-            <span class="card-badge badge-purple" style="font-size:9px">tier: ${esc(p.volatilityTier)}</span>
-            ${p.holdWinnerActivated ? `<span class="card-badge badge-info" style="font-size:9px">hold×${p.holdWinnerActivated}</span>` : ''}
-            ${p.tpExtensionCount ? `<span class="card-badge badge-ok" style="font-size:9px">tpExt×${p.tpExtensionCount}</span>` : ''}
-            ${p.breakevenGuardArmed ? `<span class="card-badge badge-warn" style="font-size:9px">BE Armed</span>` : ''}
-            ${p.guardianAgeSec != null ? `<span class="dim" style="font-size:10px">${ago(p.guardianAgeSec)} ago</span>` : ''}
-          </div>`;
-        }
-        h += `</div>`;
+        h += `<div class="kpi-row" style="margin-top:6px">
+          <div class="kpi"><span class="kpi-label">Total UPnL</span><span class="kpi-value ${pnlColor(tpUpnl)}">${fmtPnl(tpUpnl)}</span></div>
+        </div>`;
+      } else {
+        h += `<div class="dim" style="padding:8px;text-align:center">no open positions</div>`;
       }
       h += `</div>`;
 
       // ═══════ RISK ═══════
-      h += `<div class="section-title">⚙️ Risk Management</div>`;
+      h += `<div class="section-title">⚙️ Risk</div>`;
       h += `<div class="grid g3">
         <div class="card fade-in">
           <div class="card-header"><div class="card-title">Cooldown</div></div>
-          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value ${d.risk.cooldownSymbols > 0 ? 'warn' : ''}">${d.risk.cooldownSymbols}</span></div>
+          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value ${s.riskCooldownBySymbol && Object.keys(s.riskCooldownBySymbol).length ? 'warn' : ''}">${s.riskCooldownBySymbol ? Object.keys(s.riskCooldownBySymbol).length : 0}</span></div>
         </div>
         <div class="card fade-in">
-          <div class="card-header"><div class="card-title">Perf Locks</div></div>
-          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value ${d.risk.perfLockSymbols > 0 ? 'accent' : ''}">${d.risk.perfLockSymbols}</span></div>
+          <div class="card-header"><div class="card-title">Limits</div></div>
+          <div class="kpi"><span class="kpi-label">Max Daily Loss</span><span class="kpi-value">$${num(risk.maxDailyLossUSDT)}</span></div>
+          <div class="kpi"><span class="kpi-label">Max Notional</span><span class="kpi-value dim">$${num(risk.maxNotionalUSDT)} / ${risk.maxLeverage}×</span></div>
         </div>
         <div class="card fade-in">
-          <div class="card-header"><div class="card-title">Watchlist</div></div>
-          <div class="kpi"><span class="kpi-label">Symbols</span><span class="kpi-value">${d.risk.cooldownWatchlist}</span></div>
+          <div class="card-header"><div class="card-title">Kill Switch</div></div>
+          <div class="kpi"><span class="kpi-label">Status</span><span class="kpi-value ${risk.killSwitch ? 'bad' : 'good'}">${risk.killSwitch ? 'ON' : 'OFF'}</span></div>
         </div>
       </div>`;
 
-      // ═══════ LEARNING ═══════
-      h += `<div class="section-title">🧠 Learning System</div>`;
-      const ls = d.learning;
-      if (ls.summary?.totalSymbols > 0) {
-        h += `<div class="card fade-in">
-          <div class="card-header">
-            <div class="card-title">📊 Symbol Performance</div>
-            <div class="card-badge badge-info">${ls.summary.totalSymbols} symbols</div>
-          </div>
-          <div class="kpi-row">
-            <div class="kpi"><span class="kpi-label">Total Trades</span><span class="kpi-value">${ls.summary.totalTrades}</span></div>
-            <div class="kpi"><span class="kpi-label">Win Rate</span><span class="kpi-value ${ls.summary.overallWinRatePct >= 50 ? 'good' : 'bad'}">${ls.summary.overallWinRatePct}%</span></div>
-            <div class="kpi"><span class="kpi-label">Total PnL</span><span class="kpi-value ${pnlColor(ls.summary.totalPnl)}">${fmtPnl(ls.summary.totalPnl)}</span></div>
-            <div class="kpi"><span class="kpi-label">Best</span><span class="kpi-value good">${ls.summary.bestSymbol ? `${esc(ls.summary.bestSymbol.symbol)} ${fmtPnl(ls.summary.bestSymbol.pnl)}` : '—'}</span></div>
-            <div class="kpi"><span class="kpi-label">Worst</span><span class="kpi-value bad">${ls.summary.worstSymbol ? `${esc(ls.summary.worstSymbol.symbol)} ${fmtPnl(ls.summary.worstSymbol.pnl)}` : '—'}</span></div>
-          </div>`;
-        // Top 15 symbols table
-        if (ls.symbols?.length) {
-          h += `<div style="margin-top:8px; overflow-x:auto"><table class="tbl"><tr><th>#</th><th>Symbol</th><th>Trades</th><th>W/L</th><th>Win%</th><th>PnL</th></tr>`;
-          for (let i = 0; i < Math.min(ls.symbols.length, 15); i++) {
-            const s = ls.symbols[i];
-            h += `<tr><td class="dim">${i+1}</td><td style="font-weight:600">${esc(s.symbol)}</td><td>${s.trades}</td><td>${s.wins}/${s.losses}</td>
-              <td class="${s.winRatePct >= 50 ? 'good' : 'bad'}">${s.winRatePct}%</td><td class="${pnlColor(s.pnl)}">${fmtPnl(s.pnl)}</td></tr>`;
-          }
-          h += `</table></div>`;
-        }
-        h += `</div>`;
-      } else {
-        h += `<div class="card fade-in"><div class="dim" style="padding:12px;text-align:center">ยังไม่มีข้อมูล learning</div></div>`;
-      }
-
-      // ═══════ KANBAN AGENTS ═══════
-      h += `<div class="section-title">🤖 Kanban Agents</div>`;
-      const kb = d.kanban;
+      // ═══════ LEARNING / PERFORMANCE ═══════
+      h += `<div class="section-title">🧠 Performance Today</div>`;
       h += `<div class="card fade-in">
         <div class="card-header">
-          <div class="card-title">📋 Agent Board</div>
-          <div class="card-badge badge-purple">${kb.agents?.length ?? 0} agents · ${kb.totalRuns ?? 0} runs</div>
-        </div>`;
-      // Agent badges
-      if (kb.agents?.length) {
-        h += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">`;
-        for (const ag of kb.agents) {
-          const cls = ag.state === 'running' ? 'running' : ag.state === 'error' ? 'error' : 'idle';
-          h += `<span class="agent-badge ${cls}">
-            <span class="status-dot" style="width:5px;height:5px;background:${cls === 'running' ? 'var(--green)' : cls === 'error' ? 'var(--red)' : 'var(--muted)'}"></span>
-            ${esc(ag.name || ag.id)}
-            <span class="dim" style="font-size:9px">×${ag.runs}</span>
-          </span>`;
-        }
-        h += `</div>`;
-      }
-      // Kanban columns
-      if (kb.todo?.length || kb.doing?.length || kb.blocked?.length) {
-        h += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px">`;
-        const col = (title, items, color) => {
-          h += `<div><div style="font-weight:700;font-size:10px;color:${color};margin-bottom:4px">${title} (${items.length})</div>`;
-          for (const item of items.slice(0, 5)) {
-            h += `<div style="padding:3px 0;border-bottom:1px solid var(--border);color:var(--text-2)">${esc(typeof item === 'string' ? item : JSON.stringify(item).slice(0,40))}</div>`;
-          }
-          h += `</div>`;
-        };
-        col('TODO', kb.todo || [], 'var(--muted)');
-        col('DOING', kb.doing || [], 'var(--accent)');
-        col('BLOCKED', kb.blocked || [], 'var(--red)');
-        h += `</div>`;
-      }
-      h += `</div>`;
-
-      // ═══════ SUPERVISOR REVIEW ═══════
-      h += `<div class="section-title">📋 Supervisor Review</div>`;
-      const sv = d.supervisor;
-      h += `<div class="card fade-in">
-        <div class="card-header">
-          <div class="card-title">🔍 Analysis</div>
-          <div class="card-badge ${sv.severity === 'ok' ? 'badge-ok' : sv.severity === 'critical' ? 'badge-err' : 'badge-warn'}">
-            ${esc(sv.severity?.toUpperCase())}
-          </div>
+          <div class="card-title">📊 Live KPI</div>
+          <div class="card-badge ${kpi.winRatePct >= 50 ? 'badge-ok' : 'badge-err'}">${kpi.winRatePct != null ? kpi.winRatePct.toFixed(0) + '% WR' : '—'}</div>
         </div>
         <div class="kpi-row">
-          <div class="kpi"><span class="kpi-label">Issues</span><span class="kpi-value ${sv.issueCount > 0 ? 'warn' : 'good'}">${sv.issueCount}</span></div>
-          <div class="kpi"><span class="kpi-label">Last Review</span><span class="kpi-value dim">${ago(sv.reviewedAgeSec)}</span></div>
-          <div class="kpi"><span class="kpi-label">Cached</span><span class="kpi-value dim">${sv.cached ? 'Yes' : 'No'}</span></div>
-        </div>`;
-      if (sv.summary) {
-        h += `<div style="margin-top:8px;padding:6px 8px;background:var(--surface-2);border-radius:var(--r-sm);font-size:11px;color:var(--text-2)">${esc(sv.summary)}</div>`;
+          <div class="kpi"><span class="kpi-label">Wins</span><span class="kpi-value good">${kpi.wins ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">Losses</span><span class="kpi-value ${kpi.losses ? 'bad' : ''}">${kpi.losses ?? 0}</span></div>
+          <div class="kpi"><span class="kpi-label">Win Rate</span><span class="kpi-value ${kpi.winRatePct >= 50 ? 'good' : 'bad'}">${kpi.winRatePct != null ? kpi.winRatePct.toFixed(1) + '%' : '—'}</span></div>
+          <div class="kpi"><span class="kpi-label">Realized PnL</span><span class="kpi-value ${pnlColor(kpi.realizedPnl)}">${fmtPnl(kpi.realizedPnl)}</span></div>
+        </div>
+      </div>`;
+
+      // ═══════ SUPERVISOR REVIEW + AGENTS ═══════
+      h += `<div class="section-title">🤖 Agents & Review</div>`;
+      h += `<div class="grid g2">
+        <div class="card fade-in">
+          <div class="card-header"><div class="card-title">Agent Board</div>
+            <div class="card-badge badge-purple">${agents.length} agents</div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">`;
+      for (const ag of agents) {
+        const id = ag.engine?.id || ag.id || '?';
+        const state = ag.state || 'idle';
+        const cls = state === 'running' ? 'running' : state === 'error' ? 'error' : 'idle';
+        h += `<span class="agent-badge ${cls}">
+          <span class="status-dot" style="width:5px;height:5px;background:${cls === 'running' ? 'var(--green)' : cls === 'error' ? 'var(--red)' : 'var(--muted)'}"></span>
+          ${esc(id)} <span class="dim" style="font-size:9px">cyc ${ag.cycle ?? '—'}</span>
+        </span>`;
       }
-      if (sv.issues?.length) {
-        h += `<div style="margin-top:8px">`;
-        for (const issue of sv.issues) {
-          const sevCls = issue.severity === 'critical' ? 'badge-err' : issue.severity === 'high' ? 'badge-warn' : 'badge-info';
+      h += `</div></div>
+        <div class="card fade-in">
+          <div class="card-header">
+            <div class="card-title">Supervisor Review</div>
+            <div class="card-badge ${review.severity === 'ok' ? 'badge-ok' : review.severity === 'critical' ? 'badge-err' : 'badge-warn'}">${esc(review.severity || '—')}</div>
+          </div>`;
+      if (review.summary) {
+        h += `<div style="margin-bottom:6px;font-size:11px;color:var(--text-2)">${esc(review.summary)}</div>`;
+      }
+      if (review.issues?.length) {
+        for (const issue of review.issues.slice(0, 4)) {
+          const sev = issue.severity || 'low';
+          const sevCls = sev === 'critical' ? 'badge-err' : sev === 'high' ? 'badge-warn' : 'badge-info';
           h += `<div class="issue-item">
-            <span class="issue-sev ${sevCls}">${esc(issue.severity?.toUpperCase())}</span>
-            <span style="flex:1">${esc(issue.message || issue.text || JSON.stringify(issue).slice(0,100))}</span>
+            <span class="issue-sev ${sevCls}">${esc(sev.toUpperCase())}</span>
+            <span style="flex:1">${esc(issue.title || issue.detail || JSON.stringify(issue).slice(0, 90))}</span>
           </div>`;
         }
-        h += `</div>`;
+      } else {
+        h += `<div class="dim">no issues</div>`;
       }
-      h += `</div>`;
+      h += `</div>
+      </div>`;
 
       return h;
     }
