@@ -69,6 +69,14 @@ def _s(v, default=""):
         return default
 
 
+def _clean_s(v, default=""):
+    """str() with a default when v is None/empty (avoids 'None' leaking through)."""
+    if v is None:
+        return default
+    s = _s(v, default)
+    return s if s else default
+
+
 def feature_pack(symbol: str, side: str, intel: dict | None, extra: dict | None = None) -> dict:
     """Flatten the intel the bot decided on into the state dict laya reads."""
     intel = intel if isinstance(intel, dict) else {}
@@ -77,29 +85,68 @@ def feature_pack(symbol: str, side: str, intel: dict | None, extra: dict | None 
     candle = intel.get("candles") if isinstance(intel.get("candles"), dict) else {}
     tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
     db = intel.get("directionBias") if isinstance(intel.get("directionBias"), dict) else {}
-    mc = intel.get("marketContext") if isinstance(intel.get("marketContext"), dict) else {}
+    oob = intel.get("orderBook") if isinstance(intel.get("orderBook"), dict) else {}
+    sm = intel.get("setup")
     pack = {
-        "symbol": _s(symbol),
-        "signal": _s(side),
+        "symbol": _clean_s(symbol, "UNKNOWN"),
+        "signal": _clean_s(side, "FLAT"),
         "confidence": round(_f(intel.get("confidence")), 4),
-        "score": round(_f(intel.get("score", intel.get("weightedScore"))), 4),
+        "score": round(_f(candle.get("score"), _f(intel.get("score"), _f(intel.get("weightedScore")))), 4),
+        "setup": _clean_s(sm, "unknown"),
         "momentumPct": round(_f(mm.get("momentumPct")), 4),
+        "volumeRatio": round(_f(mm.get("volumeRatio")), 4),
+        "divergence": _clean_s(mm.get("divergence"), "NONE").upper(),
         "spreadBps": round(_f(ex.get("spreadBps")), 4),
         "fundingRate": round(_f(ex.get("lastFundingRate"), 0.0), 6),
         "patternBias": round(_f(candle.get("bias")), 4),
-        "regime": _s(mc.get("regime"), _s(db.get("regime"), "UNKNOWN")),
-        "directionBias": _s(db.get("bias"), "NEUTRAL").upper(),
+        "regime": _clean_s(db.get("regime"), "UNKNOWN").upper(),
+        "directionBias": _clean_s(db.get("bias"), "NEUTRAL").upper(),
         "directionBiasStrength": round(_f(db.get("strength")), 4),
-        "tvSignal": _s(tv.get("signal")),
+        "tvSignal": _clean_s(tv.get("signal"), "WAIT"),
         "tvStrength": round(_f(tv.get("strength")), 4),
         "tvConfidence": round(_f(tv.get("confidence")), 4),
         "tvAge": int(_f(tv.get("age"), -1)),
+        "bidAskImbalance": round(_f(oob.get("imbalance")), 4),
     }
     if isinstance(extra, dict):
         for k, v in extra.items():
             if v is not None:
                 pack[_s(k)] = v
     return pack
+
+
+def render_state_text(pack: dict) -> str:
+    """Render the feature pack into the natural-language state laya actually reads.
+
+    Probe evidence: the english checkpoint answers off the *semantics of the words*,
+    not the numeric values (flipping numbers barely moves noul; flipping words does).
+    A numeric JSON dict therefore reads ~like empty noise. This rendering keeps the
+    same deterministic features but phrases them so the model can reason on them.
+    """
+    sym = _clean_s(pack.get("symbol"), "the market")
+    side = _clean_s(pack.get("signal"), "a position").upper()
+    moneyness = ["low", "below-average", "average", "above-average", "high"][
+        min(4, max(0, int(_f(pack.get("confidence"), 0) * 5 // 1)))]
+    mom = _f(pack.get("momentumPct"))
+    mom_word = f"pushing firmly in {'favour' if mom >= 0 else 'against'} the trade by {abs(mom):.2f}%" if mom else "flat momentum"
+    vol = _f(pack.get("volumeRatio"))
+    vol_word = f"at {vol:.2f}x normal volume" if vol else "at quiet volume"
+    spread = _f(pack.get("spreadBps"))
+    spread_word = "a tight spread" if spread <= 1.0 else ("a wide spread" if spread >= 5.0 else "a moderate spread")
+    db = _clean_s(pack.get("directionBias"), "NEUTRAL").upper()
+    db_strength = _f(pack.get("directionBiasStrength"))
+    align = f"aligned ({db} strength {db_strength:.2f})" if (side.startswith("LONG") and db == "LONG") or (side.startswith("SHORT") and db == "SHORT") else f"against the {side} ({db})"
+    tv = _clean_s(pack.get("tvSignal"), "WAIT").upper()
+    tv_conf = _f(pack.get("tvConfidence"))
+    fund = _f(pack.get("fundingRate"))
+    reason = (f"Setup {_clean_s(pack.get('setup'), 'no named setup')}. "
+              f"Momentum {mom_word} {vol_word}, {spread_word}. "
+              f"Directional bias {align}. TradingView {tv} at confidence {tv_conf:.2f}. "
+              f"Funding cost {'negligible' if abs(fund) < 5e-4 else ('costly' if fund * (1 if side.startswith('LONG') else -1) > 0 else 'favourable')}.")
+    verdict = (f"Confidence is {moneyness}. "
+               f"The overall picture is {'constructive and aligned' if (mom > 0.5 and tv_conf >= 0.7 and (side.startswith('LONG') and db == 'LONG') or (side.startswith('SHORT') and db == 'SHORT')) else 'mixed to unfavourable'}.")
+    return (f"You are evaluating opening a {side} position on {sym}. {reason} {verdict} "
+            f"Do not let the {side} label bias you; assess the evidence.")
 
 
 def _shadow_path():
@@ -140,6 +187,7 @@ def _record(symbol: str, side: str, intel: dict | None, extra: dict | None) -> N
             "symbol": _s(symbol).upper(),
             "side": _s(side).upper(),
             "state": pack,
+            "state_text": render_state_text(pack),
             "answers": {},
             "routing": {},
             "elapsedMs": 0,
@@ -148,7 +196,7 @@ def _record(symbol: str, side: str, intel: dict | None, extra: dict | None) -> N
         t0 = time.perf_counter()
         try:
             with httpx.Client(timeout=httpx.Timeout(_CONNECT_TIMEOUT, read=_TOTAL_TIMEOUT)) as cli:
-                r = cli.post(_URL, json={"state": pack, "questions": _QUESTIONS})
+                r = cli.post(_URL, json={"state": rec["state_text"], "questions": _QUESTIONS})
             if r.status_code == 200:
                 res = r.json()
                 out = {}
