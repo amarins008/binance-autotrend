@@ -4241,6 +4241,52 @@
 
     }
 
+
+    /* ── NeuralBrain3D (WebGL brain) ─────────────────────────────────────── */
+    .nb3d-wrap { position: relative; }
+    .nb3d-host { position: absolute; inset: 0; cursor: grab; touch-action: none; z-index: 2; }
+    .nb3d-host:active { cursor: grabbing; }
+    .nb3d-host.nb3d-off { display: none; }
+    .nb3d-host canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; }
+    .neuron-brain-2d { position: absolute; inset: 0; }
+    .neuron-brain-2d.nb3d-hidden { display: none; }
+    .nb3d-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 3; }
+    .nb3d-label {
+      position: absolute; left: 0; top: 0;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      pointer-events: auto; transition: opacity .25s ease;
+      font-size: 10px; line-height: 1.25; text-align: center;
+    }
+    .nb3d-tool { font-size: 13px; filter: drop-shadow(0 0 6px var(--nc, #38bdf8)); }
+    .nb3d-name { font-weight: 700; color: var(--text); text-shadow: 0 1px 6px rgba(2,6,23,.95); letter-spacing: .02em; }
+    .nb3d-label.active .nb3d-name { color: var(--nc, #22d3ee); text-shadow: 0 0 12px var(--nc, #22d3ee); }
+    .nb3d-label.blocked .nb3d-name { color: var(--bad); text-shadow: 0 0 10px rgba(251,113,133,.85); }
+    .nb3d-label.done .nb3d-name { color: #2dd4bf; }
+    .nb3d-label.idle .nb3d-name, .nb3d-label.todo .nb3d-name { color: var(--muted); }
+    .nb3d-pill {
+      font-family: "JetBrains Mono", monospace; font-size: 8.5px; letter-spacing: .08em;
+      padding: 1px 6px; border-radius: 999px;
+      border: 1px solid rgba(148,163,184,.25); color: var(--muted);
+      background: rgba(2,6,23,.72); backdrop-filter: blur(3px);
+    }
+    .nb3d-label.active .nb3d-pill { color: var(--nc, #22d3ee); border-color: var(--nc, #22d3ee); box-shadow: 0 0 10px rgba(34,211,238,.35); }
+    .nb3d-label.blocked .nb3d-pill { color: var(--bad); border-color: var(--bad); box-shadow: 0 0 10px rgba(251,113,133,.4); }
+    .nb3d-act { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); opacity: .85; }
+    .nb3d-mount { position: absolute; inset: 0; z-index: 2; }
+    .nb3d-mount.nb3d-off { display: none; }
+    .nb3d-lite {
+      position: absolute; top: 8px; right: 10px; z-index: 5;
+      font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: .06em;
+      padding: 3px 9px; border-radius: 999px; cursor: pointer;
+      color: var(--muted); border: 1px solid rgba(148,163,184,.3);
+      background: rgba(2,6,23,.72); backdrop-filter: blur(3px);
+      transition: color .2s, border-color .2s, box-shadow .2s;
+    }
+    .nb3d-lite:hover { color: var(--text); border-color: var(--accent); }
+    .nb3d-lite.is-lite { color: var(--warn); border-color: rgba(251,191,36,.45); }
+    .nb3d-hint { position: absolute; right: 12px; bottom: 8px; font-size: 10px; color: var(--muted); opacity: .65; pointer-events: none; z-index: 4; }
+    .nb3d-legend { position: absolute; left: 12px; bottom: 8px; display: flex; gap: 10px; font-size: 9.5px; color: var(--muted); pointer-events: none; z-index: 4; }
+    .nb3d-legend b { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   </style>
 
 </head>
@@ -4559,6 +4605,11 @@
   <div id="toasts" class="toasts"></div>
 
 
+
+
+<script src="three.min.js"></script>
+
+<script src="brain3d.js" defer></script>
 
 <script>
 
@@ -5328,6 +5379,12 @@ const renderNeuron = (agentId, idx) => {
 
   const mission = engine.mission || "analyze → plan → learn → hypothesize → reflect → optimize";
 
+  const nb3dAvail = typeof window.NeuralBrain3D === "object" && window.NeuralBrain3D.available();
+
+  const nb3dLite = (() => { try { return localStorage.getItem("nb3d_lite") === "1"; } catch (e) { return false; } })();
+
+  const nb3dOn = nb3dAvail && !nb3dLite;
+
   const existingTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
 
   ui.hermesKanban.innerHTML = `
@@ -5348,15 +5405,25 @@ const renderNeuron = (agentId, idx) => {
 
     </div>
 
-    <div class="neuron-brain">
+    <div class="neuron-brain nb3d-wrap">
 
-      <div class="synapse-layer" aria-hidden="true">
+      <div id="nb3dMount" class="nb3d-mount${nb3dOn ? "" : " nb3d-off"}" aria-label="Neural Core 3D"></div>
 
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none">${svgSynapses}</svg>
+      <div class="neuron-brain-2d${nb3dOn ? " nb3d-hidden" : ""}">
+
+        <div class="synapse-layer" aria-hidden="true">
+
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none">${svgSynapses}</svg>
+
+        </div>
+
+        <div class="neuron-nodes">${neuronHtml}</div>
 
       </div>
 
-      <div class="neuron-nodes">${neuronHtml}</div>
+      ${nb3dAvail ? '<button id="nb3dLiteBtn" class="nb3d-lite' + (nb3dLite ? " is-lite" : "") + '" title="สลับโหมด 3D/2D ประหยัดทรัพยากร">' + (nb3dLite ? "2D ◻" : "3D ◈") + "</button>" : ""}
+
+      ${nb3dOn ? '<div class="nb3d-hint">ลาก = หมุน · scroll = ซูม</div><div class="nb3d-legend"><span><b style="background:#22d3ee"></b>ACTIVE</span><span><b style="background:#2dd4bf"></b>DONE</span><span><b style="background:#fb7185"></b>BLOCKED</span><span><b style="background:#64748b"></b>IDLE</span></div>' : ""}
 
     </div>
 
@@ -5365,6 +5432,79 @@ const renderNeuron = (agentId, idx) => {
   const freshTicker = ui.hermesKanban.querySelector(".trading-scan-ticker");
 
   if (existingTicker && freshTicker) freshTicker.replaceWith(existingTicker);
+
+  // ── 3D Neural Core (WebGL, persistent scene) with 2D fallback + Lite mode ─
+  window.__nb3dBot = bot;
+
+  const nb3dMount = ui.hermesKanban.querySelector("#nb3dMount");
+
+  const nb3dMod = typeof window.NeuralBrain3D === "object" ? window.NeuralBrain3D : null;
+
+  if (nb3dMod && nb3dAvail && !window.__nb3dLostHooked) {
+
+    window.__nb3dLostHooked = true;
+
+    nb3dMod.onContextLost(function () { // GPU context died -> auto Lite/2D
+
+      try { localStorage.setItem("nb3d_lite", "1"); } catch (e) {}
+
+      renderHermesKanban(bot);
+
+    });
+
+  }
+
+  if (nb3dMount && nb3dMod && nb3dOn) {
+
+    nb3dMount.classList.remove("nb3d-off");
+
+    ui.hermesKanban.querySelector(".neuron-brain-2d")?.classList.add("nb3d-hidden");
+
+    const mounted = nb3dMod.mountInto(nb3dMount); // canvas+scene persist across polls
+
+    if (mounted) {
+
+      nb3dMod.update({
+
+        neurons: flatIds.map((id) => {
+
+          const a = agents[id] || {};
+
+          const dsp = agentDisplayState(a);
+
+          const skin = agentSkin[id] || {};
+
+          return { id, xPct: pos[id].x, yPct: pos[id].y, label: skin.short || id, role: skin.role || "", color: skin.color || "#38bdf8", tool: skin.tool || "•", cls: dsp.cls, badge: dsp.badge, runs: Number(a.runs || 0), action: actionText(id, a) };
+
+        }),
+
+        synapses: synapses.map(([sa, sb]) => ({ a: sa, b: sb, cls: synapseClass(sa) })),
+
+      });
+
+    } else {
+
+      nb3dMount.classList.add("nb3d-off");
+
+      ui.hermesKanban.querySelector(".neuron-brain-2d")?.classList.remove("nb3d-hidden");
+
+    }
+
+  } else if (nb3dMod && nb3dMod.isAwake()) {
+
+    nb3dMod.sleep(); // Lite/2D mode -> free GPU resources
+
+  }
+
+  const nb3dLiteBtn = ui.hermesKanban.querySelector("#nb3dLiteBtn");
+
+  if (nb3dLiteBtn) nb3dLiteBtn.addEventListener("click", function () {
+
+    try { localStorage.setItem("nb3d_lite", (localStorage.getItem("nb3d_lite") === "1") ? "0" : "1"); } catch (e) {}
+
+    renderHermesKanban(bot);
+
+  });
 
   updateOfficeSidebar(bot, counts, activeTasks);
 
