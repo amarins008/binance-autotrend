@@ -26,3 +26,7 @@ Temp/
 _garbage_symbols_backup/
 
 backups/
+.hermes-backups/
+recovery_artifacts/
+_garbage_symbols_backup/
+Temp/
