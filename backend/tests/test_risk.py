@@ -32,9 +32,10 @@ def test_fee_edge_min_net_scales_with_cost():
 
 
 def test_fee_edge_min_net_taker_roundtrip():
-    # notional 100 @ 4bps/side → roundtrip = 100 * 2*4/10000 = 0.08; *3 = 0.24
+    # notional 100 @ 6bps/side (2026-09-26 real-commission calibration) →
+    # roundtrip = 100 * 2*6/10000 = 0.12; *3 = 0.36
     val = fee_edge_min_net_usdt({"feeMinNetProfitUSDT": 0.01, "feeMinEdgeVsCostMultiple": 3.0}, 0.0, 100.0)
-    assert abs(val - 0.24) < 1e-6
+    assert abs(val - 0.36) < 1e-6
 
 
 def test_estimate_trade_edge_basic():

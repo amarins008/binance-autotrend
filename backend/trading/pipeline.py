@@ -31,7 +31,7 @@ class EntryInputs:
     pb_pct: float | None = None
     eff_leverage: int = 5
     max_notional: float = 200.0
-    taker_fee_bps: float = 4.0
+    taker_fee_bps: float = 6.0
     extra_cost_bps: float = 2.0
     default_min_net: float = 0.05
     pre_reversal_score: float = 0.0

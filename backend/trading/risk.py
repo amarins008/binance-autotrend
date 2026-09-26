@@ -4,7 +4,7 @@ import os
 
 from services import app_state
 
-AUTOTRADE_TAKER_FEE_BPS_PER_SIDE = float(os.getenv("AUTOTRADE_TAKER_FEE_BPS_PER_SIDE", "4.0"))
+AUTOTRADE_TAKER_FEE_BPS_PER_SIDE = float(os.getenv("AUTOTRADE_TAKER_FEE_BPS_PER_SIDE", "6.0"))
 AUTOTRADE_MIN_NET_PROFIT_USDT = float(os.getenv("AUTOTRADE_MIN_NET_PROFIT_USDT", "0.05"))
 AUTOTRADE_EXTRA_COST_BPS = float(os.getenv("AUTOTRADE_EXTRA_COST_BPS", "2.0"))
 
@@ -28,7 +28,7 @@ def estimate_trade_edge_usdt(
     tp_pct: float,
     max_slippage_bps: float,
     *,
-    taker_fee_bps_per_side: float = 4.0,
+    taker_fee_bps_per_side: float = 6.0,
     extra_cost_bps: float = 2.0,
     funding_rate: float = 0.0,
 ) -> tuple[float, float, float]:
@@ -47,7 +47,7 @@ def effective_min_net_profit_usdt(
     realized_vol_pct: float | None = None,
     *,
     default_min_net: float = 0.05,
-    taker_fee_bps: float = 4.0,
+    taker_fee_bps: float = 6.0,
     extra_cost_bps: float = 2.0,
     notional_usdt: float | None = None,
     funding_rate: float = 0.0,

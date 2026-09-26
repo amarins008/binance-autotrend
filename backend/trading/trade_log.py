@@ -234,7 +234,13 @@ def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
                     stats["winsToday"] += 1
                 else:
                     stats["lossesToday"] += 1
-                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl, 6)
+                # 2026-09-26: daily KPI is NET of estimated round-trip fees —
+                # records without feeEstUsdt (pre-telemetry) stay gross.
+                try:
+                    _fee = float(obj.get("feeEstUsdt") or 0.0)
+                except Exception:
+                    _fee = 0.0
+                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl - _fee, 6)
     if new_last_trades:
         existing = stats.get("lastTrades") if isinstance(stats.get("lastTrades"), list) else []
         merged: list[dict] = []
@@ -378,7 +384,13 @@ def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
                     stats["winsToday"] += 1
                 else:
                     stats["lossesToday"] += 1
-                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl, 6)
+                # 2026-09-26: daily KPI is NET of estimated round-trip fees —
+                # records without feeEstUsdt (pre-telemetry) stay gross.
+                try:
+                    _fee = float(obj.get("feeEstUsdt") or 0.0)
+                except Exception:
+                    _fee = 0.0
+                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl - _fee, 6)
     stats["lastTrades"] = list(reversed(parsed[-10:]))
     _LIVE_STATS_CACHE[cache_key] = (now, dict(stats))
     if len(_LIVE_STATS_CACHE) > 32:

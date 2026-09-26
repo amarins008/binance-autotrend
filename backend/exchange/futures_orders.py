@@ -27,6 +27,7 @@ from trading.state_ops import (
     exit_context_from_intel as _exit_context_from_intel,
     last_decision_intel as _last_decision_intel,
 )
+from trading.risk import AUTOTRADE_TAKER_FEE_BPS_PER_SIDE as _TAKER_FEE_BPS_PER_SIDE
 from trading.risk import _effective_tp_sl, calc_tp_sl_prices as _calc_tp_sl_prices
 from trading.learning import (
     _record_learning_trade,
@@ -605,6 +606,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str, exit_in
             exit_px = fill_px if fill_px and fill_px > 0 else close_mark
             pnl = (exit_px - entry) * qty if pos_side == "LONG" else (entry - exit_px) * qty
             exit_ctx = _exit_context_from_intel(symbol, pos_side, exit_intel)
+            fee_est = round(qty * exit_px * (2.0 * _TAKER_FEE_BPS_PER_SIDE / 10000.0), 6)
             entry_snapshot = _entry_snapshot_for_position(symbol, pos_side)
             learned_trades.append({
                 "side": pos_side,
@@ -629,6 +631,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str, exit_in
                 "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
+                "feeEstUsdt": fee_est,
                 **exit_ctx,
             })
     if not close_results:
@@ -677,6 +680,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
             exit_px = fill_px if fill_px and fill_px > 0 else close_mark
             pnl = (exit_px - entry) * qty if ps == "LONG" else (entry - exit_px) * qty
             exit_ctx = _exit_context_from_intel(symbol, ps, exit_intel)
+            fee_est = round(qty * exit_px * (2.0 * _TAKER_FEE_BPS_PER_SIDE / 10000.0), 6)
             entry_snapshot = _entry_snapshot_for_position(symbol, ps)
             learned.append({
                 "side": ps,
@@ -701,6 +705,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
+                "feeEstUsdt": fee_est,
                 **exit_ctx,
             })
     for t in learned:
