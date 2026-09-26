@@ -123,6 +123,15 @@ def entry_snapshot_from_intel(
     except Exception:
         pass
     try:
+        _et = intel.get("entryTiming") if isinstance(intel.get("entryTiming"), dict) else {}
+        if _et:
+            snap["entryRangePos60m"] = _et.get("rangePos60m")
+            snap["entryRunup60mPct"] = _et.get("runup60mPct")
+            snap["entryBreakdown60mPct"] = _et.get("breakdown60mPct")
+            snap["entryRange60mPct"] = _et.get("range60mPct")
+    except Exception:
+        pass
+    try:
         _tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
         if not _tv:
             try:

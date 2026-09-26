@@ -623,6 +623,10 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
                 "entryDirectionBias": entry_snapshot.get("entryDirectionBias", ""),
                 "entryDirectionBiasStrength": entry_snapshot.get("entryDirectionBiasStrength", 0.0),
                 "entryDirectionBiasRegime": entry_snapshot.get("entryDirectionBiasRegime", ""),
+                "entryRangePos60m": entry_snapshot.get("entryRangePos60m"),
+                "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
+                "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
+                "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
             })
     if not close_results:
         return {"message": "No open position"}
@@ -689,6 +693,10 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryDirectionBias": entry_snapshot.get("entryDirectionBias", ""),
                 "entryDirectionBiasStrength": entry_snapshot.get("entryDirectionBiasStrength", 0.0),
                 "entryDirectionBiasRegime": entry_snapshot.get("entryDirectionBiasRegime", ""),
+                "entryRangePos60m": entry_snapshot.get("entryRangePos60m"),
+                "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
+                "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
+                "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
             })
     for t in learned:
         _record_learning_trade(symbol, t, "LIVE")

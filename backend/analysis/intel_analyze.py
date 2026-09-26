@@ -704,6 +704,7 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         "candles": candle_ctx,
         "tv": _tv_snap,
         "directionBias": dir_bias,
+        "entryTiming": _entry_timing_from_1m(rows_1m),
     }
     result["decisionData"] = _decision_data_layers(
         symbol=symbol,
@@ -726,6 +727,37 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         oldest = min(_main()._INTEL_CACHE, key=lambda k: _main()._INTEL_CACHE[k][0])
         del _main()._INTEL_CACHE[oldest]
     return result
+
+def _entry_timing_from_1m(rows_1m: list | None) -> dict:
+    """Entry-timing telemetry from the last 60 1m candles.
+
+    rangePos60m     — where the latest close sits inside the 60m high/low range
+                      (0 = at the low, 1 = at the high; >=0.8 == chasing a run)
+    runup60mPct     — % the price already ran UP from the 60m low
+    breakdown60mPct — % it already fell from the 60m high (SHORT-side mirror)
+    range60mPct     — total 60m range width as % of price
+
+    Mirrors the offline entry-forensics definition so numbers stay comparable.
+    Used purely as telemetry on the trade record — never gates entries.
+    """
+    try:
+        kl = [k for k in (rows_1m or []) if isinstance(k, (list, tuple)) and len(k) >= 5][-60:]
+        if len(kl) < 20:
+            return {}
+        lo = min(float(k[3]) for k in kl)
+        hi = max(float(k[2]) for k in kl)
+        last = float(kl[-1][4])
+        rng = max(hi - lo, 1e-12)
+        return {
+            "rangePos60m": round((last - lo) / rng, 4),
+            "runup60mPct": round((last - lo) / max(lo, 1e-12) * 100.0, 4),
+            "breakdown60mPct": round((hi - last) / max(hi, 1e-12) * 100.0, 4),
+            "range60mPct": round(rng / max(last, 1e-12) * 100.0, 4),
+            "candles": len(kl),
+        }
+    except Exception:
+        return {}
+
 
 async def _market_momentum(symbol: str, interval: str = "1m", limit: int = 60, _rows: list | None = None):
     symbol = _normalize_symbol(symbol)
