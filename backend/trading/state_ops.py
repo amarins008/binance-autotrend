@@ -87,6 +87,36 @@ def last_decision_intel(
     return intel
 
 
+def exit_context_from_intel(symbol: str | None, side: str | None, intel: dict | None = None) -> dict:
+    """Exit-time bias/TV telemetry for guardian close records (Stage 1).
+
+    Records BOTH decision systems at the moment the guardian closes, so the
+    Stage-2 hold matrix (bias = structural hold, TV = fresh timing veto) can be
+    validated against real post-exit continuation. Telemetry only — never
+    changes close behaviour.
+    """
+    out: dict = {}
+    try:
+        if not isinstance(intel, dict):
+            return out
+        _db = intel.get("directionBias") if isinstance(intel.get("directionBias"), dict) else {}
+        bias = str(_db.get("bias", "") or "").upper()
+        if bias:
+            out["exitBias"] = bias
+            out["exitBiasStrength"] = float(_db.get("strength", 0.0) or 0.0)
+            out["exitBiasRegime"] = str(_db.get("regime", "") or "").upper()
+            out["exitBiasAligned"] = bias == str(side or "").upper()
+        _tv = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
+        if _tv:
+            out["exitTvSignal"] = str(_tv.get("signal", "") or "").upper()
+            out["exitTvStrength"] = float(_tv.get("strength", 0.0) or 0.0)
+            out["exitTvAge"] = int(_tv.get("age", 0) or 0)
+            out["exitTvStatus"] = str(_tv.get("status", "") or "").lower()
+    except Exception:
+        pass
+    return out
+
+
 def entry_snapshot_from_intel(
     symbol: str | None,
     side: str | None,

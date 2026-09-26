@@ -113,7 +113,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="DEAD_ZONE_TIMEOUT")
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="DEAD_ZONE_TIMEOUT", exit_intel={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("DEAD_ZONE_TIMEOUT" in call.args[0] for call in log.call_args_list))
 
@@ -163,7 +163,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                             changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("ADAUSDT", "LONG", "k", "s", main._binance_base(), reason="RETRACE_BUDGET")
+        close_one.assert_awaited_once_with("ADAUSDT", "LONG", "k", "s", main._binance_base(), reason="RETRACE_BUDGET", exit_intel={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("RETRACE" in call.args[0] for call in log.call_args_list))
 
@@ -367,7 +367,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                                 changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="STRONG_REVERSAL_EXIT")
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="STRONG_REVERSAL_EXIT", exit_intel=opposite_intel)
         place_order.assert_not_awaited()
         self.assertNotIn("DOGEUSDT:LONG", main.AUTO_TRADE["liveProfitLocks"])
         self.assertTrue(any("STRONG_REVERSAL_EXIT" in call.args[0] for call in log.call_args_list))
@@ -604,7 +604,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                                 changed = await main._live_multi_profit_lock_manage(cfg)
 
         self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="PAYOFF_LOSS_GUARD")
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="PAYOFF_LOSS_GUARD", exit_intel={"signal": "LONG", "confidence": 0.76, "execution": {"momentumPct": 0.08}})
         self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
         self.assertTrue(any("PAYOFF_LOSS_GUARD" in call.args[0] for call in log.call_args_list))
 

@@ -24,6 +24,7 @@ from services.config_paths import TRADES_LOG_PATH
 from trading.state_ops import (
     autotrade_log as _autotrade_log,
     entry_snapshot_from_intel as _entry_snapshot_from_intel,
+    exit_context_from_intel as _exit_context_from_intel,
     last_decision_intel as _last_decision_intel,
 )
 from trading.risk import _effective_tp_sl, calc_tp_sl_prices as _calc_tp_sl_prices
@@ -564,7 +565,7 @@ async def _cancel_all_open_orders(symbol: str, key: str, secret: str, base: str)
         # Endpoint may be unavailable on some account tiers; non-fatal.
         print(f"[Cancel Orders] {symbol} algo warning: {exc}")
 
-async def _close_position(symbol: str, key: str, secret: str, base: str):
+async def _close_position(symbol: str, key: str, secret: str, base: str, exit_intel: dict | None = None):
     hedge_mode = await _is_hedge_mode(key, secret, base)
     close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
@@ -603,6 +604,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
             fill_px = _extract_fill_price(order_resp)
             exit_px = fill_px if fill_px and fill_px > 0 else close_mark
             pnl = (exit_px - entry) * qty if pos_side == "LONG" else (entry - exit_px) * qty
+            exit_ctx = _exit_context_from_intel(symbol, pos_side, exit_intel)
             entry_snapshot = _entry_snapshot_for_position(symbol, pos_side)
             learned_trades.append({
                 "side": pos_side,
@@ -627,6 +629,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
                 "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
+                **exit_ctx,
             })
     if not close_results:
         return {"message": "No open position"}
@@ -634,7 +637,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
         await _record_learning_trade_async(symbol, t, "LIVE")
     return {"closed": close_results}
 
-async def _close_position_one_side(symbol: str, side_to_close: str, key: str, secret: str, base: str, reason: str = "LIVE_CUT_LOSING_SIDE"):
+async def _close_position_one_side(symbol: str, side_to_close: str, key: str, secret: str, base: str, reason: str = "LIVE_CUT_LOSING_SIDE", exit_intel: dict | None = None):
     target = side_to_close.upper()
     if target not in ("LONG", "SHORT"):
         raise HTTPException(status_code=400, detail="side_to_close must be LONG or SHORT")
@@ -673,6 +676,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
             fill_px = _extract_fill_price(order_resp)
             exit_px = fill_px if fill_px and fill_px > 0 else close_mark
             pnl = (exit_px - entry) * qty if ps == "LONG" else (entry - exit_px) * qty
+            exit_ctx = _exit_context_from_intel(symbol, ps, exit_intel)
             entry_snapshot = _entry_snapshot_for_position(symbol, ps)
             learned.append({
                 "side": ps,
@@ -697,6 +701,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryRunup60mPct": entry_snapshot.get("entryRunup60mPct"),
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
+                **exit_ctx,
             })
     for t in learned:
         _record_learning_trade(symbol, t, "LIVE")
