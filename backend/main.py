@@ -3830,13 +3830,21 @@ async def system_restart():
     if not py.exists():
         py = Path(sys.executable)
     port = str(_BACKEND_PORT)
-    host = os.getenv("BACKEND_HOST", "127.0.0.1")
-    cmd = [str(py), "-m", "uvicorn", "main:app", "--host", host, "--port", port]
+    # 2026-09-26: respawn via run_backend.py — it forces the SelectorEventLoop
+    # (a bare `python -m uvicorn main:app` spawn ran ProactorEventLoop and hung
+    # /health on Windows) and defaults BACKEND_HOST to 0.0.0.0, keeping the
+    # dashboard reachable via the Tailscale IP after EVERY restart, even when
+    # BACKEND_HOST was never exported.
+    cmd = [str(py), "run_backend.py"]
+    env = dict(os.environ)
+    env.setdefault("BACKEND_HOST", "0.0.0.0")
+    env["BACKEND_PORT"] = port
     # 1) Spawn fresh instance FIRST (new uvicorn retries port for ~2s internally)
     try:
         subprocess.Popen(
             cmd,
             cwd=str(backend_dir),
+            env=env,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
             close_fds=True,
         )
