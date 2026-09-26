@@ -81,6 +81,8 @@ def _entry_inputs(cfg, signal="LONG", conf=0.832, pre_rev_score=0.0, pre_rev_ris
         pre_reversal_score=pre_rev_score, pre_reversal_side_at_risk=pre_rev_risk,
     )
     kw.update(extra)
+    if "momentum" in kw:
+        kw["intel"] = dict(kw["intel"], momentum=kw.pop("momentum"))
     return EntryInputs(**kw)
 
 
@@ -183,6 +185,42 @@ class TestPreReversalBlocksEntry(unittest.IsolatedAsyncioTestCase):
         plan = evaluate_entry_plan(inp)
         self.assertFalse(plan.approved)
         self.assertEqual(plan.skip_code, "pre_reversal")
+
+    def test_softening_rechecks_confidence_floor(self):
+        """A borderline signal may pass the first confidence check but must
+        fail if pre-reversal softening drops it below adaptive_min_conf."""
+        cfg = _base_cfg(preReversalScoreBlock=0.72, preReversalScoreSoftener=0.20)
+        inp = _entry_inputs(cfg, signal="LONG", conf=0.75,
+                            pre_rev_score=0.70, pre_rev_risk="LONG")
+        plan = evaluate_entry_plan(inp)
+        self.assertFalse(plan.approved)
+        self.assertEqual(plan.skip_code, "low_confidence")
+        self.assertAlmostEqual(plan.confidence, 0.664, places=3)
+        self.assertTrue(any(
+            row["gate"] == "confidence_recheck" and not row["passed"]
+            for row in plan.pipeline
+        ))
+
+    def test_final_divergence_veto_blocks_adverse_side(self):
+        cfg = _base_cfg()
+        inp = _entry_inputs(cfg, signal="LONG", conf=0.832,
+                            momentum={"momentumPct": 0.5, "strength": 0.3,
+                                      "divergence": "BEARISH_DIVERGENCE"})
+        plan = evaluate_entry_plan(inp)
+        self.assertFalse(plan.approved)
+        self.assertEqual(plan.skip_code, "divergence")
+        self.assertTrue(any(
+            row["gate"] == "divergence" and not row["passed"]
+            for row in plan.pipeline
+        ))
+
+    def test_divergence_filter_can_be_disabled(self):
+        cfg = _base_cfg(divergenceFilterEnabled=False)
+        inp = _entry_inputs(cfg, signal="LONG", conf=0.832,
+                            momentum={"momentumPct": 0.5, "strength": 0.3,
+                                      "divergence": "BEARISH_DIVERGENCE"})
+        plan = evaluate_entry_plan(inp)
+        self.assertNotEqual(plan.skip_code, "divergence")
 
 
 class TestMarginSizingNotTheBlocker(unittest.IsolatedAsyncioTestCase):

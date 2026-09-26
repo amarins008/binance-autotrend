@@ -128,8 +128,8 @@ _GUARD_TP_RATIOS = {
     "profitLockTriggerUsdt": 0.25,        # arm profit-lock at ~25% of TP target
     "profitLockKeepUsdt": 0.55,           # keep ~55% of TP target
     "profitLockMaxGivebackUsdt": 0.15,    # allow ~15% of TP target giveback
-    "profitLockBreakevenTriggerUsdt": 0.25,  # arm breakeven at ~25% of TP target
-    "profitLockBreakevenFloorUsdt": 0.125,   # breakeven floor at ~12.5% of TP target
+    "profitLockBreakevenTriggerUsdt": 0.075,  # arm breakeven at ~7.5% of TP target
+    "profitLockBreakevenFloorUsdt": 0.05,   # breakeven floor at ~5% of TP target
     "tryGreenExitMinProfitUsdt": 0.075,
     "tryGreenExitMaxProfitUsdt": 0.25,
     "holdMinProfitUsdt": 0.15,

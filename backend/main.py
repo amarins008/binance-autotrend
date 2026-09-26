@@ -1889,9 +1889,55 @@ def _record_per_symbol_scan_time(symbols: list[str], now: float | None = None) -
         pass
 
 
+def _tv_long_strength_tier(tv_info: dict | None, cfg: dict) -> tuple[str, float]:
+    """Classify a LONG entry's fresh-TV strength into sizing tiers.
+
+    2026-09-26: the old all-or-nothing tvLongMinStrength=0.90 scan gate was
+    bypassed in practice — the scan saw a stale snapshot (stale is not
+    evidence) while the order-time snapshot recorded fresh strength 0.5-0.67
+    (8/10 post-fix entries, 7W/1L). Policy now:
+      fresh + strength >= tvLongMinStrength  -> ("full", 1.0)
+      fresh + strength >= tvLongMidStrength  -> ("mid", tvLongMidSizeMult)
+      fresh + strength <  tvLongMidStrength  -> ("blocked", 0.0)
+      stale / missing / legacy snapshot      -> ("stale", 1.0)  # conf gates decide
+    Non-LONG TV signals are handled by the conflict/wait gates, not here.
+    """
+    if not isinstance(tv_info, dict) or "age" not in tv_info or "status" not in tv_info:
+        return "stale", 1.0
+    if str(tv_info.get("status", "") or "").lower() != "ok":
+        return "stale", 1.0
+    try:
+        age = int(tv_info.get("age", 9999) or 9999)
+    except (TypeError, ValueError):
+        age = 9999
+    if age > int(cfg.get("tvEntryMaxAgeSec", 30) or 30):
+        return "stale", 1.0
+    if str(tv_info.get("signal", "") or "").upper() != "LONG":
+        return "full", 1.0
+    strength = float(tv_info.get("strength", 0.0) or 0.0)
+    if strength >= float(cfg.get("tvLongMinStrength", 0.90) or 0.90):
+        return "full", 1.0
+    if strength >= float(cfg.get("tvLongMidStrength", 0.50) or 0.50):
+        return "mid", float(cfg.get("tvLongMidSizeMult", 0.70) or 0.70)
+    return "blocked", 0.0
+
+
 async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | None = None) -> tuple[str | None, dict | None, list[dict]]:
     candidates = await _scan_market_candidates(int(cfg.get("scanTopLiquid", 30)))
     blocked_symbols = {str(s).upper().strip() for s in (exclude_symbols or set()) if str(s).strip()}
+    # Final-gate rejects are short-lived runtime exclusions. The old profile
+    # cooldown was persisted but not consulted here, so a symbol such as BCH
+    # could be picked again every cycle after direction_bias blocked it.
+    _final_rejects = AUTO_TRADE.setdefault("scanFinalRejects", {})
+    _now_scan = int(time.time())
+    for _sym, _until in list(_final_rejects.items()):
+        try:
+            if int(_until or 0) > _now_scan:
+                blocked_symbols.add(str(_sym).upper().strip())
+            else:
+                _final_rejects.pop(_sym, None)
+        except Exception:
+            _final_rejects.pop(_sym, None)
     blocked_symbols.update(_parse_symbol_whitelist(cfg.get("scanDenySymbols")))
     # 2026-08-22: also apply the capital-preservation deny list here. The
     # resume gate (_risk_cooldown_resume_ok) covers single-symbol entries, but
@@ -2146,14 +2192,13 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         conf_hard_floor = float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72)
         adaptive_min_conf = max(conf_hard_floor, max(group_conf_floor, min(autotune_ceiling, adaptive_min_conf)))
         # Market-wide relaxation (Boss directive 2026-08-24): if the whole board
-        # is low-conviction, ease the gate below the autotune ceiling so the bot
-        # can still trade. Applied AFTER the ceiling cap so reward/loss-streak
-        # tightening cannot undo it. Uses the previous cycle's board median.
+        # is low-conviction, ease the gate only down to the hard floor. The old
+        # max(0.50, ...) relaxation could bypass minConfidenceHardFloor.
         _mkt_med = _scan_board_median_conf(AUTO_TRADE.get("scanBoard"))
         if _mkt_med is not None and _mkt_med > 0:
             _gap = base_min_conf - _mkt_med
             if _gap > 0.01:
-                adaptive_min_conf = max(0.50, adaptive_min_conf - min(0.06, _gap * 0.75))
+                adaptive_min_conf = max(conf_hard_floor, adaptive_min_conf - min(0.06, _gap * 0.75))
         score = score + float(session_bias.get("scoreShift", 0.0) or 0.0)
         # Per-group long-bias: shift score up when signal matches the
         # group's directional preference (e.g. trend-friendly groups
@@ -2209,19 +2254,18 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 if _tv_fresh and _tv_conf < _min_conf:
                     qualified = False
                     reject_reason = "tv_weak"
-        # LONG-specific TV strength gate (2026-09-25): mirror of the SHORT gate.
-        # 90d replay: LONG WR 66.6% but only tvStrength>=0.90 was robust (WR 72.3%,
-        # +51.78 USDT); sub-0.90 LONG lost money. Require tvStrength >=
-        # tvLongMinStrength when TV signal agrees with the LONG entry.
+        # LONG-specific TV strength gate (2026-09-25, tiered 2026-09-26):
+        # fresh TV with strength >= tvLongMinStrength (0.90) passes at full
+        # size; fresh 0.50-0.90 passes but is marked for reduced size at the
+        # order path; fresh <0.50 blocks. Stale/missing TV is not evidence.
         if qualified and sig == "LONG":
             _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
-            if _tv:
-                _tv_sig = str(_tv.get("signal", "")).upper()
-                _tv_strength = float(_tv.get("strength", 0.0) or 0.0)
-                _long_min_str = float(cfg.get("tvLongMinStrength", 0.90) or 0.90)
-                if _tv_sig == "LONG" and _tv_strength < _long_min_str:
-                    qualified = False
-                    reject_reason = "long_tv_low_strength"
+            _tier, _tier_mult = _tv_long_strength_tier(_tv, cfg)
+            if _tier == "blocked":
+                qualified = False
+                reject_reason = "long_tv_low_strength"
+            elif _tier == "mid":
+                out["_tvStrengthTier"] = "mid"
         # LONG + negative pattern-bias gate (2026-09-25). 90d replay:
         # patternBias>0 WR 62.8%, patternBias==0 WR 56.5%, patternBias<0 WR 42.6%.
         # A LONG against a strongly negative candle pattern is structurally
@@ -2233,6 +2277,15 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
             if _patt_bias < _long_pb_min:
                 qualified = False
                 reject_reason = "long_negative_pattern_bias"
+        # SHORT-side candle mirror: avoid shorting into strongly bullish candle
+        # structure unless the later pipeline has stronger confirmation.
+        if qualified and sig == "SHORT":
+            _patt_candle_short = out.get("candles") if isinstance(out.get("candles"), dict) else {}
+            _patt_bias_short = float(_patt_candle_short.get("bias", 0.0) or 0.0)
+            _short_pb_max = float(cfg.get("shortPatternBiasMax", 0.002) or 0.002)
+            if _patt_bias_short > _short_pb_max:
+                qualified = False
+                reject_reason = "short_positive_pattern_bias"
         # SHORT-specific TV gate (2026-08-22): telemetry showed SHORT WR 25% /
         # net -5.07 over 7d while only TV-conf>=0.7 SHORT trades were net-positive
         # (WR 62%) and any SHORT entered while TV signal was LONG lost (WR 20%).
@@ -2249,8 +2302,14 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                 # A weak TV LONG (strength < 0.45) should not block a strong
                 # SHORT — TV oscillators can flicker BUY/SELL at low strength.
                 _tv_strength = float(_tv.get("strength", 0.0) or 0.0)
+                _tv_age = int(_tv.get("age", 9999) or 9999)
+                _tv_status = str(_tv.get("status", "") or "").lower()
+                _tv_fresh = (
+                    not ("age" in _tv and "status" in _tv)
+                    or (_tv_status == "ok" and _tv_age <= int(cfg.get("tvEntryMaxAgeSec", 30) or 30))
+                )
                 _short_tv_block_min_strength = float(cfg.get("shortTvBlockMinStrength", 0.45) or 0.45)
-                if _tv_sig == "LONG" and _tv_strength >= _short_tv_block_min_strength:
+                if _tv_sig == "LONG" and _tv_fresh and _tv_strength >= _short_tv_block_min_strength:
                     qualified = False
                     reject_reason = "short_tv_conflict_long"
                 # Require higher TV confidence for SHORT than the generic floor
@@ -2263,7 +2322,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                     # WR 42.4% -15.4 USDT overall; only tvStrength>=0.9 was
                     # net-positive (+1.66, WR 61.6%). Block weak TV SHORT signal.
                     _short_min_str = float(cfg.get("shortTvMinStrength", 0.90) or 0.90)
-                    if _tv_strength < _short_min_str:
+                    if _tv_fresh and _tv_strength < _short_min_str:
                         qualified = False
                         reject_reason = "short_tv_low_strength"
                 elif _tv_sig == "WAIT":
@@ -2491,7 +2550,7 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         guarded_fallback_enabled = bool(cfg.get("scanGuardedFallbackEnabled", True))
         guarded_conf_relax = float(cfg.get("scanGuardedFallbackConfRelax", max(near_conf_relax, 0.12)) or 0.12)
         guarded_conf_relax = max(0.0, min(0.20, guarded_conf_relax))
-        guarded_floor = max(0.50, base_min_conf - guarded_conf_relax)
+        guarded_floor = max(float(cfg.get("minConfidenceHardFloor", 0.72) or 0.72), base_min_conf - guarded_conf_relax)
         low_conf_candidates: list[tuple[float, str, dict]] = []
         if guarded_fallback_enabled and board and not any(bool(row.get("qualified")) for row in board):
             low_conf_by_symbol = {symbol: (score, intel) for score, symbol, intel in guarded_low_conf_candidates}
@@ -6446,6 +6505,10 @@ async def _autotrade_loop():
             # losses so it also blocks. Disable via config biasGateEnabled=False.
             # Soften via config biasGateNeutralConfMin=0.85: NEUTRAL passes when
             # entry confidence >= threshold (opposing bias still always blocks).
+            # 2026-09-25: the conf override never applies when the M15/M30
+            # structure regime OPPOSES the side (LONG into DOWN, SHORT into UP) —
+            # UNIUSDT opened LONG conf 0.935 on bias=NEUTRAL/regime=DOWN and bled
+            # to the -2 USDT SL.
             # Strength gate: block weak trends (biasGateMinStrength) that carry
             # losses similar to NEUTRAL.
             if bool(cfg.get("biasGateEnabled", True)) and signal in ("LONG", "SHORT"):
@@ -6460,13 +6523,41 @@ async def _autotrade_loop():
                         conf=conf,
                         min_strength=float(cfg.get("biasGateMinStrength", 0.0) or 0.0),
                         strength=_bias_strength,
+                        regime=((_db or {}).get("regime") if isinstance(_db, dict) else None),
                     )
+                    if isinstance(_db, dict) and _db.get("ok") is False:
+                        _allow = False
+                        _reason = "direction_bias_unavailable"
+                    if _allow and bool(cfg.get("biasPullbackGateEnabled", True)) and isinstance(_db, dict):
+                        _entry_meta = _db.get("entry") if isinstance(_db.get("entry"), dict) else {}
+                        _entry_action = str(_entry_meta.get("action", "") or "").lower()
+                        if _entry_action in ("wait_pullback", "wait"):
+                            _volume_ratio = float((intel.get("momentum") or {}).get("volumeRatio", 0.0) or 0.0)
+                            _score_gap = abs(float((intel.get("precision") or {}).get("longScore", 0.0) or 0.0) - float((intel.get("precision") or {}).get("shortScore", 0.0) or 0.0))
+                            _breakout_ok = (
+                                conf >= float(cfg.get("biasPullbackBreakoutMinConfidence", 0.86) or 0.86)
+                                and _volume_ratio >= float(cfg.get("biasPullbackBreakoutMinVolumeRatio", 1.20) or 1.20)
+                                and _score_gap >= float(cfg.get("biasPullbackBreakoutMinScoreGap", 1.50) or 1.50)
+                            )
+                            if not _breakout_ok:
+                                _allow = False
+                                _reason = f"bias={_bias} waiting for pullback"
                     if not _allow:
                         _agent_mark("direction_bias_gate", "blocked", f"{cfg['symbol']} {signal}", f"bias={_bias} str={_bias_strength:.2f} · {_reason}")
                         _autotrade_skip(
                             "bias_gate",
                             f"Skip: {cfg['symbol']} {signal} blocked by direction-bias gate ({_reason})",
                         )
+                        if scan_mode:
+                            _picked_norm = str(cfg.get("symbol", "")).upper().strip()
+                            for _row in AUTO_TRADE.get("scanBoard") or []:
+                                if isinstance(_row, dict) and str(_row.get("symbol", "")).upper().strip() == _picked_norm:
+                                    _row["finalRejectReason"] = "bias_gate"
+                                    _row["finalRejectAt"] = int(time.time())
+                                    _row["qualified"] = False
+                                    break
+                            _cooldown_scan_symbol(_picked_norm, 30, "pipeline:bias_gate")
+                            AUTO_TRADE.setdefault("scanFinalRejects", {})[_picked_norm] = int(time.time()) + 90
                         await asyncio.sleep(cfg.get("intervalSec", 20))
                         continue
                     # ── Bias size scaling: scale trade_usdt by bias strength ──
@@ -6522,9 +6613,9 @@ async def _autotrade_loop():
             min_conf_cap = float(cfg.get("minConfidenceCap", 0.95))
             autotune_ceiling = float(cfg.get("supervisorMinConfidenceCeiling", 0.72) or 0.80)
             adaptive_min_conf = max(
-                min_conf_floor,
+                float(cfg.get("minConfidenceHardFloor", min_conf_floor) or min_conf_floor),
                 min(
-                    min(min_conf_cap, autotune_ceiling),
+                    min_conf_cap, autotune_ceiling,
                     float(adaptive_min_conf) + float(session_bias.get("confidenceShift", 0.0) or 0.0),
                 ),
             )
@@ -6717,6 +6808,31 @@ async def _autotrade_loop():
                     f"Supervisor streak size: mult={supervisor_size_mult:.3f} "
                     f"size {old_trade_usdt:.2f}->{trade_usdt:.2f}"
                 )
+            # 2026-09-26: enforce the fresh-TV LONG strength tier at order time,
+            # against the SAME snapshot family the entry record will capture.
+            # This closes the stale-at-scan / fresh-at-order bypass of
+            # tvLongMinStrength (8/10 post-fix entries recorded fresh 0.5-0.67).
+            if signal == "LONG":
+                _tier, _tier_mult = _tv_long_strength_tier(
+                    intel.get("tv") if isinstance(intel.get("tv"), dict) else {}, cfg
+                )
+                if _tier == "blocked":
+                    _agent_mark("market_analyst", "blocked", "tv_strength_tier", f"{cfg['symbol']} fresh TV strength below floor")
+                    _autotrade_skip(
+                        "tv_strength_tier",
+                        f"Skip: {cfg['symbol']} LONG fresh TV strength < tvLongMidStrength",
+                    )
+                    if scan_mode and cfg.get("symbol"):
+                        _cooldown_scan_symbol(str(cfg["symbol"]).upper().strip(), 30, "pipeline:tv_strength_tier")
+                    await asyncio.sleep(cfg["intervalSec"])
+                    continue
+                if _tier == "mid" and _tier_mult < 1.0:
+                    old_trade_usdt = trade_usdt
+                    trade_usdt = round(float(trade_usdt) * _tier_mult, 2)
+                    _autotrade_log(
+                        f"TV strength tier [mid]: {cfg['symbol']} LONG "
+                        f"size {old_trade_usdt:.2f}->{trade_usdt:.2f} (x{_tier_mult})"
+                    )
             eff_cap = _effective_tp_sl(cfg["symbol"], cfg, intel)
             trade_cap = max(20.0, float(eff_cap.get("notionalCapUsdt", RISK["max_notional"])))
             # 2026-08-20: absolute hard cap. The per-symbol/volatility multiplier
@@ -6734,6 +6850,20 @@ async def _autotrade_loop():
             if bool(cfg.get("marginBasedSizing", False)):
                 _margin_cap = max(1.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
                 trade_cap = min(trade_cap, _margin_cap)
+                # 2026-09-25: tradeNotionalCapUsdt is a NOTIONAL cap, but after the
+                # margin redesign trade_usdt is MARGIN (notional = margin × lev).
+                # Clamp the margin to notionalCap / lev so a single position can
+                # never exceed the operator's capital cap — UNIUSDT opened
+                # 10.6 margin × 15 lev = 158 USDT notional because the cap was
+                # only ever compared against the margin itself.
+                _lev_cap_f = max(1.0, float(eff_leverage or 1.0))
+                _notional_cap_f = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+                if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
+                    _notional_cap_f = min(
+                        _notional_cap_f,
+                        float(cfg.get("autoScanTradeNotionalCapUsdt", _notional_cap_f) or _notional_cap_f),
+                    )
+                trade_cap = min(trade_cap, max(0.01, _notional_cap_f / _lev_cap_f))
             if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
                 trade_cap = min(
                     trade_cap,
@@ -6803,17 +6933,24 @@ async def _autotrade_loop():
                 if bool(cfg.get("marginBasedSizing", False)):
                     _eff_lev_f = max(1.0, float(eff_leverage or cfg.get("leverage", 5) or 5))
                     _margin_cap_f = max(1.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0))
-                    _need_margin = max(_margin_cap_f, min_order_usdt / _eff_lev_f)
-                    if _need_margin > _margin_cap_f:
+                    # trade_cap is already the tightest margin ceiling after
+                    # converting tradeNotionalCapUsdt / leverage above. The
+                    # exchange minimum is a notional floor, so convert it back
+                    # to margin and reject only when that required margin cannot
+                    # fit under the effective operator cap.
+                    _need_margin = min_order_usdt / _eff_lev_f
+                    _effective_margin_cap = min(_margin_cap_f, max(0.01, float(trade_cap)))
+                    if _need_margin > _effective_margin_cap:
                         _autotrade_skip(
                             "usdt_too_small",
                             f"Skip: {cfg['symbol']} min_notional {min_order_usdt:.2f} needs "
-                            f"margin >= {_need_margin:.2f} > marginSizingMaxUsdt {_margin_cap_f:.2f} (lev {int(_eff_lev_f)}x)",
+                            f"margin {_need_margin:.2f} > effective cap {_effective_margin_cap:.2f} "
+                            f"(lev {int(_eff_lev_f)}x)",
                         )
                         AUTO_TRADE["consecutiveErrors"] = max(0, AUTO_TRADE["consecutiveErrors"] - 1)
                         continue
-                    trade_usdt = round(max(trade_usdt, min_order_usdt / _eff_lev_f), 2)
-                    trade_usdt = round(min(trade_usdt, _margin_cap_f), 2)
+                    trade_usdt = round(max(trade_usdt, _need_margin), 2)
+                    trade_usdt = round(min(trade_usdt, _effective_margin_cap), 2)
                 else:
                     trade_usdt = round(min(max(trade_usdt, min_order_usdt), _cap), 2)
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
@@ -6823,7 +6960,19 @@ async def _autotrade_loop():
                 trade_usdt = float(RISK["max_notional"])
 
             # ── Run entry pipeline (replaces inline gate checks) ──
+            # Pipeline consumes the legacy HTF contract. Prefer explicit htf,
+            # otherwise adapt the real M15/M30 directionBias producer without
+            # treating detector failure as a valid neutral trend.
             htf = intel.get("htf") if isinstance(intel, dict) and isinstance(intel.get("htf"), dict) else {}
+            if not htf and isinstance(intel, dict):
+                _db_for_htf = intel.get("directionBias") if isinstance(intel.get("directionBias"), dict) else {}
+                if bool(_db_for_htf.get("ok")):
+                    htf = {
+                        "dir": str(_db_for_htf.get("bias", "NEUTRAL") or "NEUTRAL").upper(),
+                        "strength": float(_db_for_htf.get("strength", 0.0) or 0.0),
+                        "regime": str(_db_for_htf.get("regime", "MIXED") or "MIXED").upper(),
+                        "source": "directionBias",
+                    }
             candle_ctx = intel.get("candles") if isinstance(intel, dict) and isinstance(intel.get("candles"), dict) else {}
             regime = detect_market_regime(intel) if intel else {}
             rv_pct = float((intel.get("precision") or {}).get("rvPct", 0.0) or 0.0) if isinstance(intel, dict) else None
@@ -6880,7 +7029,19 @@ async def _autotrade_loop():
                 _agent_mark("strategy_builder", "blocked", skip_code, skip_msg)
                 _autotrade_skip(skip_code, f"Skip: {skip_msg}")
                 if scan_mode and picked_symbol:
-                    _cooldown_scan_symbol(str(picked_symbol), 30, f"pipeline:{skip_code}")
+                    _picked_norm = str(picked_symbol).upper().strip()
+                    # Preserve the final gate outcome on the scan board. The
+                    # picker already cools this symbol for 30s, so the next
+                    # cycle naturally retries the next qualified candidate
+                    # without reopening the rejected symbol immediately.
+                    for _row in AUTO_TRADE.get("scanBoard") or []:
+                        if isinstance(_row, dict) and str(_row.get("symbol", "")).upper().strip() == _picked_norm:
+                            _row["finalRejectReason"] = skip_code
+                            _row["finalRejectAt"] = int(time.time())
+                            _row["qualified"] = False
+                            break
+                    _cooldown_scan_symbol(_picked_norm, 30, f"pipeline:{skip_code}")
+                    AUTO_TRADE.setdefault("scanFinalRejects", {})[_picked_norm] = int(time.time()) + 90
                 await asyncio.sleep(cfg["intervalSec"])
                 continue
 
@@ -6888,13 +7049,29 @@ async def _autotrade_loop():
             signal = plan.signal
             conf = plan.confidence
             trade_usdt = plan.trade_usdt
+            eff_leverage = plan.eff_leverage
             # 2026-09-08: the pipeline re-applies regime/session multipliers on
             # the capped margin (pipeline.py regime_sizing/session_sizing), which
             # silently defeats the margin cap applied above (trade_cap). Re-clamp
             # after the plan override so plan side can never blow past the cap.
+            # Re-derive the notional→margin ceiling with the plan's final
+            # leverage too; this keeps the operator cap true even if a pipeline
+            # plan changes leverage after the pre-plan sizing pass.
+            if bool(cfg.get("marginBasedSizing", False)):
+                _plan_lev_f = max(1.0, float(eff_leverage or 1.0))
+                _plan_notional_cap_f = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
+                if bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in {"AUTO", "SCAN"}:
+                    _plan_notional_cap_f = min(
+                        _plan_notional_cap_f,
+                        float(cfg.get("autoScanTradeNotionalCapUsdt", _plan_notional_cap_f) or _plan_notional_cap_f),
+                    )
+                trade_cap = min(
+                    trade_cap,
+                    max(0.01, _plan_notional_cap_f / _plan_lev_f),
+                    max(1.0, float(cfg.get("marginSizingMaxUsdt", 20.0) or 20.0)),
+                )
             if trade_usdt > trade_cap:
                 trade_usdt = round(float(trade_cap), 2)
-            eff_leverage = plan.eff_leverage
             _agent_mark("strategy_builder", "done", "entry approved", f"{cfg['symbol']} {signal} c={conf:.3f} pipeline={len(plan.pipeline)} gates")
 
             # LIVE-only execution (paper-trading mode removed 2026-08-24, Boss directive)

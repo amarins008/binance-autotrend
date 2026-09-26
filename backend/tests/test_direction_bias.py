@@ -162,3 +162,22 @@ def test_bias_gate_neutral_conf_min_never_overrides_opposing_bias():
     assert not ok
     ok, _ = bias_gate("SHORT", "LONG", neutral_conf_min=0.85, conf=0.99)
     assert not ok
+
+
+def test_bias_gate_neutral_conf_min_blocked_by_opposing_regime():
+    # UNIUSDT incident: LONG conf 0.935 on bias=NEUTRAL / regime=DOWN bled to
+    # the -2 USDT SL — the conf override must not apply against structure.
+    ok, reason = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.8, conf=0.935, regime="DOWN")
+    assert not ok and "regime=DOWN" in reason
+    ok, reason = bias_gate("SHORT", "NEUTRAL", neutral_conf_min=0.8, conf=0.935, regime="UP")
+    assert not ok and "regime=UP" in reason
+
+
+def test_bias_gate_neutral_conf_min_regime_mixed_or_aligned_still_allows():
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.8, conf=0.93, regime="MIXED")
+    assert ok
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.8, conf=0.93, regime="UP")
+    assert ok
+    # missing regime keeps the old soften behaviour
+    ok, _ = bias_gate("LONG", "NEUTRAL", neutral_conf_min=0.8, conf=0.93)
+    assert ok

@@ -221,7 +221,10 @@ async def intel_analyze(req: IntelAnalyzeRequest):
             }
 
     # Pre-fetch klines once and share across momentum + precision to avoid duplicate requests
-    rows_1m = await _main()._cached_klines(symbol, "1m", 150)  # 150 sufficient for EMA200 approx
+    # Fetch enough closed-history context for a real EMA200 readiness check.
+    # The prior 150-row approximation was emitted without the fields consumed
+    # by the pipeline, making ema200StrictEnabled effectively a no-op.
+    rows_1m = await _main()._cached_klines(symbol, "1m", 250)
 
     async def _dir_bias():
         try:
@@ -241,8 +244,8 @@ async def intel_analyze(req: IntelAnalyzeRequest):
             }
 
     mm, pk, depth_out, execution, candle_ctx, dir_bias = await asyncio.gather(
-        _market_momentum(symbol, _rows=rows_1m[:60]),
-        _precision_signal_pack(symbol, limit=150, _rows_1m=rows_1m),
+        _market_momentum(symbol, _rows=rows_1m[-60:]),
+        _precision_signal_pack(symbol, limit=250, _rows_1m=rows_1m),
         _depth_orderflow(),
         _microstructure(),
         _candlestick_pattern_context(symbol),
@@ -495,6 +498,28 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         confidence = min(confidence, 0.50)
     notes.append(f"Score L/S={long_score}/{short_score} | MACD={'↑' if pk['macdBullish'] else '↓'} | BB%B={pk['bbPctB']:.2f} | VWAP={'↑' if pk['priceAboveVwap'] else '↓'}")
 
+    # Re-apply the divergence veto after confluence. Strong-score branches above
+    # can otherwise resurrect a side that the earlier momentum check blocked.
+    try:
+        _div_filter_enabled = bool(
+            apply_autotrade_defaults(copy.deepcopy(_main().AUTO_TRADE.get("config") or {})).get(
+                "divergenceFilterEnabled", True
+            )
+        )
+    except Exception:
+        _div_filter_enabled = True
+    if _div_filter_enabled:
+        _final_div = str(mm.get("divergence", "") or "").upper()
+        _final_div_conflict = (
+            (_final_div == "BEARISH_DIVERGENCE" and final_signal == "LONG")
+            or (_final_div == "BULLISH_DIVERGENCE" and final_signal == "SHORT")
+        )
+        if _final_div_conflict:
+            _vetoed_signal = final_signal
+            final_signal = "WAIT"
+            confidence = min(confidence, 0.48)
+            notes.append(f"Final divergence veto: {_final_div} blocked {_vetoed_signal}")
+
     bias = candle_ctx.get("bias", 0.0) if isinstance(candle_ctx, dict) and candle_ctx.get("ok") else 0.0
     if final_signal == "LONG":
         old_conf = confidence
@@ -655,6 +680,9 @@ async def intel_analyze(req: IntelAnalyzeRequest):
             "priceAboveVwap": pk["priceAboveVwap"],
             "vwapDistancePct": round(pk["vwapDistancePct"], 4),
             "atrPct": round(pk["atrPct"], 4),
+            "ema200": round(float(pk.get("ema200_1m", 0.0) or 0.0), 8),
+            "ema200Ready": bool(pk.get("ema200Ready", False)),
+            "priceAboveEma200": bool(pk.get("priceAboveEma200", False)),
             "atrTpMult": pk.get("atrTpMult", 1.5),
             "atrSlMult": pk.get("atrSlMult", 1.0),
             "cvd": round(pk.get("cvd", 0.0), 4),
@@ -791,6 +819,8 @@ async def _precision_signal_pack(symbol: str, limit: int = 200, _rows_1m: list |
     ema21_1m  = _ema(c1, 21)
     ema50_1m  = _ema(c1, 50)
     ema200_1m = _ema(c1, 200)
+    ema200_ready = len(c1) >= 200
+    price_above_ema200 = bool(ema200_ready and last > ema200_1m)
     ema21_5m  = _ema(c5, 21)
     ema50_5m  = _ema(c5, 50)
     ema21_15m = _ema(c15, 21) if c15 else ema50_5m
@@ -886,6 +916,8 @@ async def _precision_signal_pack(symbol: str, limit: int = 200, _rows_1m: list |
         "ema21_1m": ema21_1m,
         "ema50_1m": ema50_1m,
         "ema200_1m": ema200_1m,
+        "ema200Ready": ema200_ready,
+        "priceAboveEma200": price_above_ema200,
         "ema21_5m": ema21_5m,
         "ema50_5m": ema50_5m,
         # RSI / StochRSI

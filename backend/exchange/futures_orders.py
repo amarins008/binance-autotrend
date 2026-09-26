@@ -600,12 +600,14 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
         else:
             close_results.append(await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload))
         if entry > 0 and qty > 0:
-            pnl = (close_mark - entry) * qty if pos_side == "LONG" else (entry - close_mark) * qty
+            fill_px = _extract_fill_price(order_resp)
+            exit_px = fill_px if fill_px and fill_px > 0 else close_mark
+            pnl = (exit_px - entry) * qty if pos_side == "LONG" else (entry - exit_px) * qty
             entry_snapshot = _entry_snapshot_for_position(symbol, pos_side)
             learned_trades.append({
                 "side": pos_side,
                 "entry": entry,
-                "exit": close_mark,
+                "exit": exit_px,
                 "qty": qty,
                 "pnl": round(float(pnl), 6),
                 "reason": "LIVE_CLOSE",

@@ -275,6 +275,7 @@ def bias_gate(
     conf: float = 0.0,
     min_strength: float = 0.0,
     strength: float = 0.0,
+    regime: str | None = None,
 ) -> tuple[bool, str]:
     """Directional entry gate: allow an entry only when the detected direction
     bias agrees with the side about to be opened.
@@ -289,6 +290,12 @@ def bias_gate(
     ``biasGateNeutralConfMin``). Bias opposing the side (LONG vs SHORT) always
     blocks regardless of confidence.
 
+    ``regime`` (the M15/M30 structure direction UP/DOWN/MIXED) closes the
+    conf-override hole: a NEUTRAL bias on a structure that OPPOSES the side
+    (LONG into DOWN, SHORT into UP) still blocks even with high confidence —
+    UNIUSDT entered LONG conf 0.935 on bias=NEUTRAL/regime=DOWN and bled to
+    the -2 USDT SL. MIXED regime keeps the old soften behaviour.
+
     ``min_strength`` blocks entries when bias strength < threshold (config
     ``biasGateMinStrength``). Weak trends carry losses similar to NEUTRAL.
 
@@ -297,17 +304,22 @@ def bias_gate(
       - bias missing/invalid       -> (True,  "bias-unavailable")  (don't block on a detector outage)
       - strength < min_strength    -> (False, "bias=.. strength=.. < min")
       - bias == side               -> (True,  "bias matches")
+      - bias NEUTRAL & regime opposes side -> (False, "regime=.. against ..")  (even at high conf)
       - bias NEUTRAL & conf high   -> (True,  "bias=NEUTRAL conf=..")  (when neutral_conf_min > 0)
       - bias NEUTRAL otherwise     -> (False, "bias=NEUTRAL != side")
       - bias != side (opposing)    -> (False, "bias=SHORT|LONG != side")
     """
     side = str(side or "").upper()
     bias = str(bias or "").upper()
+    regime = str(regime or "").upper()
     if side not in ("LONG", "SHORT"):
         return True, "no-side"
     if bias not in ("LONG", "SHORT"):
         if bias not in ("LONG", "SHORT", "NEUTRAL"):
             return True, "bias-unavailable"
+        if bias == "NEUTRAL" and regime in ("UP", "DOWN"):
+            if (side == "LONG" and regime == "DOWN") or (side == "SHORT" and regime == "UP"):
+                return False, f"regime={regime} opposes {side}"
         if bias == "NEUTRAL" and neutral_conf_min > 0 and float(conf) >= float(neutral_conf_min):
             return True, f"bias=NEUTRAL conf={float(conf):.2f}"
         return False, f"bias={bias} != {side}"

@@ -9,7 +9,7 @@ from trading.presets import PRO_STANDALONE_PRESET
 # snapshot config.  On the first restart after a bump, force-override keys
 # listed in _FORCE_DEFAULTS to the new values.  Subsequent restarts
 # respect the snapshot (user may have tuned).
-CONFIG_VERSION = 25
+CONFIG_VERSION = 26
 
 # Keys that are force-overridden when _configVersion < CONFIG_VERSION.
 # After the override, users can still change these via the dashboard; the
@@ -395,8 +395,8 @@ _FORCE_DEFAULTS_V23: dict = {
     "profitLockTriggerUsdt": 0.50,          # arm profit-lock at ~25% of TP target
     "profitLockKeepUsdt": 1.10,             # keep ~55% of TP target
     "profitLockMaxGivebackUsdt": 0.30,      # allow ~15% of TP target giveback
-    "profitLockBreakevenTriggerUsdt": 0.50, # arm breakeven at ~25% of TP target
-    "profitLockBreakevenFloorUsdt": 0.25,   # breakeven floor at ~12.5% of TP target
+    "profitLockBreakevenTriggerUsdt": 0.15, # arm breakeven at ~7.5% of TP target
+    "profitLockBreakevenFloorUsdt": 0.10,   # breakeven floor at ~5% of TP target
     "tryGreenExitMinProfitUsdt": 0.15,      # was 0.06
     "tryGreenExitMaxProfitUsdt": 0.50,      # was 0.15/0.20
     "holdMinProfitUsdt": 0.30,              # was 0.12
@@ -425,6 +425,21 @@ _FORCE_DEFAULTS_V25: dict = {
     "tvLongMinStrength": 0.90,
     "tvEntryMinConfidence": 0.70,
     "longPatternBiasMin": -0.002,
+}
+
+
+_FORCE_DEFAULTS_V26: dict = {
+    # V26: operator lock-in (2026-09-25). These keys drifted back after the
+    # earlier manual /bot/config lock (tuner re-applied old values while the
+    # master switch key was missing from the snapshot → guard defaulted True).
+    # supervisorAutoTuneEnabled: supervisor tuners mutated weak_payoff/size
+    #   knobs (~90s) and re-loosened operator-set gates (tvWaitMinConf
+    #   0.88→0.82, supervisorSizeMultiplier 1.0→1.35 ceiling).
+    # tvWaitMinConf 0.88: fresh explicit TV WAIT is a non-confirmation;
+    #   MARSCOIN entered at conf 0.82 (== old threshold) with momo 0 and lost
+    #   -2.76 USDT. Restore the tightened gate.
+    "supervisorAutoTuneEnabled": False,
+    "tvWaitMinConf": 0.88,
 }
 
 
@@ -542,8 +557,8 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("profitLockTriggerUsdt", 0.50)
     out.setdefault("profitLockKeepUsdt", 1.10)
     out.setdefault("profitLockMaxGivebackUsdt", 0.30)
-    out.setdefault("profitLockBreakevenTriggerUsdt", 0.50)
-    out.setdefault("profitLockBreakevenFloorUsdt", 0.25)
+    out.setdefault("profitLockBreakevenTriggerUsdt", 0.15)
+    out.setdefault("profitLockBreakevenFloorUsdt", 0.10)
     out.setdefault("payoffLossGuardEnabled", True)
     out.setdefault("payoffLossGuardMinTrades", 6)
     out.setdefault("payoffLossGuardWindowTrades", 8)
@@ -599,6 +614,26 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("biasGateEnabled", True)
     out.setdefault("biasGateMinStrength", 0.0)
     out.setdefault("biasGateNeutralConfMin", 0.0)
+    out.setdefault("biasPullbackGateEnabled", True)
+    out.setdefault("biasPullbackBreakoutMinConfidence", 0.86)
+    out.setdefault("biasPullbackBreakoutMinVolumeRatio", 1.20)
+    out.setdefault("biasPullbackBreakoutMinScoreGap", 1.50)
+    out.setdefault("shortPatternBiasMax", 0.002)
+    # 2026-09-26: TV strength tier for LONG. The old all-or-nothing
+    # tvLongMinStrength=0.90 gate was bypassed in practice (stale-at-scan →
+    # fresh-at-order timing): 8/10 post-fix entries recorded fresh strength
+    # 0.5-0.67 and went 7W/1L. Policy: fresh ≥0.90 full size, fresh 0.50-0.90
+    # reduced size, fresh <0.50 blocked, stale/missing → confidence gates only.
+    out.setdefault("tvLongMidStrength", 0.50)
+    out.setdefault("tvLongMidSizeMult", 0.70)
+    # 2026-09-26: hold-winner/TP-extension was dead (0/124 trades): WAIT intel
+    # conf is capped ~0.50 so the 0.72-0.78 floor never passed, and the live
+    # holdMinProfitUsdt (0.30) sat above most winners' peak (0.08-0.25).
+    out.setdefault("holdWaitSignalIgnoreConf", True)
+    out.setdefault("holdExtendMinProfitUsdt", 0.10)
+    # Fail closed: a legacy or partial snapshot must not silently re-enable
+    # supervisor tuners when the master key is absent.
+    out.setdefault("supervisorAutoTuneEnabled", False)
     out.setdefault("biasSizeScalingEnabled", False)
     out.setdefault("biasSizeMinMult", 0.5)
     out.setdefault("marginSizingMaxUsdt", 25.0)
@@ -915,6 +950,9 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
                 out[_fk] = _fv
         if _stored_ver < 25:
             for _fk, _fv in _FORCE_DEFAULTS_V25.items():
+                out[_fk] = _fv
+        if _stored_ver < 26:
+            for _fk, _fv in _FORCE_DEFAULTS_V26.items():
                 out[_fk] = _fv
         out["_configVersion"] = CONFIG_VERSION
 

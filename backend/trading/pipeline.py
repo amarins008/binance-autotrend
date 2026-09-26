@@ -192,6 +192,20 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                 pipeline=pipeline,
             )
         _step(pipeline, "pattern", True, f"patterns {entry_tags}")
+    # Mirror the LONG candle-bias guard for SHORT entries. This is deliberately
+    # a small configurable threshold rather than a global pattern denylist.
+    if signal == "SHORT" and isinstance(candles_ctx, dict):
+        _short_bias = float(candles_ctx.get("bias", 0.0) or 0.0)
+        _short_bias_max = float(cfg.get("shortPatternBiasMax", 0.002) or 0.002)
+        if _short_bias > _short_bias_max:
+            return EntryPlan(
+                False,
+                "short_positive_pattern_bias",
+                f"Skip: SHORT positive pattern bias {_short_bias:.4f} > {_short_bias_max:.4f}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
 
     # TV-conflict block (V12, layer 2): intel_analyze hard-blocks at strength
     # >= 0.75, but the 0.60-0.75 "soft conflict" zone only applied a -0.072
@@ -203,6 +217,17 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     # tv.blocked=True + final_signal=WAIT. If so, skip redundant re-check
     # to avoid applying a different tvConflictBlockStrength threshold.
     tv_info = inp.intel.get("tv") if isinstance(inp.intel.get("tv"), dict) else {}
+    # A complete snapshot with an age beyond the scan freshness window is not
+    # evidence for or against the entry. Route it through the existing
+    # unavailable-TV confidence gate; preserve legacy fixtures that omit age or
+    # status so older callers keep their compatibility behavior.
+    if "age" in tv_info and "status" in tv_info:
+        try:
+            _tv_max_age = int(cfg.get("tvEntryMaxAgeSec", 30) or 30)
+            if str(tv_info.get("status", "")).lower() == "ok" and int(tv_info.get("age", 9999) or 9999) > _tv_max_age:
+                tv_info = {**tv_info, "signal": "", "strength": 0.0, "confidence": 0.0, "status": "unavailable", "stale": True}
+        except (TypeError, ValueError):
+            pass
     tv_already_blocked = bool(tv_info.get("blocked", False))
     tv_sig = str(tv_info.get("signal", "") or "").upper().strip()
     tv_strength = float(tv_info.get("strength", 0.0) or 0.0)
@@ -293,6 +318,44 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             conf = max(0.0, conf - shave)
             _step(pipeline, "pre_reversal", True,
                   f"soft pre-reversal {pre_rev_score:.2f} (>= {soft_thr:.2f}): conf {conf:.3f}")
+            # The initial confidence gate ran before the pre-reversal shave.
+            # Recheck the same effective threshold so softening cannot turn a
+            # borderline entry into an approved plan below adaptive_min_conf.
+            if not _step(
+                pipeline,
+                "confidence_recheck",
+                conf >= inp.adaptive_min_conf,
+                f"{conf:.3f} vs min {inp.adaptive_min_conf:.3f} after pre-reversal",
+            ):
+                return EntryPlan(
+                    False,
+                    "low_confidence",
+                    f"Skip: confidence {conf:.3f} < {inp.adaptive_min_conf:.2f} after pre-reversal adjustment",
+                    signal,
+                    conf,
+                    pipeline=pipeline,
+                )
+
+    # Divergence is an entry-side veto, not just a score annotation. The
+    # confluence scorer can otherwise resurrect a side that was blocked by the
+    # earlier momentum check (strong-score LONG after bearish divergence, etc.).
+    if bool(cfg.get("divergenceFilterEnabled", True)):
+        _divergence = str((inp.intel.get("momentum") or {}).get("divergence", "") or "").upper()
+        _divergence_conflict = (
+            (_divergence == "BEARISH_DIVERGENCE" and signal == "LONG")
+            or (_divergence == "BULLISH_DIVERGENCE" and signal == "SHORT")
+        )
+        if _divergence_conflict:
+            _step(pipeline, "divergence", False, f"{_divergence} conflicts with {signal}")
+            return EntryPlan(
+                False,
+                "divergence",
+                f"Skip: {_divergence} conflicts with {signal}",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
+        _step(pipeline, "divergence", True, _divergence or "none")
 
     # Momentum confirmation for timing accuracy
     momentum = inp.intel.get("momentum") if isinstance(inp.intel.get("momentum"), dict) else {}
@@ -379,7 +442,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             if signal == "LONG" and not p_macro.get("priceAboveEma200"):
                 ema_ok = False
                 detail = "LONG below EMA200"
-            if signal == "SHORT" and p_macro.get("priceAboveEma200"):
+            elif signal == "SHORT" and p_macro.get("priceAboveEma200"):
                 ema_ok = False
                 detail = "SHORT above EMA200"
             else:

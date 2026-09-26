@@ -29,10 +29,15 @@ def should_hold_winner(side: str, intel: dict | None, cfg: dict, hold_min_conf: 
         if sig != side or conf < min_conf:
             return False
     else:
-        # With holdAllowWaitSignal: allow WAIT, only block opposite signal or low conf
+        # With holdAllowWaitSignal: allow WAIT, only block opposite signal or low conf.
+        # 2026-09-26: WAIT confidence is capped near 0.50 upstream by design
+        # (intel_analyze clamps WAIT to <=0.50), so the directional conf floor
+        # (0.72-0.78) can never be met while the signal is WAIT — this made
+        # hold-winner activation impossible (0/124 trades). For WAIT we gate
+        # on momentum alignment only; opt out via holdWaitSignalIgnoreConf.
         if sig != "WAIT" and sig != side:
             return False
-        if conf < min_conf:
+        if (sig != "WAIT" or not bool(cfg.get("holdWaitSignalIgnoreConf", True))) and conf < min_conf:
             return False
     ex = intel.get("execution") if isinstance(intel.get("execution"), dict) else {}
     mom = float(ex.get("momentumPct", 0.0) or 0.0)

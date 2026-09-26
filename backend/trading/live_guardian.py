@@ -1712,7 +1712,10 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             # when upnl exceeds a small profit floor AND the signal is still
             # aligned (strong_follow / _should_hold_winner), letting the guardian
             # trail SL to breakeven / extend TP on winners that never tap TP.
-            _hold_min_profit = float(cfg.get("holdMinProfitUsdt", 0.03) or 0.03)
+            # 2026-09-26: dedicated floor for the extend path — the live
+            # holdMinProfitUsdt (0.30, V23 ratio) sits above most winners' peak
+            # (0.08-0.25), so _in_profit_hold was almost never true either.
+            _hold_min_profit = float(cfg.get("holdExtendMinProfitUsdt", 0.10) or 0.10)
             _in_profit_hold = upnl > _hold_min_profit
             if (hit_tp or (isinstance(intel, dict) and _in_profit_hold)) and (strong_follow or _should_hold_winner(side, intel, cfg, _per_sym_eff.get("holdMinConfidence") if _per_sym_eff else None)):
                 _tv_prefetched = _tv_results.get(f"{sym}:{side}")

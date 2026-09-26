@@ -990,6 +990,83 @@ class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(budget, 80.0)
         self.assertLessEqual(budget, 120.0)
 
+    async def test_scan_tv_strength_mid_tier_qualifies(self):
+        """Fresh TV strength 0.60 (mid tier) must qualify, not be rejected —
+        the old all-or-nothing 0.90 gate blocked these; sizing handles them."""
+        prev_rejects = main.AUTO_TRADE.get("scanFinalRejects")
+        main.AUTO_TRADE["scanFinalRejects"] = {}
+        try:
+            async def fake_intel(req):
+                return {
+                    "signal": "LONG",
+                    "confidence": 0.86,
+                    "execution": {"momentumPct": 0.3, "spreadBps": 1.0},
+                    "tv": {"signal": "LONG", "confidence": 0.8, "strength": 0.60, "age": 2, "status": "ok"},
+                }
+            cfg = {"minConfidence": 0.7, "scanAnalyzeTop": 2, "scanSidePreference": "score"}
+            with mock.patch.object(main, "_scan_market_candidates", new=mock.AsyncMock(return_value=["MIDTVUSDT"])):
+                with mock.patch.object(main, "intel_analyze", new=fake_intel):
+                    with mock.patch.object(main, "_symbol_perf_gate", return_value=(True, "", {"trades": 0})):
+                        picked_symbol, _picked_intel, board = await main._pick_best_symbol_from_scan(cfg)
+            self.assertEqual(picked_symbol, "MIDTVUSDT")
+            row = next(r for r in board if r["symbol"] == "MIDTVUSDT")
+            self.assertTrue(row["qualified"])
+            self.assertNotEqual(row["rejectReason"], "long_tv_low_strength")
+        finally:
+            if prev_rejects is None:
+                main.AUTO_TRADE.pop("scanFinalRejects", None)
+            else:
+                main.AUTO_TRADE["scanFinalRejects"] = prev_rejects
+
+    async def test_scan_tv_strength_below_floor_rejected(self):
+        """Fresh TV strength 0.40 (< tvLongMidStrength 0.50) must be rejected."""
+        prev_rejects = main.AUTO_TRADE.get("scanFinalRejects")
+        main.AUTO_TRADE["scanFinalRejects"] = {}
+        try:
+            async def fake_intel(req):
+                return {
+                    "signal": "LONG",
+                    "confidence": 0.86,
+                    "execution": {"momentumPct": 0.3, "spreadBps": 1.0},
+                    "tv": {"signal": "LONG", "confidence": 0.8, "strength": 0.40, "age": 2, "status": "ok"},
+                }
+            cfg = {"minConfidence": 0.7, "scanAnalyzeTop": 2, "scanSidePreference": "score"}
+            with mock.patch.object(main, "_scan_market_candidates", new=mock.AsyncMock(return_value=["LOWTVUSDT"])):
+                with mock.patch.object(main, "intel_analyze", new=fake_intel):
+                    with mock.patch.object(main, "_symbol_perf_gate", return_value=(True, "", {"trades": 0})):
+                        _picked_symbol, _picked_intel, board = await main._pick_best_symbol_from_scan(cfg)
+            row = next(r for r in board if r["symbol"] == "LOWTVUSDT")
+            self.assertFalse(row["qualified"])
+            self.assertEqual(row["rejectReason"], "long_tv_low_strength")
+        finally:
+            if prev_rejects is None:
+                main.AUTO_TRADE.pop("scanFinalRejects", None)
+            else:
+                main.AUTO_TRADE["scanFinalRejects"] = prev_rejects
+
+    async def test_scan_skips_runtime_final_reject_and_picks_next_candidate(self):
+        prev = main.AUTO_TRADE.get("scanFinalRejects")
+        main.AUTO_TRADE["scanFinalRejects"] = {"BCHUSDT": int(main.time.time()) + 90}
+        try:
+            async def fake_intel(req):
+                return {
+                    "signal": "LONG",
+                    "confidence": 0.84 if req.symbol == "BCHUSDT" else 0.80,
+                    "execution": {"momentumPct": 0.3, "spreadBps": 1.0},
+                }
+            cfg = {"minConfidence": 0.7, "scanAnalyzeTop": 3, "scanSidePreference": "score"}
+            with mock.patch.object(main, "_scan_market_candidates", new=mock.AsyncMock(return_value=["BCHUSDT", "ADAUSDT"])):
+                with mock.patch.object(main, "intel_analyze", new=fake_intel):
+                    with mock.patch.object(main, "_symbol_perf_gate", return_value=(True, "", {"trades": 0})):
+                        picked_symbol, _picked_intel, board = await main._pick_best_symbol_from_scan(cfg)
+            self.assertEqual(picked_symbol, "ADAUSDT")
+            self.assertNotIn("BCHUSDT", [row["symbol"] for row in board])
+        finally:
+            if prev is None:
+                main.AUTO_TRADE.pop("scanFinalRejects", None)
+            else:
+                main.AUTO_TRADE["scanFinalRejects"] = prev
+
     async def test_scan_picks_highest_score_instead_of_long_first(self):
         async def fake_intel(req):
             if req.symbol == "LONGUSDT":
@@ -1279,6 +1356,9 @@ class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
             "scanAnalyzeTop": 3,
             "scanGuardedFallbackAnalyzeTop": 6,
             "scanGuardedFallbackConfRelax": 0.14,
+            # Keep this unit test focused on guarded fallback selection; the
+            # production hard floor is 0.72 and is enforced before this path.
+            "minConfidenceHardFloor": 0.50,
             "scanSidePreference": "score",
             "scanFallbackNearEnabled": True,
         }
