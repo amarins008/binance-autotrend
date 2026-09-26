@@ -418,11 +418,14 @@ class TestCmuxToHermes(unittest.TestCase):
             return_value={"ok": True, "running": True, "config": {"executionMode": "LIVE", "symbol": "BEATUSDT"}}
         )
 
-        with mock.patch.object(cmux_service, "hermes_service", fake):
-            with mock.patch.object(cmux_service, "_save_train_report", return_value=None):
-                report = cmux_service._run_learning_train(
-                    {"symbols": ["BEATUSDT"], "trainSize": 5, "testSize": 3, "promoteHitRatePct": 55.0}
-                )
+        # .env ships LEARNING_AUTO_APPLY_PROMOTED=false (operator choice);
+        # this test exercises the FEATURE, so pin the flag enabled.
+        with mock.patch.object(cmux_service, "LEARNING_AUTO_APPLY_PROMOTED", True):
+            with mock.patch.object(cmux_service, "hermes_service", fake):
+                with mock.patch.object(cmux_service, "_save_train_report", return_value=None):
+                    report = cmux_service._run_learning_train(
+                        {"symbols": ["BEATUSDT"], "trainSize": 5, "testSize": 3, "promoteHitRatePct": 55.0}
+                    )
 
         self.assertEqual(report["promotedCount"], 1)
         self.assertTrue(report["autoApply"]["applied"])
@@ -437,9 +440,10 @@ class TestCmuxToHermes(unittest.TestCase):
             return_value={"ok": True, "running": True, "config": {"executionMode": "PAPER", "symbol": "BEATUSDT"}}
         )
 
-        with mock.patch.object(cmux_service, "hermes_service", fake):
-            with mock.patch.object(cmux_service, "_save_train_report", return_value=None):
-                report = cmux_service._run_learning_train({"symbols": ["BEATUSDT"]})
+        with mock.patch.object(cmux_service, "LEARNING_AUTO_APPLY_PROMOTED", True):
+            with mock.patch.object(cmux_service, "hermes_service", fake):
+                with mock.patch.object(cmux_service, "_save_train_report", return_value=None):
+                    report = cmux_service._run_learning_train({"symbols": ["BEATUSDT"]})
 
         self.assertFalse(report["autoApply"]["applied"])
         self.assertEqual(report["autoApply"]["reason"], "not_live_mode")

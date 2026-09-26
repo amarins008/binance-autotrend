@@ -14,9 +14,15 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.prev_locks = main.AUTO_TRADE.get("liveProfitLocks")
         main.AUTO_TRADE["liveProfitLocks"] = {}
+        # loop-driven tests write the runtime exclusion registry (bias-gate /
+        # pipeline rejects); isolate it so a 90s TTL entry can't leak into the
+        # scan-picker tests that use the same symbols.
+        self.prev_sfr = main.AUTO_TRADE.get("scanFinalRejects")
+        main.AUTO_TRADE["scanFinalRejects"] = {}
 
     async def asyncTearDown(self):
         main.AUTO_TRADE["liveProfitLocks"] = self.prev_locks if isinstance(self.prev_locks, dict) else {}
+        main.AUTO_TRADE["scanFinalRejects"] = self.prev_sfr if isinstance(self.prev_sfr, dict) else {}
 
     async def test_multi_guard_closes_adopted_long_on_local_sl(self):
         cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55}
@@ -26,8 +32,10 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "side": "LONG",
                 "qty": 86.0,
                 "entryMark": 0.6200,
-                "markPrice": 0.6130,
-                "unRealizedProfit": -0.6,
+                # symmetric SL (slToTpRatio=1.0) sits at 0.60884 (-1.8%);
+                # mark must cross THAT level for the local-SL close path.
+                "markPrice": 0.6050,
+                "unRealizedProfit": -1.29,
             }
         ]
 
@@ -69,7 +77,8 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         lock = main.AUTO_TRADE["liveProfitLocks"]["DOGEUSDT:LONG"]
         self.assertAlmostEqual(lock["entryMark"], 0.0980)
         self.assertAlmostEqual(lock["tp"], 0.099764)
-        self.assertAlmostEqual(lock["sl"], 0.097118)
+        # symmetric contract: slPct = tpPct (1.8%) -> 0.098 * 0.982
+        self.assertAlmostEqual(lock["sl"], 0.096236)
 
     async def test_multi_guard_closes_positive_retrace_before_negative(self):
         cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55, "profitLockBreakevenFloorUsdt": 0.08, "holdWinners": False, "feeMinEdgeVsCostMultiple": 1.0}
@@ -972,8 +981,11 @@ class TestMarketScanTimeoutGuard(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tv_patch = mock.patch("trading.tradingview_mcp.get_tv_mcp", return_value=_NoOpTvMcp())
         self._tv_patch.start()
+        self._prev_sfr = main.AUTO_TRADE.get("scanFinalRejects")
+        main.AUTO_TRADE["scanFinalRejects"] = {}
 
     def tearDown(self):
+        main.AUTO_TRADE["scanFinalRejects"] = self._prev_sfr if isinstance(self._prev_sfr, dict) else {}
         self._tv_patch.stop()
     async def test_scan_timeout_budget_accounts_for_expanded_scan_and_retries(self):
         cfg = {
@@ -2173,7 +2185,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertEqual(out["config"]["adaptiveLeverageMax"], 25)
 
     def test_dashboard_uses_single_leverage_max_as_adaptive_cap(self):
-        html = Path(__file__).with_name("dashboard").joinpath("index.html").read_text(encoding="utf-8")
+        html = Path(__file__).resolve().parent.parent.joinpath("dashboard", "index.html").read_text(encoding="utf-8")
 
         self.assertIn("<label>Lev</label>", html)
         self.assertIn('id="cfgLevMin" type="hidden" value="1"', html)
@@ -3912,7 +3924,9 @@ class TestStatusLitePositionCard(unittest.TestCase):
         self.assertTrue(any(x.get("action") == "auto-tuned weak payoff policy" and x.get("status") == "applied" for x in review["autoActions"]))
         self.assertLess(main.AUTO_TRADE["config"]["holdMinConfidence"], 0.78)
         self.assertGreater(main.AUTO_TRADE["config"]["tpTargetMinUsdt"], 0.55)
-        self.assertGreater(main.AUTO_TRADE["config"]["profitLockBreakevenTriggerUsdt"], 0.16)
+        # 2026-09-26: breakeven ratio base is 0.075 of tpTarget (0.55 -> 0.041),
+        # so the tuner now preserves the operator value instead of raising it.
+        self.assertGreaterEqual(main.AUTO_TRADE["config"]["profitLockBreakevenTriggerUsdt"], 0.16)
 
     def test_supervisor_handles_weak_payoff_when_policy_at_safe_limits(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")

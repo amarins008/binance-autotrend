@@ -308,7 +308,7 @@ class TestNoDeadCode(unittest.TestCase):
         """Read raw file content rather than inspect.getsource to avoid
         picking up class/function docstrings that mention old symbols."""
         import pathlib
-        path = pathlib.Path(__file__).parent / "trading" / "live_guardian.py"
+        path = pathlib.Path(__file__).resolve().parent.parent / "trading" / "live_guardian.py"
         return path.read_text(encoding="utf-8")
 
     def test_no_if_false_block_in_guardian_source(self):

@@ -21,7 +21,8 @@ class TestKanbanStateMachine(unittest.TestCase):
 
     def test_initial_kanban_all_todo(self):
         kb = self.state["kanban"]
-        self.assertEqual(len(kb["todo"]), 12)
+        # 11 agents since the market_context neuron was removed (2026-06)
+        self.assertEqual(len(kb["todo"]), 11)
         self.assertEqual(kb["doing"], [])
         self.assertEqual(kb["done"], [])
         self.assertEqual(kb["blocked"], [])

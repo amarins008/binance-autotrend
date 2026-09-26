@@ -494,7 +494,9 @@ class TestPerSymbolVolatilityTPSL(unittest.TestCase):
         out = main._effective_tp_sl("ANYUSDT", cfg, None)
         self.assertEqual(out["tier"], "unknown")
         self.assertEqual(out["tpPct"], cfg["takeProfitPct"])
-        self.assertEqual(out["slPct"], cfg["stopLossPct"])
+        # 2026-09-26: slToTpRatio=1.0 contract (d81d29c) — the no-intel
+        # baseline derives slPct from tpPct, not from stopLossPct.
+        self.assertEqual(out["slPct"], out["tpPct"])
         self.assertEqual(out["notionalCapUsdt"], cfg["tradeNotionalCapUsdt"])
         self.assertEqual(out["profitLockTriggerUsdt"], cfg["profitLockTriggerUsdt"])
 

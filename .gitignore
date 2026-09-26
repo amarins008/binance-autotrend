@@ -24,3 +24,5 @@ Temp/
 
 # Temp backup of removed test/garbage symbol dirs (not part of repo)
 _garbage_symbols_backup/
+
+backups/
