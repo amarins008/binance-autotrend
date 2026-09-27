@@ -626,6 +626,14 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     # reduced size, fresh <0.50 blocked, stale/missing → confidence gates only.
     out.setdefault("tvLongMidStrength", 0.50)
     out.setdefault("tvLongMidSizeMult", 0.70)
+    # 2026-09-26 Stage-2 bias/TV hold matrix (default OFF): when the M15/M30
+    # structural bias STILL ALIGNS with an open position at dead-zone time,
+    # consolidation is not a reason to flatten -- trail SL to breakeven-plus
+    # instead of closing. TV only vetoes when FRESH and directionally opposite
+    # (WAIT is not opposition). Enable after exit-telemetry validates that
+    # bias-aligned-at-exit trades really continue (needs ~30-50 closes).
+    out.setdefault("biasHoldEnabled", False)
+    out.setdefault("biasHoldTrailPct", 0.30)
     # 2026-09-26: hold-winner/TP-extension was dead (0/124 trades): WAIT intel
     # conf is capped ~0.50 so the 0.72-0.78 floor never passed, and the live
     # holdMinProfitUsdt (0.30) sat above most winners' peak (0.08-0.25).

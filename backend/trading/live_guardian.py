@@ -1675,17 +1675,52 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         # position at upnl < fee floor converts it into a guaranteed net loss.
         dead_zone_sec = float(cfg.get("deadZoneExitSec", 600) or 600)
         if held_sec >= dead_zone_sec and weak_now and upnl >= fee_min_capture and upnl < lock_trigger:
-            if f"{sym}:{side}" not in _closed_symbols:
-                _persist_single_lock_before_close(st, cfg)
-                await _close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT", exit_intel=intel)
-                _closed_symbols.add(f"{sym}:{side}")
-            _autotrade_log(f"LIVE multi guard close: {sym} {side} DEAD_ZONE_TIMEOUT held={held_sec:.0f}s upnl={upnl:.4f} peak={float(st.get('peak',0.0)):.4f} lock_trigger={lock_trigger:.4f}")
-            close_decisions.append(f"{sym}:{side}:DEAD_ZONE_TIMEOUT:system=B")
-            _delete_guardian_lock_file(k, cfg)
-            locks.pop(k, None)
-            app_state._LIVE_POSITIONS_CACHE = (0, [])
-            changed = True
-            continue
+            # Stage-2 bias/TV hold matrix: when the M15/M30 structural bias
+            # STILL ALIGNS with the position, a dead zone is consolidation, not
+            # a reason to flatten -- trail the SL to breakeven-plus and keep
+            # the runner alive. TV only vetoes when FRESH and directionally
+            # opposite (WAIT is not opposition). Config-gated OFF until exit
+            # telemetry validates the matrix on real continuation data.
+            _bias_hold_defer = False
+            if bool(cfg.get("biasHoldEnabled", False)) and isinstance(intel, dict):
+                _db_h = intel.get("directionBias") if isinstance(intel.get("directionBias"), dict) else {}
+                _hb = str(_db_h.get("bias", "") or "").upper()
+                _tv_h = intel.get("tv") if isinstance(intel.get("tv"), dict) else {}
+                _tv_fresh_oppose = (
+                    str(_tv_h.get("status", "") or "").lower() == "ok"
+                    and int(_tv_h.get("age", 9999) or 9999) <= int(cfg.get("tvEntryMaxAgeSec", 30) or 30)
+                    and str(_tv_h.get("signal", "") or "").upper() not in ("", "WAIT", side)
+                    and float(_tv_h.get("strength", 0.0) or 0.0) >= float(cfg.get("tvConflictBlockStrength", 0.45) or 0.45)
+                )
+                if _hb == side and not _tv_fresh_oppose:
+                    _hb_trail = max(0.08, float(cfg.get("biasHoldTrailPct", 0.30) or 0.30))
+                    if side == "LONG":
+                        _hb_sl = max(sl, mark * (1 - _hb_trail / 100.0), guard_entry if guard_entry > 0 else 0.0)
+                        _moved = _hb_sl > sl + 1e-12
+                    else:
+                        _hb_sl = min(sl, mark * (1 + _hb_trail / 100.0), guard_entry if guard_entry > 0 else 1e18)
+                        _moved = _hb_sl < sl - 1e-12
+                    if _moved:
+                        st["sl"] = round(float(_hb_sl), 10)
+                        st["biasHoldCount"] = int(st.get("biasHoldCount", 0) or 0) + 1
+                        _autotrade_log(f"LIVE multi guard bias-hold: {sym} {side} dead-zone deferred, SL -> {_hb_sl:.6f} (bias {_hb} aligned, upnl {upnl:.4f})")
+                        locks[k] = st
+                        changed = True
+                    # SL already inside the trail: downside locked, defer the
+                    # flatten and let hit_sl/hit_tp finish the trade.
+                    _bias_hold_defer = True
+            if not _bias_hold_defer:
+                if f"{sym}:{side}" not in _closed_symbols:
+                    _persist_single_lock_before_close(st, cfg)
+                    await _close_position_one_side(sym, side, key, secret, base, reason="DEAD_ZONE_TIMEOUT", exit_intel=intel)
+                    _closed_symbols.add(f"{sym}:{side}")
+                _autotrade_log(f"LIVE multi guard close: {sym} {side} DEAD_ZONE_TIMEOUT held={held_sec:.0f}s upnl={upnl:.4f} peak={float(st.get('peak',0.0)):.4f} lock_trigger={lock_trigger:.4f}")
+                close_decisions.append(f"{sym}:{side}:DEAD_ZONE_TIMEOUT:system=B")
+                _delete_guardian_lock_file(k, cfg)
+                locks.pop(k, None)
+                app_state._LIVE_POSITIONS_CACHE = (0, [])
+                changed = True
+                continue
 
         if mark > 0 and tp > 0 and sl > 0:
             hit_tp = (side == "LONG" and mark >= tp) or (side == "SHORT" and mark <= tp)
