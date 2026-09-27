@@ -288,15 +288,18 @@ class TestParallelIntelDispatch(unittest.IsolatedAsyncioTestCase):
                                                                     cfg = {"holdMinConfidence": 0.72, "tpTargetMaxUsdt": 3.0}
                                                                     import os
                                                                     with mock.patch.dict(os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
-                                                                        start = time.monotonic()
                                                                         await live_guardian._live_multi_profit_lock_manage(cfg)
-                                                                        elapsed = time.monotonic() - start
 
-        # 3 × 50ms sequential = 150ms; parallel should be ~50ms
-        # Allow generous 130ms budget to avoid flaky CI failures
-        self.assertLess(elapsed, 0.13,
-            f"Expected concurrent dispatch (~50ms) but took {elapsed*1000:.0f}ms — "
-            "intel calls appear to be sequential")
+        # Concurrency must be judged by WHEN the calls START, not by absolute
+        # wall-clock: a 130ms elapsed budget flaked on a loaded machine (live
+        # trading bot on the same box) even though dispatch stayed concurrent.
+        # Parallel  → all three calls start together (spread ≈ 0, < 50ms).
+        # Sequential → starts are spaced one sleep apart (spread ≥ 100ms).
+        self.assertEqual(len(call_times), 3, "expected exactly 3 intel dispatches")
+        spread = max(call_times) - min(call_times)
+        self.assertLess(spread, 0.05,
+            f"intel call start-time spread {spread*1000:.0f}ms — "
+            "intel calls appear to be sequential (expected ~0ms spread)")
 
 
 # ---------------------------------------------------------------------------

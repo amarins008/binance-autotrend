@@ -1873,6 +1873,17 @@ class TestStatusLitePositionCard(unittest.TestCase):
         main.AUTO_TRADE["tradesLastHour"] = 0
         main.AUTO_TRADE["lastTradeAt"] = 0
         main.AUTO_TRADE["startedAt"] = int(main.time.time())
+        # Tuner-behavior class: the supervisor kill-switch guard now fail-safes
+        # to DISABLED when a cfg dict lacks the opt-in key, so force the gate
+        # ON for every module that resolves the check (main tuners + state
+        # commit + supervisor_tuning size_streak).
+        for _gate_patch in (
+            mock.patch.object(main, "_supervisor_tuning_enabled", lambda cfg=None: True),
+            mock.patch("trading.supervisor_state._supervisor_tuning_enabled", lambda cfg=None: True),
+            mock.patch("trading.supervisor_tuning._supervisor_tuning_enabled", lambda cfg=None: True),
+        ):
+            _gate_patch.start()
+            self.addCleanup(_gate_patch.stop)
 
     def tearDown(self):
         _release_tuning_locks()
@@ -2623,6 +2634,8 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "marketScan": False,
             "whitelistSymbols": ["XAUUSDT"],
             "orphanAutoAdoptForceSingleSymbol": False,
+            # drift heal is now opt-in (fail-safe default off)
+            "supervisorAutoHealScanDriftEnabled": True,
         }
         main.AUTO_TRADE["openLivePositions"] = []
         main.AUTO_TRADE["log"] = []

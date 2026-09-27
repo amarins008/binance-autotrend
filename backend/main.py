@@ -335,8 +335,11 @@ from trading.supervisor_tuning import (
 )
 from trading.supervisor_state import (
     _apply_rollback_old_values,
+    _supervisor_advisory_enabled,
+    _supervisor_tuning_enabled,
     _tuning_mode_lock_acquire,
     _tuning_mode_lock_release,
+    record_advisory_suggestion,
 )
 
 
@@ -603,9 +606,16 @@ def _maybe_lock_symbol_drag_from_review(review: dict, cfg: dict | None = None) -
 def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled", "signature": ""}
     cfg = cfg if isinstance(cfg, dict) else {}
+    # ADVISORY MODE: while auto-tune is disabled the tuner still runs on a
+    # scratch copy and only logs what it WOULD have changed (never writes
+    # config). Silence suggestions entirely with supervisorAdvisoryEnabled=False.
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled", "signature": ""}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     try:
         trades_n = int(review.get("trades", 0) or 0)
         payoff_ratio = float(review.get("payoffRatio", 0.0) or 0.0)
@@ -626,7 +636,7 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
     if _tuning_should_rollback("weak_payoff"):
         rollback = _tuning_rollback_last("weak_payoff")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -697,18 +707,19 @@ def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -
         _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
 
-    state.update({
-        "at": int(time.time()),
-        "signature": signature,
-        "reason": "weak_payoff_ratio",
-        "payoffRatio": round(payoff_ratio, 4),
-        "avgWin": round(avg_win, 6),
-        "avgLoss": round(avg_loss, 6),
-        "severity": round(severity, 3),
-        "changes": changes,
-    })
-    AUTO_TRADE["supervisorAutoTune"] = state
-    out = _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, changes, "weak_payoff_ratio")
+    if not advisory:
+        state.update({
+            "at": int(time.time()),
+            "signature": signature,
+            "reason": "weak_payoff_ratio",
+            "payoffRatio": round(payoff_ratio, 4),
+            "avgWin": round(avg_win, 6),
+            "avgLoss": round(avg_loss, 6),
+            "severity": round(severity, 3),
+            "changes": changes,
+        })
+        AUTO_TRADE["supervisorAutoTune"] = state
+    out = _commit_supervisor_config_tune(state, delegations, "weak_payoff", cfg, changes, "weak_payoff_ratio", advisory=advisory)
     out["signature"] = signature
     out["severity"] = round(severity, 3)
     return out
@@ -832,8 +843,10 @@ def _enforce_min_conf_brake(cfg: dict, ceiling: float | None = None) -> None:
         cfg["minConfidence"] = floor
 
 
-def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str) -> dict:
-    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", True)):
+def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str, *, advisory: bool = False) -> dict:
+    if advisory:
+        return record_advisory_suggestion(key, changes, reason)
+    if not _supervisor_tuning_enabled():
         return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
     now = int(time.time())
     delegations[key] = {
@@ -913,6 +926,9 @@ def _sse_json_payload(text: str) -> dict:
 def _maybe_clear_bad_utc_hour_from_config(skip_code: str, skip_msg: str, cfg: dict | None = None) -> dict:
     if str(skip_code or "") != "bad_utc_hour" or not isinstance(cfg, dict):
         return {}
+    if not _supervisor_tuning_enabled(cfg):
+        # fail-safe: never auto-clear operator hour blocks while tuning is disabled
+        return {}
     bad_hours = cfg.get("liveBadUtcHours")
     if not isinstance(bad_hours, list):
         return {}
@@ -952,14 +968,18 @@ def _maybe_clear_bad_utc_hour_from_config(skip_code: str, skip_msg: str, cfg: di
 def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: list[dict] | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled"}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("low_entry_activity", cfg, 30)
 
     if _tuning_should_rollback("low_entry_activity"):
         rollback = _tuning_rollback_last("low_entry_activity")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "low_entry_activity", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "low_entry_activity", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -1110,6 +1130,7 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
         cfg,
         changes,
         "stuck_low_entry_recovery" if stuck_no_entry else str(reason or "low entry activity"),
+        advisory=advisory,
     )
     out["rejectCounts"] = reject_counts
     out["quietMarket"] = quiet_board
@@ -1125,8 +1146,12 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
 def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled"}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("scan_timeout", cfg, 20)
     if active:
         return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
@@ -1134,7 +1159,7 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
     if _tuning_should_rollback("scan_timeout"):
         rollback = _tuning_rollback_last("scan_timeout")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -1173,7 +1198,7 @@ def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -
         _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta"}
     signature = _tuning_signature("scan_timeout", skip_msg=str(skip_msg or "scan timeout"), per_symbol_timeout=per_symbol_timeout)
-    out = _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, changes, str(skip_msg or "scan timeout"))
+    out = _commit_supervisor_config_tune(state, delegations, "scan_timeout", cfg, changes, str(skip_msg or "scan timeout"), advisory=advisory)
     out["severity"] = severity
     out["signature"] = signature
     return out
@@ -1279,14 +1304,18 @@ def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, n
 def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(daily_review, dict) or not isinstance(cfg, dict) or not bool(daily_review.get("degraded")):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled"}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("daily_entry_regression", cfg, 30)
 
     if _tuning_should_rollback("daily_entry_regression"):
         rollback = _tuning_rollback_last("daily_entry_regression")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -1370,7 +1399,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
     if not changes:
         _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
-    out = _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, changes, "daily_entry_regression")
+    out = _commit_supervisor_config_tune(state, delegations, "daily_entry_regression", cfg, changes, "daily_entry_regression", advisory=advisory)
     delegations = AUTO_TRADE.get("supervisorAutoTune", {}).get("delegations", {})
     if isinstance(delegations.get("daily_entry_regression"), dict):
         delegations["daily_entry_regression"]["signature"] = signature
@@ -1384,8 +1413,12 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
 def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled"}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     try:
         trades_n = int(review.get("trades", 0) or 0)
         small_wins = int(review.get("smallWins", 0) or 0)
@@ -1398,7 +1431,7 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
     if _tuning_should_rollback("small_profit_capture"):
         rollback = _tuning_rollback_last("small_profit_capture")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -1453,7 +1486,7 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
             return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec}
         return {"applied": False, "reason": "no_safe_delta"}
     signature = _tuning_signature("small_profit_capture", trades=trades_n, small_wins=small_wins, ratio=round(ratio, 3))
-    out = _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, changes, str(review.get("label") or "small wins"))
+    out = _commit_supervisor_config_tune(state, delegations, "small_profit_capture", cfg, changes, str(review.get("label") or "small wins"), advisory=advisory)
     out["severity"] = severity
     out["signature"] = signature
     return out
@@ -1462,8 +1495,12 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
 def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    advisory = False
+    if not _supervisor_tuning_enabled(cfg):
+        if not _supervisor_advisory_enabled(cfg):
+            return {"applied": False, "reason": "supervisor_autotune_disabled"}
+        advisory = True
+        cfg = copy.deepcopy(cfg)  # advisory: scratch copy — never touch live config
     try:
         trades_n = int(review.get("trades", 0) or 0)
         win_rate = float(review.get("winRatePct", 0.0) or 0.0)
@@ -1490,7 +1527,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     if _tuning_should_rollback("negative_expectancy"):
         rollback = _tuning_rollback_last("negative_expectancy")
         if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
+            _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened", advisory=advisory)
             _tuning_mode_lock_release()  # Rollback clears the lock
             return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
 
@@ -1579,7 +1616,7 @@ def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None =
     if not changes:
         _tuning_mode_lock_release()  # nothing committed — don't hold the lock
         return {"applied": False, "reason": "no_safe_delta", "signature": signature}
-    out = _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, changes, "negative_expectancy")
+    out = _commit_supervisor_config_tune(state, delegations, "negative_expectancy", cfg, changes, "negative_expectancy", advisory=advisory)
     delegations = AUTO_TRADE.get("supervisorAutoTune", {}).get("delegations", {})
     if isinstance(delegations.get("negative_expectancy"), dict):
         delegations["negative_expectancy"]["signature"] = signature
@@ -2787,7 +2824,9 @@ def _arm_symbol_risk_cooldown(
 
 def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: dict | None = None) -> dict:
     out = dict(cfg or {})
-    if not bool(out.get("supervisorAutoTuneEnabled", True)):
+    # fail-safe default OFF (no advisory here: this tuner returns a cfg copy to
+    # its caller instead of committing, and its rollback path is pending fixes)
+    if not _supervisor_tuning_enabled(out):
         return out
     actions: list[str] = []
     cause = cause if isinstance(cause, dict) else {}
@@ -3862,9 +3901,11 @@ def _restore_fapi_agreement_locks_from_logs(cfg: dict, messages: list[str]) -> d
 
 
 def _maybe_auto_heal_scan_config_drift(cfg: dict) -> dict:
-    if not isinstance(cfg, dict) or not bool(cfg.get("supervisorAutoHealScanDriftEnabled", True)):
+    # fail-safe default OFF: this rewrites scan structure (symbol/marketScan/
+    # whitelist), so it must never self-activate from a missing config key.
+    if not isinstance(cfg, dict) or not bool(cfg.get("supervisorAutoHealScanDriftEnabled", False)):
         return {"applied": False}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not _supervisor_tuning_enabled(cfg):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     symbol = str(cfg.get("symbol", "") or "").upper().strip()
     primary = str(cfg.get("primarySymbol", "") or "").upper().strip()

@@ -48,6 +48,26 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Supervisor heal/advisory split — tuner เป็น advisory, TV healing แยก switch (เสร็จ 2026-09-27)
+
+### บริบท
+- วิเคราะห์ remove-vs-keep ของ tuner ที่เคยทำ config วิ่ง (kill switch จาก 598a4ea ยัง ON) → ตัดสินใจ: เก็บโค้ด, flip default fail-safe, แยก ops-healing ออก, เปลี่ยน 6 risk tuners เป็น advisory
+
+### Fix (3 code files + 3 test files, +223/−55)
+- **`trading/supervisor_state.py`** — helpers ใหม่: `_supervisor_tuning_enabled` (default **False** — เดิมทุก guard ใช้ `.get(..., True)` ถ้า key หาย tuner เปิดกลับเอง), `_supervisor_healing_enabled` (default True), `_supervisor_advisory_enabled` (default True); `record_advisory_suggestion()` — log-only suggestion (AUTO_TRADE["tuningSuggestions"] cap 50 + dedupe 30 นาทีต่อ signature + `[Supervisor advisory]` log line); `_tuning_mode_lock_acquire` no-op ผ่านเมื่อ tuning disabled (advisory ไม่ stamp ล็อก); **`_commit_supervisor_config_tune` แก้เป็น merge-only** (เดิม `AUTO_TRADE["config"] = deepcopy(cfg)` = clobber pattern เก่าก่อน full-audit 2026-08-01 — size_streak/TV ใช้อยู่) + branch `"set"` format + floor enforce + `force=True` persist
+- **`trading/supervisor_tuning.py`** — `_maybe_tune_tradingview_health` ย้ายจาก kill-switch gate → `_supervisor_healing_enabled` (TV recovery กลับมาทำงานแม้ kill switch ON — เดิม TV ล่มไม่มีใครกู้/แจ้งเลย); ลบ pseudo-keys (`tradingview_reset`, `tradingview_disabled_reason`) ออกจาก changes (merge-commit จะเขียนเป็น junk config keys — info ย้ายไป delegations.recovery_action); size_streak คง hard-off (ไม่มี advisory — rollback/commit รอ P0 fix)
+- **`main.py`** — 6 tuners (weak_payoff/low_entry/scan_timeout/daily/small_profit/negative): guard เปลี่ยนเป็น advisory branch — tuning off + advisory on → `cfg = copy.deepcopy(cfg)` (scratch copy) คำนวณตามปกติแต่ commit เป็น suggestion, ไม่แตะ live config (ตรวจแล้ว untouched); `_commit_supervisor_config_tune` รับ `advisory=` kwarg → `record_advisory_suggestion`; weak_payoff ไม่ update `supervisorAutoTune` state ตอน advisory; `_loss_streak_self_review_tune` + `_maybe_clear_bad_utc_hour_from_config` กัน fail-safe (bad_utc เดิมไม่มี gate = bypass อยู่); `_maybe_auto_heal_scan_config_drift` default `supervisorAutoHealScanDriftEnabled` True→**False**
+- **tests** — ai_mode 2 tests + live_multi_guard: fixture เพิ่ม `supervisorAutoTuneEnabled: True` แบบ explicit (ทั้ง class ทดสอบ tuning-on อยู่แล้ว — patch gate ON ใน setUp ครบ 3 modules); **`test_guardian_performance::test_gather_called_for_multiple_positions` แก้ timing flake**: เดิม assert elapsed < 130ms (absolute) — fail ทั้งบน HEAD (container+guardian pair 3/3 ผ่าน git stash เทียบ) และ tree ใหม่ เพราะเครื่องรัน live bot — เปลี่ยนเป็นวัด **spread ของ start-time** (`max-min < 50ms`) จับ sequential dispatch ได้ deterministic ไม่ขึ้นกับความเร็วเครื่อง
+
+### Verification
+- py_compile 3 files OK; functional probes 14/14 (fail-safe default / lock no-stamp / merge-only กัน clobber / kill switch / advisory dedupe / weak_payoff advisory ไม่ mutate live config / silence switch / opt-in tune ยัง commit จริง / 5-tuner advisory smoke / size_streak+loss_streak hard-off / drift fail-safe / bad_utc gate / TV healing ผ่าน guard reason=tv_healthy)
+- Full suite: **482 passed, 0 failed ×2 รอบติด**
+- Live: POST /bot/config pin 4 keys (tune=False, heal=True, advisory=True, drift=False) → verify keys อื่นไม่ถูกแตะ (tvWaitMinConf=0.88, usdtAmount=50) → restart 8020 → UP, config คงครบหลัง restart, snapshot LIVE==disk, ไม่มี "Supervisor delegated" line, TV healthy
+
+### ค้างไว้ตั้งใจ (รอ P0 ก่อนเปิด tuner)
+- size_streak/loss_streak ยัง hard-off — ต้องแก้ก่อน: loss_streak rollback ยัง restore จาก preMetrics (no-op + เขียน junk keys), cooldown signature-drift hole ใน weak_payoff/size_streak, preMetrics ควรเป็น windowed ไม่ใช่ full-log aggregate
+- advisory suggestions ยังไม่มี endpoint ให้อ่าน (อยู่ใน log + AUTO_TRADE["tuningSuggestions"]) — ทำ GET /supervisor/tuning ภายหลัง
+
 ## Session: TV WAIT gate + SL placement retry (เสร็จ 2026-09-11)
 
 ### ปัญหา

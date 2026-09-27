@@ -45,6 +45,36 @@ _TUNING_MODE_LOCK_MINUTES_CFG_KEY = "supervisorTuningModeLockMinutes"
 _DEFAULT_TUNING_MODE_LOCK_MINUTES = 90  # 90 minutes default
 
 
+# ---------------------------------------------------------------------------
+# Mode switches (fail-safe defaults)
+# ---------------------------------------------------------------------------
+# supervisorAutoTuneEnabled defaults to DISABLED: the tuners repeatedly
+# thrashed live config (stopLossPct 0.28→0.196, TP ratchet → DEAD_ZONE_TIMEOUT
+# 41%, minConfidence 0.72<->0.83 swing). A missing/dropped config key must
+# never silently reactivate them — re-enabling requires explicit operator
+# opt-in via config.
+def _supervisor_tuning_enabled(cfg: dict | None = None) -> bool:
+    source = cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})
+    return bool(source.get("supervisorAutoTuneEnabled", False))
+
+
+# Ops-healing (TradingView health recovery) is independent of the auto-tune
+# kill switch: it only writes tradingviewEnabled / resets the TV client and
+# fixes real incidents (entries opened blind against strong TV), so it
+# defaults ON. Disable with config["supervisorHealingEnabled"]=False.
+def _supervisor_healing_enabled(cfg: dict | None = None) -> bool:
+    source = cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})
+    return bool(source.get("supervisorHealingEnabled", True))
+
+
+# Advisory mode: when auto-tune is disabled, tuners still run read-only on
+# scratch copies and LOG what they would have changed — never writing config.
+# Silence suggestions entirely with config["supervisorAdvisoryEnabled"]=False.
+def _supervisor_advisory_enabled(cfg: dict | None = None) -> bool:
+    source = cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})
+    return bool(source.get("supervisorAdvisoryEnabled", True))
+
+
 def _tuning_mode_lock_acquire(
     mode: str,
     reason: str,
@@ -61,6 +91,10 @@ def _tuning_mode_lock_acquire(
     a tune that writes several knob groups (e.g. profit + size) to be gated by
     all of them at once.
     """
+    # Advisory runs (auto-tune disabled) compute suggestions on scratch copies
+    # and commit nothing — they must neither consult nor stamp mode locks.
+    if not _supervisor_tuning_enabled(cfg):
+        return True
     now = time.time()
     lock_duration_min = max(
         30,
@@ -330,6 +364,47 @@ def _tuning_signature(key: str, **parts) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Advisory suggestions (tuners run read-only while auto-tune is disabled)
+# ---------------------------------------------------------------------------
+
+# Per-key dedupe so advisory runs cannot spam the autotrade log every cycle.
+_ADVISORY_LAST: dict[str, tuple[str, float]] = {}
+_ADVISORY_DEDUPE_SEC = 1800  # 30 min per (key, identical suggestion)
+_ADVISORY_HISTORY_CAP = 50
+
+
+def record_advisory_suggestion(key: str, changes: dict, reason: str) -> dict:
+    """Record what a tuner WOULD have changed, log-only. Never writes config."""
+    now = time.time()
+    signature = _tuning_signature(key, changes=changes)
+    last = _ADVISORY_LAST.get(key)
+    if last and last[0] == signature and now - last[1] < _ADVISORY_DEDUPE_SEC:
+        return {"applied": False, "advisory": True, "key": key, "deduped": True}
+    _ADVISORY_LAST[key] = (signature, now)
+    entry = {
+        "at": int(now),
+        "key": key,
+        "reason": str(reason or ""),
+        "changes": dict(changes) if changes else {},
+        "signature": signature,
+    }
+    history = AUTO_TRADE.setdefault("tuningSuggestions", [])
+    if not isinstance(history, list):
+        history = []
+        AUTO_TRADE["tuningSuggestions"] = history
+    history.append(entry)
+    if len(history) > _ADVISORY_HISTORY_CAP:
+        AUTO_TRADE["tuningSuggestions"] = history[-_ADVISORY_HISTORY_CAP:]
+    try:
+        from main import _autotrade_log  # type: ignore[import]
+        text = json.dumps(entry["changes"], sort_keys=True, default=str)
+        _autotrade_log(f"[Supervisor advisory] {key}: {text[:300]} ({reason})")
+    except Exception:
+        pass
+    return {"applied": False, "advisory": True, "key": key, "reason": reason}
+
+
+# ---------------------------------------------------------------------------
 # Config commit
 # ---------------------------------------------------------------------------
 
@@ -342,7 +417,7 @@ def _commit_supervisor_config_tune(
     reason: str,
 ) -> dict:
     """Apply tuning changes to live config, record history, and persist snapshot."""
-    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", True)):
+    if not _supervisor_tuning_enabled():
         return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
     now = int(time.time())
     delegations[key] = {
@@ -352,11 +427,34 @@ def _commit_supervisor_config_tune(
     }
     state["delegations"] = delegations
     AUTO_TRADE["supervisorAutoTune"] = state
-    AUTO_TRADE["config"] = copy.deepcopy(cfg)
+    # Merge ONLY the tuner's changes onto the CURRENT live config. The old
+    # code replaced the whole config with a deepcopy of the tuner's cfg — a
+    # review holding a stale cfg reference clobbered operator keys applied
+    # moments earlier via /bot/config (mirrors the main.py commit fix from
+    # the 2026-08-01 full-audit).
+    live = AUTO_TRADE.get("config")
+    if not isinstance(live, dict):
+        live = cfg if isinstance(cfg, dict) else {}
+    merged = copy.deepcopy(live)
+    for _k, _v in (changes or {}).items():
+        if isinstance(_v, dict) and "new" in _v:
+            merged[_k] = _v["new"]
+        elif isinstance(_v, dict) and "reverted" in _v:
+            merged[_k] = _v["reverted"]
+        elif isinstance(_v, dict) and "set" in _v:
+            merged[_k] = _v["set"]
+        else:
+            merged[_k] = _v
+    try:
+        from main import _enforce_entry_confidence_floor  # type: ignore[import]
+        _enforce_entry_confidence_floor(merged)
+    except Exception:
+        pass
+    AUTO_TRADE["config"] = merged
     _tuning_history_append(key, changes, _tuning_pre_metrics())
     try:
         from main import _persist_autotrade_snapshot, _autotrade_log  # type: ignore[import]
-        _persist_autotrade_snapshot()
+        _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
         _autotrade_log(f"Supervisor delegated {key}: {changes}")
     except Exception:
         pass

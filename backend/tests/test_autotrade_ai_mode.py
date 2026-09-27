@@ -372,6 +372,9 @@ class TestLossStreakSelfReview(unittest.TestCase):
             "maxOpenPositions": 5,
             "selfReviewMinHourSamples": 8,
             "noTradeWindowsAutoEnabled": True,
+            # this test drives the tune itself: explicit opt-in (the guard now
+            # fail-safes to disabled when the key is missing)
+            "supervisorAutoTuneEnabled": True,
         }
         # Reset supervisor tuner cooldown/rollback state so this test drives
         # the tune itself (other tests in the class may have committed one).
@@ -407,6 +410,7 @@ class TestLossStreakSelfReview(unittest.TestCase):
             "scanFallbackNearEnabled": True,
             "maxOpenPositions": 6,
             "riskCooldownMinutes": 25,
+            "supervisorAutoTuneEnabled": True,  # explicit opt-in (fail-safe default is now off)
         }
 
         tuned = main._loss_streak_self_review_tune(cfg, now=int(time.time()), loss_streak=4)

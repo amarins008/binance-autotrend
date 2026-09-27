@@ -11,6 +11,8 @@ from trading.supervisor_state import (
     _apply_rollback_old_values,
     _commit_supervisor_config_tune,
     _supervisor_delegation_cooldown,
+    _supervisor_healing_enabled,
+    _supervisor_tuning_enabled,
     _tuning_rollback_last,
     _tuning_should_rollback,
     _tuning_signature,
@@ -80,8 +82,12 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     """
     if not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
-        return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    # OWNERSHIP SPLIT (2026-09-27): TV health recovery is ops-healing, not risk
+    # tuning — it only writes tradingviewEnabled / resets the client. It runs
+    # under its own switch so the auto-tune kill switch cannot leave TV
+    # unattended (healing was dead while supervisorAutoTuneEnabled=False).
+    if not _supervisor_healing_enabled(cfg):
+        return {"applied": False, "reason": "supervisor_healing_disabled"}
 
     from trading.tradingview_mcp import get_tv_client, reset_tv_client
 
@@ -173,11 +179,12 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
             tv_client.update_config(cfg)
 
         elif recovery_count < 4:
-            # Attempt 3-4: full client reset (fresh singleton)
+            # Attempt 3-4: full client reset (fresh singleton). Not a config
+            # change — recovery state lives in delegations (recovery_action),
+            # so no pseudo-key here (a merge-commit would write it into cfg).
             reset_tv_client()
             get_tv_client(cfg)  # recreates instance
             reason = f"reset_tv_client: {last_error}"
-            changes["tradingview_reset"] = {"set": True, "was": False}
 
         else:
             # Attempt 5+: unrecoverable, disable TV for 10 min + flag
@@ -186,7 +193,6 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
             tv_disabled = True
             reason = f"tv_unrecoverable_after_{recovery_count}_attempts: {last_error}"
             changes["tradingviewEnabled"] = {"set": False, "was": True}
-            changes["tradingview_disabled_reason"] = {"set": reason, "was": ""}
 
     except Exception as e:
         reason = f"tv_recovery_error: {str(e)}"
@@ -385,7 +391,10 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     """
     if not isinstance(cfg, dict) or not bool(cfg.get("supervisorSizeStreakEnabled", True)):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    # Stays hard-OFF while auto-tune is disabled (no advisory): it uses the
+    # standard commit pipeline, but its rollback/commit paths are pending P0
+    # fixes — re-enable only via explicit supervisorAutoTuneEnabled=True.
+    if not _supervisor_tuning_enabled(cfg):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state = _recent_live_result_streak_state(trades, int(cfg.get("supervisorSizeLookbackTrades", 12) or 12))
     kind = str(state.get("kind", "") or "")
