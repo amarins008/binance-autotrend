@@ -706,6 +706,11 @@ async def intel_analyze(req: IntelAnalyzeRequest):
         "directionBias": dir_bias,
         "entryTiming": _entry_timing_from_1m(rows_1m),
     }
+    # swing30Pct feeds the vol-bracket TP/SL path (risk._vol_bracket_pct)
+    _et = result.get("entryTiming") if isinstance(result.get("entryTiming"), dict) else {}
+    if _et.get("swing30Pct") is not None and isinstance(result.get("precision"), dict):
+        result["precision"]["swing30Pct"] = _et["swing30Pct"]
+
     result["decisionData"] = _decision_data_layers(
         symbol=symbol,
         signal=final_signal,
