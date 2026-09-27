@@ -83,6 +83,7 @@ from trading.risk import (
     calc_tp_sl_prices as _calc_tp_sl_prices,
     fee_edge_min_net_usdt as _fee_edge_min_net_usdt,
     profit_lock_knobs_from_tp as _profit_lock_knobs_from_tp,
+    sl_aware_leverage_cap as _sl_aware_leverage_cap,
 )
 from exchange.binance_client import configure_clients as _configure_binance_clients
 from exchange.futures_orders import (
@@ -6001,6 +6002,18 @@ async def _autotrade_loop():
 
             lev_meta = _adaptive_symbol_leverage(cfg["symbol"], intel, cfg)
             eff_leverage = int(lev_meta.get("leverage", cfg.get("leverage", 1)) or 1)
+            # ── SL-aware leverage ceiling (2026-09-26): liquidation distance
+            # stays >= 2x the trade's expected SL (vol-bracket preview: 1.2 x
+            # swing30 clamped 0.9-2.0%). With the current 2.0% tail the cap is
+            # exactly 25 (no change); when the operator raises leverageMax,
+            # tight-SL trades extend safely while wide-SL trades stay clamped.
+            _lev_cap_sl = _sl_aware_leverage_cap(
+                (intel.get("precision") or {}).get("swing30Pct") if isinstance(intel.get("precision"), dict) else None,
+                int(cfg.get("leverageMax", 25) or 25),
+            )
+            if eff_leverage > _lev_cap_sl:
+                _autotrade_log(f"SL-aware lev cap: {cfg['symbol']} x{eff_leverage} -> x{_lev_cap_sl}")
+                eff_leverage = int(_lev_cap_sl)
             cfg["lastAdaptiveLeverage"] = lev_meta
             if bool(lev_meta.get("auto")):
                 _agent_mark("risk_manager", "done", "adaptive symbol leverage", f"{cfg['symbol']} x{eff_leverage} {lev_meta.get('reason')}")

@@ -414,6 +414,28 @@ def blend_tpsl_with_atr(
     )
 
 
+def sl_aware_leverage_cap(swing30_pct: float | None, leverage_max: float) -> float:
+    """SL-aware leverage ceiling (2026-09-26).
+
+    Liquidation distance (~100%/lev) must stay >= 2x the trade's expected SL,
+    where the expected SL is the vol-bracket preview: clamp(1.2 x swing30,
+    0.9%, 2.0%). With the 2.0% tail the cap is exactly 25 (the historical
+    ceiling — no change); tight-SL trades (0.9%) may extend to ~55 only when
+    the operator raises leverageMax. Missing swing data falls back to the
+    conservative 2.0% tail. Pure safety clamp — never raises leverage.
+    """
+    try:
+        swing = max(0.0, min(10.0, float(swing30_pct or 0.0)))
+    except (TypeError, ValueError):
+        swing = 0.0
+    sl_pred = max(0.9, min(2.0, 1.2 * swing)) if swing > 0 else 2.0
+    try:
+        lev_max = float(leverage_max)
+    except (TypeError, ValueError):
+        lev_max = 25.0
+    return max(1.0, min(lev_max, 100.0 / (2.0 * sl_pred)))
+
+
 def _vol_bracket_pct(swing30_pct: float, cfg: dict) -> tuple[float, float, dict]:
     """Vol-scaled asymmetric TP/SL bracket (2026-09-26 operator proposal).
 
