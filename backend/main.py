@@ -6481,7 +6481,10 @@ async def _autotrade_loop():
                 sl_pct = float(plan.eff_sl_pct or 0.8)
             # 2026-08-16: LONG TP boost — let winning LONGs run further.
             _long_boost = float(cfg.get("longTpBoostPct", 0.0) or 0.0)
-            if signal == "LONG" and _long_boost > 0.0:
+            _bracket_active = bool((_tpsl_meta or {}).get("bracket"))
+            if signal == "LONG" and _long_boost > 0.0 and not _bracket_active:
+                # Vol-bracket mode: the bracket pct IS the sizing — the legacy
+                # LONG boost would distort the vol-scaled target.
                 tp_pct = round(float(tp_pct) + _long_boost, 4)
             async def _do_place():
                 return await place_futures_order(

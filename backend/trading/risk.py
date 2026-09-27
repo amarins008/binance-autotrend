@@ -414,6 +414,39 @@ def blend_tpsl_with_atr(
     )
 
 
+def _vol_bracket_pct(swing30_pct: float, cfg: dict) -> tuple[float, float, dict]:
+    """Vol-scaled asymmetric TP/SL bracket (2026-09-26 operator proposal).
+
+    Per-symbol bracket from the realized 30-minute swing:
+      tp_pct = clamp(k_tp x swing30, 3x round-trip fee, volBracketMaxTpPct)
+      sl_pct = clamp(k_sl x swing30, volBracketMinSlPct, volBracketMaxSlPct)
+    Asymmetric BY DESIGN (TP smaller than SL): the touch-win rate measured on
+    79 LIVE trades was 40 TP vs 5 SL with avg +0.604/-0.77 — the edge is the
+    hit rate, not the ratio. The caller must NOT re-enforce sl=tp*rr on this
+    branch. Telemetry/bracket fields in meta let main skip pct re-derivation
+    and the LONG TP boost.
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    swing = max(0.05, min(10.0, float(swing30_pct or 0.0)))
+    fee_rt_pct = 2.0 * AUTOTRADE_TAKER_FEE_BPS_PER_SIDE / 10000.0 * 100.0
+    tp_min = max(float(cfg.get("volBracketMinTpPct", 0.36) or 0.36), 3.0 * fee_rt_pct)
+    tp_max = float(cfg.get("volBracketMaxTpPct", 2.0) or 2.0)
+    sl_min = float(cfg.get("volBracketMinSlPct", 0.90) or 0.90)
+    sl_max = float(cfg.get("volBracketMaxSlPct", 2.0) or 2.0)
+    k_tp = float(cfg.get("volBracketTpMult", 0.5) or 0.5)
+    k_sl = float(cfg.get("volBracketSlMult", 1.2) or 1.2)
+    tp_pct = max(tp_min, min(tp_max, k_tp * swing))
+    sl_pct = max(sl_min, min(sl_max, k_sl * swing))
+    meta = {
+        "enabled": True,
+        "bracket": True,
+        "swing30Pct": round(swing, 4),
+        "bracketTpPct": round(tp_pct, 4),
+        "bracketSlPct": round(sl_pct, 4),
+    }
+    return round(tp_pct, 4), round(sl_pct, 4), meta
+
+
 def effective_tpsl_pct_for_trade(
     cfg: dict,
     trade_usdt: float,
@@ -426,6 +459,18 @@ def effective_tpsl_pct_for_trade(
     base_sl = float(cfg.get("stopLossPct", 0.8) or 0.8)
     if not bool(cfg.get("tpSlTargetUsdtEnabled", True)):
         return base_tp, base_sl, {"enabled": False}
+    # Vol-scaled per-symbol bracket (2026-09-26): TP/SL as % of the symbol's
+    # realized 30m swing instead of a fixed USDT target (the fixed target was
+    # unreachable on low-vol symbols: LOCAL_TP_HIT 1/79 while per-symbol swing
+    # spans 0.54%-3.55%). Asymmetric — skip the sl=tp*rr re-enforce below.
+    if bool(cfg.get("volBracketEnabled", False)):
+        _swing30 = (precision or {}).get("swing30Pct") if isinstance(precision, dict) else None
+        try:
+            _swing30 = float(_swing30) if _swing30 is not None else 0.0
+        except (TypeError, ValueError):
+            _swing30 = 0.0
+        if _swing30 > 0:
+            return _vol_bracket_pct(_swing30, cfg)
     amt = max(1e-9, float(trade_usdt or 0.0))
     _lev = max(1, float(effective_leverage if effective_leverage and effective_leverage > 0 else (cfg.get('leverage', 5) or 5)))
     tp_min_u = max(0.05, float(cfg.get("tpTargetMinUsdt", 0.5) or 0.5))

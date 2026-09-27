@@ -543,6 +543,11 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         effective_leverage=inp.eff_leverage,
     )
     min_rr = float(cfg.get("minRiskRewardRatio", 1.0) or 1.0)
+    # Vol-bracket mode: the asymmetric bracket (TP 0.5x swing, SL 1.2x swing)
+    # carries its edge in the touch rate (replay: 40 TP vs 5 SL), not the
+    # ratio -- use the bracket-specific floor instead of minRiskRewardRatio.
+    if (tpsl_meta or {}).get("bracket"):
+        min_rr = min(min_rr, float(cfg.get("volBracketMinRiskReward", 0.40) or 0.40))
     rr_val = eff_tp / max(eff_sl, 1e-9)
     if not _step(pipeline, "risk_reward", passes_min_risk_reward(eff_tp, eff_sl, min_rr), f"R:R {rr_val:.2f} (min {min_rr})"):
         return EntryPlan(

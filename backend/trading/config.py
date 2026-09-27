@@ -634,6 +634,18 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     # bias-aligned-at-exit trades really continue (needs ~30-50 closes).
     out.setdefault("biasHoldEnabled", False)
     out.setdefault("biasHoldTrailPct", 0.30)
+    # 2026-09-26 vol-scaled per-symbol TP/SL bracket (default OFF): TP/SL as %
+    # of the realized 30m swing instead of the fixed +/-2 USDT target (which is
+    # 3.7x the swing on BNB 0.54% and unreachable). Replay on 79 LIVE trades:
+    # +26.67 vs +24.59 with TP>=3xfee guaranteed. Asymmetric (TP<SL) by design.
+    out.setdefault("volBracketEnabled", False)
+    out.setdefault("volBracketTpMult", 0.5)
+    out.setdefault("volBracketSlMult", 1.2)
+    out.setdefault("volBracketMinTpPct", 0.36)
+    out.setdefault("volBracketMaxTpPct", 2.0)
+    out.setdefault("volBracketMinSlPct", 0.90)
+    out.setdefault("volBracketMaxSlPct", 2.0)
+    out.setdefault("volBracketMinRiskReward", 0.40)
     # 2026-09-26: hold-winner/TP-extension was dead (0/124 trades): WAIT intel
     # conf is capped ~0.50 so the 0.72-0.78 floor never passed, and the live
     # holdMinProfitUsdt (0.30) sat above most winners' peak (0.08-0.25).

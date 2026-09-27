@@ -748,11 +748,15 @@ def _entry_timing_from_1m(rows_1m: list | None) -> dict:
         hi = max(float(k[2]) for k in kl)
         last = float(kl[-1][4])
         rng = max(hi - lo, 1e-12)
+        kl30 = kl[-30:]
+        lo30 = min(float(k[3]) for k in kl30)
+        hi30 = max(float(k[2]) for k in kl30)
         return {
             "rangePos60m": round((last - lo) / rng, 4),
             "runup60mPct": round((last - lo) / max(lo, 1e-12) * 100.0, 4),
             "breakdown60mPct": round((hi - last) / max(hi, 1e-12) * 100.0, 4),
             "range60mPct": round(rng / max(last, 1e-12) * 100.0, 4),
+            "swing30Pct": round((hi30 - lo30) / max(last, 1e-12) * 100.0, 4),
             "candles": len(kl),
         }
     except Exception:
