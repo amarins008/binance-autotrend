@@ -816,6 +816,8 @@ def _adaptive_preemptive_exit(
     upnl: float, mark: float, entry: float, sl: float,
     notional: float, st: dict, decel_reason: str = "",
 ) -> tuple[bool, str]:
+    if not bool(cfg.get("preemptiveLossExitEnabled", False)):
+        return False, ""
     """Improved preemptive exit with adaptive thresholds and dip vs reversal detection.
 
     Key improvements over _preemptive_loss_exit:

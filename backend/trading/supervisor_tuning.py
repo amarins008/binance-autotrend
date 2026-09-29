@@ -8,12 +8,11 @@ import time
 
 from services import app_state
 from trading.supervisor_state import (
-    _apply_rollback_old_values,
     _commit_supervisor_config_tune,
     _supervisor_delegation_cooldown,
     _supervisor_healing_enabled,
     _supervisor_tuning_enabled,
-    _tuning_rollback_last,
+    rollback_supervisor_config_tune,
     _tuning_should_rollback,
     _tuning_signature,
     _tuning_mode_lock_acquire,
@@ -109,23 +108,37 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
     delegations: dict = state.get("delegations") or {}
     if is_healthy:
         if not cfg.get("tradingviewEnabled", True):
-            try:
-                from main import _autotrade_log as alog
-            except ImportError:
-                def alog(*a, **kw): pass
             tv_client.force_enable()
-            cfg["tradingviewEnabled"] = True
-            # Reset recovery count since TV recovered
+            # Reset recovery count since TV recovered. Commit via the healing
+            # exception path: direct cfg mutation was not persisted reliably.
             tv_rec = delegations.get("tradingview_health") or {}
             tv_rec["recovery_count"] = 0
-            tv_rec["at"] = int(time.time())
-            delegations["tradingview_health"] = tv_rec
-            state["delegations"] = delegations
+            tv_rec["recovery_action"] = "tv_recovered_auto_enable"
+            changes = {"tradingviewEnabled": {"set": True, "was": False}}
+            out = _commit_supervisor_config_tune(
+                state,
+                delegations,
+                "tradingview_health",
+                cfg,
+                changes,
+                "tv_recovered_auto_enable",
+                allow_when_tuning_disabled=True,
+                record_history=False,
+            )
+            state = AUTO_TRADE.setdefault("supervisorAutoTune", {})
+            delegations = state.setdefault("delegations", {})
+            rec = delegations.setdefault("tradingview_health", {})
+            rec.update(tv_rec)
             AUTO_TRADE["supervisorAutoTune"] = state
-            alog("[TradingView] Auto-recovered: re-enabled after health restored")
+            try:
+                from main import _autotrade_log as alog
+                alog("[TradingView] Auto-recovered: re-enabled after health restored")
+            except Exception:
+                pass
             _tv_alert_send(cfg, "info", "TradingView กลับมาแล้ว",
                            f"TV auto-recovered: re-enabled หลัง health กลับมา (fail_count={fail_count})")
-            return {"applied": True, "reason": "tv_recovered_auto_enable", "health": health, "changes": {"tradingviewEnabled": {"set": True, "was": False}}}
+            out.update({"health": health, "changes": changes})
+            return out
         return {"applied": False, "reason": "tv_healthy", "health": health}
 
     # Classify: rate limit vs real failure
@@ -170,13 +183,15 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
 
     try:
         if recovery_count < 2:
-            # Attempt 1-2: force_enable (reset client health state)
+            # Attempt 1-2: force_enable (reset client health state). Use a
+            # detached cfg for the client; live cfg changes only via commit.
             tv_client.force_enable()
             reason = f"force_enabled_tv: {last_error}"
             changes["tradingviewEnabled"] = {"set": True, "was": cfg.get("tradingviewEnabled", False)}
-            cfg["tradingviewEnabled"] = True
+            client_cfg = dict(cfg)
+            client_cfg["tradingviewEnabled"] = True
             # Sync config back to TV client so self.enabled matches
-            tv_client.update_config(cfg)
+            tv_client.update_config(client_cfg)
 
         elif recovery_count < 4:
             # Attempt 3-4: full client reset (fresh singleton). Not a config
@@ -187,9 +202,9 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
             reason = f"reset_tv_client: {last_error}"
 
         else:
-            # Attempt 5+: unrecoverable, disable TV for 10 min + flag
+            # Attempt 5+: unrecoverable, disable TV for 10 min + flag. Live
+            # config is changed only by the healing commit below.
             tv_client.force_disable(600)
-            cfg["tradingviewEnabled"] = False
             tv_disabled = True
             reason = f"tv_unrecoverable_after_{recovery_count}_attempts: {last_error}"
             changes["tradingviewEnabled"] = {"set": False, "was": True}
@@ -243,6 +258,10 @@ def _maybe_tune_tradingview_health(cfg: dict | None = None) -> dict:
         cfg,
         changes,
         reason,
+        # TV recovery is ops-healing, deliberately independent from the
+        # risk-tuner kill switch. It has its own supervisorHealingEnabled gate.
+        allow_when_tuning_disabled=True,
+        record_history=False,
     )
     # Preserve recovery tracking (commit overwrites delegations[key] with 3 fields)
     tv_rec_extra = {
@@ -391,11 +410,12 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     """
     if not isinstance(cfg, dict) or not bool(cfg.get("supervisorSizeStreakEnabled", True)):
         return {}
-    # Stays hard-OFF while auto-tune is disabled (no advisory): it uses the
-    # standard commit pipeline, but its rollback/commit paths are pending P0
-    # fixes — re-enable only via explicit supervisorAutoTuneEnabled=True.
+    # Stays hard-OFF while auto-tune is disabled (no advisory): re-enable only
+    # through explicit supervisorAutoTuneEnabled=True. Work on a scratch cfg in
+    # enabled mode too; live config changes only through merge-only commit.
     if not _supervisor_tuning_enabled(cfg):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
+    cfg = dict(cfg)
     state = _recent_live_result_streak_state(trades, int(cfg.get("supervisorSizeLookbackTrades", 12) or 12))
     kind = str(state.get("kind", "") or "")
     streak = int(state.get("streak", 0) or 0)
@@ -444,16 +464,14 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     size_streak_cooldown_min = max(10, int(cfg.get("supervisorSizeStreakCooldownMin", 60) or 60))
     signature = _tuning_signature("size_streak", reason=reason, streak=streak, target=target, kind=kind)
     state_obj, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("size_streak", cfg, size_streak_cooldown_min)
-    rec = delegations.get("size_streak") if isinstance(delegations.get("size_streak"), dict) else {}
-    if active and str(rec.get("signature", "") or "") == signature:
-        return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature, "streak": state}
-
+    # Post-tune evidence lands inside this cooldown. Check rollback first;
+    # then block ALL re-tunes while active, not only matching signatures.
     if _tuning_should_rollback("size_streak"):
-        rollback = _tuning_rollback_last("size_streak")
-        if rollback.get("reverted"):
-            _commit_supervisor_config_tune(state_obj, delegations, "size_streak", cfg, _apply_rollback_old_values(cfg, rollback), "rollback_worsened")
-            _tuning_mode_lock_release()  # Rollback clears the lock
-            return {"applied": True, "rollback": True, "reason": "previous tuning worsened metrics"}
+        out = rollback_supervisor_config_tune(state_obj, delegations, "size_streak")
+        _tuning_mode_lock_release()  # Rollback clears the lock
+        return out
+    if active:
+        return {"applied": False, "alreadyTuned": True, "cooldownSec": cooldown_sec, "signature": signature, "streak": state}
 
     # Gate on the size domain: weak_payoff tightens supervisorSizeMultiplier in
     # the same direction; a recent opposite-direction tune blocks a rapid flip.
@@ -461,7 +479,6 @@ def _maybe_tune_size_multiplier_from_streak(trades: list[dict], cfg: dict | None
     if not _tuning_mode_lock_acquire(lock_mode, f"size_streak:{reason}", cfg, domain="size"):
         return {"applied": False, "reason": "opposite_mode_active", "mode": lock_mode, "blockedBy": "opposite", "domain": "size", "signature": signature, "streak": state}
 
-    cfg["supervisorSizeMultiplier"] = target
     changes = {
         "supervisorSizeMultiplier": {
             "old": round(old_mult, 3),

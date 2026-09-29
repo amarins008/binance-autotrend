@@ -52,7 +52,10 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
         # when the universe cache is not loaded yet, so this only ever
         # removes, never blocks everything.
         try:
-            if tv_client.get_tv_universe():
+            # 2026-09-27: to_thread — the universe POST can take seconds when
+            # the endpoint degrades; a sync call here blocked the whole event
+            # loop for that duration on every scan cycle.
+            if await asyncio.to_thread(tv_client.get_tv_universe):
                 candidates = [s for s in candidates if tv_client.is_tv_known(s)]
         except Exception:
             pass

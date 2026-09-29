@@ -57,7 +57,7 @@ def effective_min_net_profit_usdt(
     if _raw_fee_floor is not None and float(_raw_fee_floor) <= 0.0:
         return 0.0
     base_floor = float(_raw_fee_floor if _raw_fee_floor is not None else default_min_net)
-    mul = max(1.0, float(cfg.get("feeMinEdgeVsCostMultiple", 1.0) or 1.0))
+    mul = float(cfg.get("feeMinEdgeVsCostMultiple", 1.0) or 1.0)
     usdt = float(notional_usdt or cfg.get("usdtAmount", 0.0) or 0.0) if notional_usdt is not None else float(cfg.get("usdtAmount", 0.0) or 0.0)
     _, est_cost, _ = estimate_trade_edge_usdt(
         usdt,
@@ -85,7 +85,7 @@ def effective_min_net_profit_usdt(
 
 def passes_min_risk_reward(tp_pct: float, sl_pct: float, min_rr: float) -> bool:
     sl = max(1e-6, float(sl_pct))
-    return (float(tp_pct) / sl) >= max(1.0, float(min_rr))
+    return (float(tp_pct) / sl) >= float(min_rr)
 
 
 def calc_tp_sl_prices(side: str, entry_mark: float, tp_pct: float, sl_pct: float) -> tuple[float, float]:

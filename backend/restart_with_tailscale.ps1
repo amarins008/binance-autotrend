@@ -21,7 +21,7 @@ Re-run safely at any time — it's idempotent.
 
 $ErrorActionPreference = 'Stop'
 
-$ROOT    = "D:\Binance autotrend"
+$ROOT    = "D:\My Project\Binance autotrend"
 $BACKEND = Join-Path $ROOT "backend"
 $RUNNER  = Join-Path $BACKEND "run_backend.py"
 $VENV_PY = Join-Path $BACKEND ".venv\Scripts\python.exe"

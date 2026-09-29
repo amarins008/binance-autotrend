@@ -13,6 +13,12 @@ def register(_m) -> APIRouter:
     router.add_api_route("/hermes/symbol/profile", _m.hermes_set_symbol_profile, methods=["POST"])
     router.add_api_route("/hermes/symbol/profiles", _m.hermes_list_symbol_profiles, methods=["GET"])
     router.add_api_route("/hermes/supervisor-review", _m.hermes_supervisor_review, methods=["GET"])
+    router.add_api_route("/hermes/supervisor/tuning", _m.hermes_supervisor_tuning_status, methods=["GET"])
+    router.add_api_route(
+        "/hermes/supervisor/tuning/{key}/rollback",
+        _m.hermes_supervisor_tuning_rollback,
+        methods=["POST"],
+    )
     router.add_api_route(
         "/hermes/supervisor/external-signal", _m.hermes_supervisor_external_signal, methods=["POST"]
     )

@@ -291,87 +291,104 @@ async def _signed_request(method: str, base: str, endpoint: str, key: str, secre
     global _TIME_OFFSET_MS, _TIME_OFFSET_LAST_SYNC
     params = dict(params)
     diagnostic = _signed_request_diagnostic(base, endpoint, key, params)
-    
-    now_ts = time.time()
-    if now_ts - _TIME_OFFSET_LAST_SYNC > 60.0:
-        async with _TIME_OFFSET_LOCK:
-            # Double check pattern
-            if now_ts - _TIME_OFFSET_LAST_SYNC > 60.0:
-                try:
-                    local_before = int(time.time() * 1000)
-                    client = _HTTP
-                    if client is not None:
-                        st = await client.get(f"{base}/fapi/v1/time")
-                    else:
-                        async with httpx.AsyncClient(timeout=5.0) as c:
-                            st = await c.get(f"{base}/fapi/v1/time")
-                    local_after = int(time.time() * 1000)
-                    # Use the midpoint of roundtrip to calculate offset accurately
-                    local_midpoint = (local_before + local_after) // 2
-                    server_ms = int(st.json().get("serverTime", local_midpoint))
-                    # Prevent setting offset that places us ahead of server by subtracting a small buffer
-                    _TIME_OFFSET_MS = server_ms - local_midpoint - 150
-                    _TIME_OFFSET_LAST_SYNC = time.time()
-                except Exception:
-                    pass
 
-    # Apply offset, making sure we are slightly behind server time (safe side) rather than ahead
-    server_ms = int(time.time() * 1000) + _TIME_OFFSET_MS
-    params["timestamp"] = server_ms
-    params["recvWindow"] = BINANCE_RECV_WINDOW_MS
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    sig = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
-    signed = f"{query}&signature={sig}"
-    headers = {"X-MBX-APIKEY": key}
-    url = f"{base}{endpoint}?{signed}"
     res: httpx.Response | None = None
     last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            client = _HTTP
-            if client is not None:
-                try:
-                    if method == "POST":
-                        res = await client.post(url, headers=headers)
-                    else:
-                        res = await client.get(url, headers=headers)
-                except (httpx.RemoteProtocolError, httpx.LocalProtocolError, httpx.ReadError, httpx.ConnectError, httpx.PoolTimeout, httpx.ConnectTimeout, httpx.RequestError):
+    # 2026-09-29: two timestamp attempts. A -1021 (timestamp outside recvWindow)
+    # means the cached offset went stale — the box clock drifts (W32Time off) and
+    # the 60s background sync can fail silently mid-window. Force a fresh sync
+    # and rebuild the signature once instead of surfacing the raw -1021.
+    for ts_attempt in range(2):
+        now_ts = time.time()
+        if now_ts - _TIME_OFFSET_LAST_SYNC > 60.0:
+            async with _TIME_OFFSET_LOCK:
+                # Double check pattern
+                if now_ts - _TIME_OFFSET_LAST_SYNC > 60.0:
+                    try:
+                        local_before = int(time.time() * 1000)
+                        client = _HTTP
+                        if client is not None:
+                            st = await client.get(f"{base}/fapi/v1/time")
+                        else:
+                            async with httpx.AsyncClient(timeout=5.0) as c:
+                                st = await c.get(f"{base}/fapi/v1/time")
+                        local_after = int(time.time() * 1000)
+                        # Use the midpoint of roundtrip to calculate offset accurately
+                        local_midpoint = (local_before + local_after) // 2
+                        server_ms = int(st.json().get("serverTime", local_midpoint))
+                        # Prevent setting offset that places us ahead of server by subtracting a small buffer
+                        _TIME_OFFSET_MS = server_ms - local_midpoint - 150
+                        _TIME_OFFSET_LAST_SYNC = time.time()
+                    except Exception:
+                        pass
+
+        # Apply offset, making sure we are slightly behind server time (safe side) rather than ahead
+        server_ms = int(time.time() * 1000) + _TIME_OFFSET_MS
+        params["timestamp"] = server_ms
+        params["recvWindow"] = BINANCE_RECV_WINDOW_MS
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        sig = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+        signed = f"{query}&signature={sig}"
+        headers = {"X-MBX-APIKEY": key}
+        url = f"{base}{endpoint}?{signed}"
+        res = None
+        last_err = None
+        for attempt in range(3):
+            try:
+                client = _HTTP
+                if client is not None:
+                    try:
+                        if method == "POST":
+                            res = await client.post(url, headers=headers)
+                        else:
+                            res = await client.get(url, headers=headers)
+                    except (httpx.RemoteProtocolError, httpx.LocalProtocolError, httpx.ReadError, httpx.ConnectError, httpx.PoolTimeout, httpx.ConnectTimeout, httpx.RequestError):
+                        async with httpx.AsyncClient(timeout=15.0) as c2:
+                            if method == "POST":
+                                res = await c2.post(url, headers=headers)
+                            else:
+                                res = await c2.get(url, headers=headers)
+                else:
                     async with httpx.AsyncClient(timeout=15.0) as c2:
                         if method == "POST":
                             res = await c2.post(url, headers=headers)
                         else:
                             res = await c2.get(url, headers=headers)
-            else:
-                async with httpx.AsyncClient(timeout=15.0) as c2:
-                    if method == "POST":
-                        res = await c2.post(url, headers=headers)
-                    else:
-                        res = await c2.get(url, headers=headers)
-            break
-        except Exception as e:
-            last_err = e
-            if attempt >= 2 or not _is_retryable_http_exc(e):
-                raise
-            await asyncio.sleep(0.35 * (attempt + 1))
-    if res is None:
-        if last_err is not None:
-            raise last_err
-        raise HTTPException(status_code=503, detail="signed request failed: no response")
-    if res.status_code >= 400:
-        raise HTTPException(
-            status_code=res.status_code,
-            detail={
-                "message": res.text,
-                "binanceRequest": diagnostic,
-                "offsetDiag": {
-                    "sentTsMs": server_ms,
-                    "offsetMs": _TIME_OFFSET_MS,
-                    "syncAgeSec": round(get_server_time_sync_age_sec(), 2),
-                    "recvWindow": BINANCE_RECV_WINDOW_MS,
-                    "httpConfigured": _HTTP is not None,
+                break
+            except Exception as e:
+                last_err = e
+                if attempt >= 2 or not _is_retryable_http_exc(e):
+                    raise
+                await asyncio.sleep(0.35 * (attempt + 1))
+        if res is None:
+            if last_err is not None:
+                raise last_err
+            raise HTTPException(status_code=503, detail="signed request failed: no response")
+        if res.status_code >= 400:
+            res_text = res.text or ""
+            if "-1021" in res_text and ts_attempt == 0:
+                # Stale offset — force the next loop iteration to re-sync.
+                _TIME_OFFSET_LAST_SYNC = 0.0
+                try:
+                    await sync_server_time()
+                except Exception:
+                    pass
+                continue
+            raise HTTPException(
+                status_code=res.status_code,
+                detail={
+                    "message": res_text,
+                    "binanceRequest": diagnostic,
+                    "offsetDiag": {
+                        "sentTsMs": server_ms,
+                        "offsetMs": _TIME_OFFSET_MS,
+                        "syncAgeSec": round(get_server_time_sync_age_sec(), 2),
+                        "recvWindow": BINANCE_RECV_WINDOW_MS,
+                        "httpConfigured": _HTTP is not None,
+                    },
                 },
-            },
-        )
+            )
+        break
     return res.json()
 
 async def _exchange_filters(symbol: str):

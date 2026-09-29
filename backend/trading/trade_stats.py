@@ -22,6 +22,7 @@ from pathlib import Path
 
 from services.config_paths import TRADES_LOG_PATH, VAULT_DIR
 from services import cache_registry as _cache_registry
+from trading.trade_log import net_pnl_of
 
 # Direct references to shared mutable state
 _LIVE_STATS_CACHE = _cache_registry._LIVE_STATS_CACHE
@@ -150,11 +151,15 @@ def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
         if "pnl" not in obj:
             continue
         try:
-            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            gross = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+        if not math.isfinite(gross) or abs(gross) > 5000.0:
             continue
+        # 2026-09-29: NET of recorded estimated costs (fees + funding) — the
+        # old version summed gross here while the daily KPI subtracted fees,
+        # so the two disagreed.
+        pnl = net_pnl_of(obj)
         if pnl >= 0:
             stats["wins"] += 1
         else:
@@ -302,11 +307,13 @@ def _aggregate_live_trade_stats_from_log(symbol: str | None = None) -> dict:
         if "pnl" not in obj:
             continue
         try:
-            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            gross = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+        if not math.isfinite(gross) or abs(gross) > 5000.0:
             continue
+        # 2026-09-29: NET of recorded estimated costs (fees + funding).
+        pnl = net_pnl_of(obj)
         if pnl >= 0:
             stats["wins"] += 1
         else:
@@ -404,11 +411,13 @@ def _aggregate_live_trade_stats_by_symbol_from_log() -> dict[str, dict]:
         if not sym or "pnl" not in obj:
             continue
         try:
-            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            gross = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+        if not math.isfinite(gross) or abs(gross) > 5000.0:
             continue
+        # 2026-09-29: NET of recorded estimated costs (fees + funding).
+        pnl = net_pnl_of(obj)
         stats = out.setdefault(sym, {"wins": 0, "losses": 0, "realizedPnl": 0.0})
         if pnl >= 0:
             stats["wins"] += 1

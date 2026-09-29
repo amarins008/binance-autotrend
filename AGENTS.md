@@ -48,6 +48,49 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Net PnL accounting (fee+funding) + path fixes + -2015 diagnostics (เสร็จ 2026-09-29)
+
+### บริบท
+- โปรเจคถูกย้าย `D:\Binance autotrend` → `D:\My Project\Binance autotrend` — ไฟล์ .bat/ps1/monitor 12 ไฟล์ + Desktop 2 ไฟล์ ยังชี้ path เก่า → แก้ครบ (sed/python replace, Desktop↔repo sync ตรงกัน, .lnk/.url/Startup ตรวจแล้วไม่มี path เก่า, backup folder ปล่อยตามประวัติ)
+- **บั๊กแถมจากการย้าย: ไฟล์ .bat ใน repo เป็น LF** → cmd.exe parse เลื่อน (`REM`→`'M'`, `set`→`'t'`, ROOT/BACKEND ไม่ถูก set) → แปลง .bat ทุกตัวเป็น CRLF (9 ไฟล์; Desktop Start bat เป็น CRLF อยู่แล้ว) — Start AutoTrade.bat ผ่าน 5/5 หลังแก้
+
+### Net PnL (ตามรายงานวิเคราะห์: PnL ที่ log เป็น price-delta ไม่หัก fee/funding)
+- **`trading/trade_log.py`** — `net_pnl_of(obj)` (gross − feeEstUsdt/feeUsdt − fundingEstUsdt/fundingUsdt; record ไม่มี cost fields = คง gross ไม่ invent ค่า); `_live_closed_trades_from_log` `_pnl` = **net** (+ `_grossPnl`), sanity filter ยังใช้ gross
+- **`trading/trade_stats.py`** (ตัวที่ main alias ใช้จริง — main.py:289-302) — net ใน `_apply_trade_log_delta`, `_aggregate_live_trade_stats_from_log` (full-parse), `_aggregate_live_trade_stats_by_symbol_from_log`; WR/wins/losses จำแนกด้วย net sign (gross +0.05 โดน fee 0.3 = loss); ลบ today-only fee subtraction เก่า (2026-09-26) เพราะตอนนี้ net ทุกช่องทาง
+- **`exchange/futures_orders.py`** — `_funding_usdt_from_rate` (pure: notional × rate × hold/8h cap 2 events) + `_funding_cost_estimate` (fetch premiumIndex lastFundingRate, fail→0.0); ทั้ง 2 close paths ออก `fundingEstUsdt` (feeEstUsdt มีอยู่แล้ว); **แก้ NameError ใน `_close_position`**: ใช้ `order_resp` โดยไม่ assign (ทั้ง SDK/legacy branch)
+- **`main.py`** — `_close_position` (ตัว copy ที่ /close ใช้) เติม `feeEstUsdt` + `fundingEstUsdt` (เดิมไม่มีเลย) + import `_funding_cost_estimate`; branch -2015 log detail แถบ raw exchange msg (เห็น `request ip`)
+- **`trading/learning.py`** — `_net_pnl_after_costs(trade, mode)` (LIVE: ตัด cost บันทึกไว้, fee หาย → fallback estimate qty×exit×2×6bps; PAPER/อื่น: gross เหมือนเดิม); `_record_learning_trade` ใช้ net กับ profile wins/losses/realizedPnl/sumPnl/avg, DAILY_REALIZED_PNL, win_like/loss_like feedback, reward scale, streaks, memory windows; persist `netPnl`/`grossPnl` ลง log (field `pnl` = gross คงเดิม — backfill dedup key ไม่พัง)
+
+### Discovery: module duplication
+- `trading/trade_log.py` มี `_apply_trade_log_delta`/`_aggregate_live_trade_stats_from_log`/`_append_trade_log` **dead duplicates ของ trade_stats.py** (main alias ผ่าน trade_stats เท่านั้น) — แก้ net ให้ทั้ง 2 ไฟล์แล้ว; `_live_closed_trades_from_log` ใน trade_log คือ live path (tuners/memory windows/supervisor) — (dedup ภายหลัง)
+
+### Test fixes (5 failures pre-existing — ไม่เกี่ยวกับ net PnL)
+- `test_live_multi_guard.py` weak_payoff ×2 + size_streak ×3 ยัง assert การ mutate `cfg` local แบบเก่า — tuner ตัวใหม่ (งาน uncommitted 09-27/28) deepcopy cfg + merge-only commit ที่ `AUTO_TRADE["config"]` → assert เก่า impossible; แก้เป็น set `AUTO_TRADE["config"] = cfg` ก่อนเรียก + assert บน merged + patch `_persist_autotrade_snapshot` (กันเขียน snapshot จริง)
+- พิสูจน์ pre-existing: HEAD test มี assert เดิม + HEAD tuner ไม่มี deepcopy (test ผ่านตอน commit เก่า)
+
+### Verification
+- py_compile 5 ไฟล์ OK; `tests/test_net_pnl.py` ใหม่ 17 tests (net_pnl_of / funding / delta / aggregate live path / by_symbol / _net_pnl_after_costs)
+- Full suite: **507 passed, 2 skipped (pre-existing), 0 failed**
+- Restart 2 รอบ: config ครบ (tvWaitMinConf=0.88, usdtAmount=50, tune off/heal on), autotrade UP, 0 errors
+- Live proof: `/status` liveStatsAll.realizedPnl **5.784477 (gross) → 5.359482 (net)** — ส่วนต่าง = fee ที่บันทึกไว้ในไม้ช่วงหลัง (ไม้เก่าไม่มี field → gross ตามดีไซน์)
+
+### -2015 intermittent (ฝั่ง account ผู้ใช้)
+- วันนี้ -2015 loop ทั้งเช้า → ผู้ใช้แก้ฝั่ง Binance เอง (หาย); ตอนเย็นกลับมาแวบเดียวตอน boot (2 ครั้ง → auth OK วินาที 27) — detail log ใหม่เห็น `request ip: 49.237.103.213` ตรงกับ public IP ปัจจุบัน (เช็ค 4 ครั้งนิ่ง)
+- สรุป: key มี IP whitelist + Thai ISP CGNAT บางช่วง egress ไม่ตรง → แนะนำผู้ใช้: ถอด IP restriction ออกจาก key หรือ whitelist IP ใหม่เมื่อถูกเปลี่ยน; บอท self-pause 15 นาทีแล้ว retry เอง (บางช่วง auth ผ่านเอง)
+
+### TV gate tuning จาก performance analysis (2026-09-29 บ่าย)
+- วิเคราะห์ TV ↔ ผลไม้จริง (663 ไม้ 30d, net): agree 607 ไม้ WR 78.4% +77.44 / wait 55 ไม้ -2.15 / oppose **0 ไม้** (bias gate กันหมด); 7d: 81 ไม้ WR 90.1% +24.55; TV freshness ณ เข้า median 1s
+- **WAIT pathway (tvWaitMinConf) = net-negative** — POST 0.88 gate: 44 ไม้ WR 56.8% avg -0.051 → ตั้ง `tvWaitMinConf=0.99` + `tvShortWaitMinConf=0.99` (effectively ปิด — pipeline conf ไม่มีทางถึง 0.99)
+- **tvEntryMinConfidence 0.70 ไม่ให้ edge** — TV conf 0.60-0.69 เทียบ 0.70-0.88: PRE +0.141 vs +0.107, POST +0.126 vs +0.124 (เท่ากันทั้ง 2 ยุค) → ลดเป็น `tvEntryMinConfidence=0.65` ดึงปริมาณกลับ (gate กรองเฉพาะ TV สด ≤30s ที่ conf อ่อน ที่ scan_picker.py:346; stale/unavailable ไม่ถูกลงโทษอยู่แล้ว)
+- Enforcement อยู่ที่ scan_picker.py:346/396 (candidate qualification) + pipeline.py:267 (WAIT gate ตอนตัดสินใจ) — apply ผ่าน POST /bot/config, snapshot persist แล้ว, verify keys อื่นไม่ถูกแตะ; หมายเหตุ: `_liveAvailableBalance` ~21.6 USDT (บัญชีบาง)
+- **เปิด `biasGateNeutralConfMin=0.92`** (16:03) — NEUTRAL ผ่านได้เมื่อ pipeline conf ≥0.92; ยืนยันจาก bias_gate() ว่า NEUTRAL + regime สวนทิศ (LONG ใน DOWN) ยังบล็อกเสมอ (UNIUSDT guard) — live proof: HBARUSDT conf 0.934 ยังโดนบล็อกเพราะ regime=DOWN; เปิดทางเฉพาะ NEUTRAL+MIXED/ตรงทิศ; สังเกต: SOLUSDT เริ่มออก SHORT signal (โดน short_positive_pattern_bias แยกต่างหาก)
+- **16:35-16:45 funnel breakthrough** — bias gate ไม่ใช่ตัวบล็อกแล้ว: AVAX (ย่อเข้าโซน 3.85→2.3 ATR) และ LINK ผ่าน bias+pullback+sizing ครบ (lev 16-20x, cap 5.9-6.25, evening_volatility_guard 16:00-17:00 size ×0.7) → ตายที่ entry-timing gates ระดับแท่งเทียน: `pattern doji in blocked set` / `R:R 0.42` / `structure_chase bbPctB=1.103` (ไม่ไล่ราคาทะลุแบนด์บน) — ทั้งหมด cycle-level แก้เองตามแท่งใหม่; balance 21.58 vs margin จริง ~10-14 = พอ; -2015 เงียบตั้งแต่ ~16:00
+- **17:00 -1021 root cause + fix** — นาฬิกาเครื่องช้ากว่า Binance **4.5s** (วัดจริง 3 รอบนิ่ง) และ **Windows Time service ปิด** (net start w32time = Access denied ต้อง admin) → offset sync ของ `_signed_request` (re-sync ทุก 60s, sync fail เงียบ ๆ) เก่าคลาด → -1021 "1000ms ahead" 2 ครั้ง (watchdog กู้เอง); **fix: `exchange/binance_client.py` `_signed_request` เขียนใหม่เป็น 2-timestamp-attempt loop** — เจอ -1021 → invalidate sync + `sync_server_time()` + ลองใหม่ 1 ครั้ง (รอบ 2 ยังโดน = raise ตามเดิม); `tests/test_signed_request_1021.py` 2 tests (retry สำเร็จ / retry ครั้งเดียวไม่ storm); suite **509 passed**; restart แล้ว 0 error
+
+### ค้างไว้
+- ไม่ commit (tree มีงาน supervisor rework uncommitted ปนอยู่) — dedup trade_log dead copies ภายหลัง; ดู advisory suggestions ที่ `/hermes/supervisor/tuning` สัปดาห์หน้า
+- **ผู้ใช้ควรเปิด Windows Time service as admin** (`net start w32time` + `w32tm /resync`) — นาฬิกาช้า 4.5s แม้บอทชดเชยได้แล้ว แต่นาฬิกาที่ตรงคือ defense-in-depth
+
 ## Session: Supervisor heal/advisory split — tuner เป็น advisory, TV healing แยก switch (เสร็จ 2026-09-27)
 
 ### บริบท

@@ -3076,28 +3076,32 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "scanFallbackNearEnabled": False,
             "scanPerfSoftFallbackEnabled": False,
         }
+        original_cfg = dict(cfg)
         board = [
             {"symbol": "BTCUSDT", "qualified": False, "rejectReason": "signal_wait", "momentumPct": 0.04},
             {"symbol": "ETHUSDT", "qualified": False, "rejectReason": "low_conf", "momentumPct": 0.12},
             {"symbol": "SOLUSDT", "qualified": False, "rejectReason": "signal_wait", "momentumPct": 0.08},
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["config"] = dict(cfg)
 
         try:
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_low_entry_activity("quiet market", cfg, board)
+            live = dict(main.AUTO_TRADE["config"])
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
 
         self.assertTrue(out.get("applied"))
         self.assertTrue(out.get("quietMarket"))
         self.assertEqual(out.get("targetOpenPositions"), {"min": 3, "max": 6})
-        self.assertEqual(cfg["maxOpenPositions"], 3)
-        self.assertEqual(cfg["minConfidence"], 0.72)
-        self.assertLessEqual(cfg["earlyEntryMinConfidence"], 0.575)
-        self.assertLess(cfg["earlyEntryScoreGapMin"], 1.40)
-        self.assertLess(cfg["hybridMinScore"], 0.76)
-        self.assertLess(cfg["hybridMinEdge"], 0.06)
+        self.assertEqual(cfg, original_cfg)  # tuner must not mutate caller/live cfg before commit
+        self.assertEqual(live["maxOpenPositions"], 3)
+        self.assertEqual(live["minConfidence"], 0.72)
+        self.assertLessEqual(live["earlyEntryMinConfidence"], 0.575)
+        self.assertLess(live["earlyEntryScoreGapMin"], 1.40)
+        self.assertLess(live["hybridMinScore"], 0.76)
+        self.assertLess(live["hybridMinEdge"], 0.06)
 
     def test_low_entry_tune_caps_target_positions_at_six(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -3110,16 +3114,20 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "scanAnalyzeTop": 8,
             "scanTopLiquid": 30,
         }
+        original_cfg = dict(cfg)
         main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["config"] = dict(cfg)
 
         try:
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_low_entry_activity("over target capacity", cfg, [])
+            live = dict(main.AUTO_TRADE["config"])
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["maxOpenPositions"], 6)
+        self.assertEqual(cfg, original_cfg)
+        self.assertEqual(live["maxOpenPositions"], 6)
         self.assertEqual(out.get("targetOpenPositions"), {"min": 3, "max": 6})
 
     def test_supervisor_ignores_stale_scan_none_after_successful_scan(self):
@@ -3570,6 +3578,7 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "supervisorSizeWinStepPct": 10.0,
             "supervisorSizeMaxMultiplier": 1.35,
         }
+        original_cfg = dict(cfg)
         trades = [
             {"symbol": "AUSDT", "side": "LONG", "closedAt": 10, "pnl": -0.2},
             {"symbol": "BUSDT", "side": "LONG", "closedAt": 11, "pnl": 0.3},
@@ -3577,15 +3586,18 @@ class TestStatusLitePositionCard(unittest.TestCase):
             {"symbol": "DUSDT", "side": "LONG", "closedAt": 13, "pnl": 0.5},
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
+        main.AUTO_TRADE["config"] = dict(cfg)
         try:
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
+            live = dict(main.AUTO_TRADE["config"])
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 1.1)
+        self.assertEqual(cfg, original_cfg)
+        self.assertEqual(live["supervisorSizeMultiplier"], 1.1)
         self.assertEqual(out["changes"]["supervisorSizeMultiplier"]["reason"], "win_streak")
 
     def test_supervisor_reduces_size_multiplier_after_loss_streak(self):
@@ -3606,14 +3618,19 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
+            # 2026-09-29: the tuner works on a detached deepcopy and the commit
+            # is merge-only onto AUTO_TRADE["config"] — assert the merged live
+            # config, not the passed dict.
+            main.AUTO_TRADE["config"] = cfg
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
+            merged = main.AUTO_TRADE["config"]
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 0.64)
+        self.assertEqual(merged["supervisorSizeMultiplier"], 0.64)
         self.assertEqual(out["changes"]["supervisorSizeMultiplier"]["reason"], "loss_streak")
 
     def test_supervisor_size_floor_for_auto_scan_diversification(self):
@@ -3637,14 +3654,17 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
+            # Merge-only commit (2026-09-29): assert the merged live config.
+            main.AUTO_TRADE["config"] = cfg
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
+            merged = main.AUTO_TRADE["config"]
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 0.65)
+        self.assertEqual(merged["supervisorSizeMultiplier"], 0.65)
 
     def test_cached_supervisor_review_avoids_compute_for_status(self):
         prev_review = main.AUTO_TRADE.get("hermesSupervisorReview")
@@ -3714,14 +3734,17 @@ class TestStatusLitePositionCard(unittest.TestCase):
         ]
         main.AUTO_TRADE["supervisorAutoTune"] = {}
         try:
+            # Merge-only commit (2026-09-29): assert the merged live config.
+            main.AUTO_TRADE["config"] = cfg
             with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(lg, "_autotrade_log"):
                 out = main._maybe_tune_size_multiplier_from_streak(trades, cfg)
+            merged = main.AUTO_TRADE["config"]
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["supervisorSizeMultiplier"], 1.0)
+        self.assertEqual(merged["supervisorSizeMultiplier"], 1.0)
         self.assertEqual(out["changes"]["supervisorSizeMultiplier"]["reason"], "streak_reset")
 
     def test_supervisor_locks_dominant_symbol_drag_instead_of_broad_tuning(self):
@@ -4319,17 +4342,22 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "avgLoss": -0.780008,
         }
         try:
-            out = main._maybe_tune_weak_payoff_from_review(review, cfg)
+            # 2026-09-29: the tuner runs on a detached deepcopy and commits
+            # merge-only onto AUTO_TRADE["config"] — assert the merged config.
+            main.AUTO_TRADE["config"] = cfg
+            with mock.patch.object(main, "_persist_autotrade_snapshot"):
+                out = main._maybe_tune_weak_payoff_from_review(review, cfg)
+            merged = main.AUTO_TRADE["config"]
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertEqual(cfg["stopLossPct"], 0.80)
-        self.assertLessEqual(cfg["payoffLossGuardLossToWinCap"], 0.95)
-        self.assertLessEqual(cfg["payoffLossGuardMaxLossUsdt"], 0.75)
-        self.assertLessEqual(cfg["payoffLossGuardMinLossUsdt"], 0.22)
-        self.assertLessEqual(cfg["supervisorSizeMultiplier"], 0.85)
+        self.assertEqual(merged["stopLossPct"], 0.80)
+        self.assertLessEqual(merged["payoffLossGuardLossToWinCap"], 0.95)
+        self.assertLessEqual(merged["payoffLossGuardMaxLossUsdt"], 0.75)
+        self.assertLessEqual(merged["payoffLossGuardMinLossUsdt"], 0.22)
+        self.assertLessEqual(merged["supervisorSizeMultiplier"], 0.85)
 
     def test_weak_payoff_tune_reduces_risk_for_june_five_like_payoff(self):
         prev_tune = main.AUTO_TRADE.get("supervisorAutoTune")
@@ -4355,16 +4383,20 @@ class TestStatusLitePositionCard(unittest.TestCase):
             "avgLoss": -0.545271,
         }
         try:
-            out = main._maybe_tune_weak_payoff_from_review(review, cfg)
+            # Merge-only commit (2026-09-29): assert the merged live config.
+            main.AUTO_TRADE["config"] = cfg
+            with mock.patch.object(main, "_persist_autotrade_snapshot"):
+                out = main._maybe_tune_weak_payoff_from_review(review, cfg)
+            merged = main.AUTO_TRADE["config"]
         finally:
             main.AUTO_TRADE["supervisorAutoTune"] = prev_tune
             main.AUTO_TRADE["config"] = prev_config
 
         self.assertTrue(out.get("applied"))
-        self.assertLess(cfg["stopLossPct"], 0.9)
-        self.assertLessEqual(cfg["payoffLossGuardLossToWinCap"], 0.95)
-        self.assertLessEqual(cfg["payoffLossGuardMaxLossUsdt"], 0.75)
-        self.assertLessEqual(cfg["supervisorSizeMultiplier"], 0.85)
+        self.assertLess(merged["stopLossPct"], 0.9)
+        self.assertLessEqual(merged["payoffLossGuardLossToWinCap"], 0.95)
+        self.assertLessEqual(merged["payoffLossGuardMaxLossUsdt"], 0.75)
+        self.assertLessEqual(merged["supervisorSizeMultiplier"], 0.85)
 
     def test_supervisor_ignores_portfolio_capacity_run_imbalance(self):
         state = main.new_agent_state()

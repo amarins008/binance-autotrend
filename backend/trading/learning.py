@@ -1261,6 +1261,50 @@ def _auto_update_symbol_profile(symbol: str, cfg: dict | None = None) -> dict:
     }
 
 
+def _net_pnl_after_costs(trade: dict, mode: str = "") -> float:
+    """Gross price-delta pnl minus the estimated costs recorded on the trade.
+
+    LIVE close paths stamp ``feeEstUsdt`` (taker roundtrip) and
+    ``fundingEstUsdt``; learning must judge performance NET of those costs —
+    a tiny gross win eaten by fees is a loss, not a win. If a LIVE record
+    somehow carries no fee field we still subtract a conservative roundtrip
+    estimate from qty/exit so live stats cannot overstate profit. Non-LIVE
+    (paper/scan) records keep gross semantics.
+    """
+    try:
+        gross = float(trade.get("pnl", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+    if str(mode or "").upper() != "LIVE":
+        return gross
+    fee = 0.0
+    for k in ("feeEstUsdt", "feeUsdt"):
+        try:
+            fee = float(trade.get(k) or 0.0)
+        except Exception:
+            fee = 0.0
+        if fee:
+            break
+    if not fee:
+        try:
+            fee = round(
+                abs(float(trade.get("qty", 0.0) or 0.0) * float(trade.get("exit", 0.0) or 0.0))
+                * (2.0 * AUTOTRADE_TAKER_FEE_BPS_PER_SIDE / 10000.0),
+                6,
+            )
+        except Exception:
+            fee = 0.0
+    funding = 0.0
+    for k in ("fundingEstUsdt", "fundingUsdt"):
+        try:
+            funding = float(trade.get(k) or 0.0)
+        except Exception:
+            funding = 0.0
+        if funding:
+            break
+    return round(gross - fee - funding, 6)
+
+
 @_serialize_per_symbol_update
 def _record_learning_trade(symbol: str, trade: dict, mode: str):
     sym = str(symbol or "").upper()
@@ -1270,7 +1314,9 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
     ctx = PerSymbolContext(sym, get_shared_cache(VAULT_DIR), cfg)
     pr = ctx.profile
-    pnl = float(trade.get("pnl", 0.0) or 0.0)
+    # 2026-09-29: profile stats, daily guard, guardian feedback and rewards all
+    # key off NET pnl (gross minus estimated fees/funding).
+    pnl = _net_pnl_after_costs(trade, mode)
     pr["wins"] = int(pr.get("wins", 0)) + (1 if pnl >= 0 else 0)
     pr["losses"] = int(pr.get("losses", 0)) + (1 if pnl < 0 else 0)
     pr["realizedPnl"] = round(float(pr.get("realizedPnl", 0.0)) + pnl, 6)
@@ -1412,6 +1458,14 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
     # Write to per-symbol trade log and vault
     try:
         trade_log_entry = {"ts": int(time.time()), **trade, "symbol": sym}
+        # Persist BOTH views: "pnl" stays gross (price delta — the meaning
+        # every raw reader/backfill dedup relies on); netPnl is what stats
+        # and learning actually sum via trade_log.net_pnl_of.
+        try:
+            trade_log_entry["grossPnl"] = round(float(trade.get("pnl", 0.0) or 0.0), 6)
+        except Exception:
+            pass
+        trade_log_entry["netPnl"] = round(float(pnl), 6)
         if str(mode).upper() == "LIVE" and "pnl" in trade:
             trade_log_entry["mode"] = "LIVE"
             trade_log_entry.setdefault("closedAt", int(trade.get("closedAt") or trade.get("ts") or time.time()))

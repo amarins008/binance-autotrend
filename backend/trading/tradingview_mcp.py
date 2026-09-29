@@ -71,6 +71,10 @@ class TradingViewClient:
         self._tv_universe: set[str] = set()
         self._tv_universe_ts = 0.0
         self._tv_universe_ttl = 86400.0
+        # 2026-09-27: failure backoff so a dead universe endpoint is retried at
+        # most every 10 min instead of on every scan cycle (the POST is
+        # blocking; see get_tv_universe).
+        self._tv_universe_fail_until = 0.0
         self.update_config(config)
         self._load_missing_cache()
         self._load_universe_cache()
@@ -126,6 +130,12 @@ class TradingViewClient:
         now = time.time()
         if not force_refresh and self._tv_universe and (now - self._tv_universe_ts) < self._tv_universe_ttl:
             return self._tv_universe
+        # 2026-09-27: failure backoff. When the POST fails (or returns nothing
+        # usable) the universe stays empty — and without this gate the scan
+        # loop re-issued the blocking request every cycle (up to 20s timeout),
+        # stalling the event loop while the endpoint was down.
+        if not force_refresh and now < self._tv_universe_fail_until:
+            return self._tv_universe
         try:
             resp = _requests.post(
                 self._SCAN_URL,
@@ -148,9 +158,15 @@ class TradingViewClient:
                 if univ:
                     self._tv_universe = univ
                     self._tv_universe_ts = now
+                    self._tv_universe_fail_until = 0.0
                     self._save_universe_cache()
+                else:
+                    self._tv_universe_fail_until = now + 600.0
+                return self._tv_universe
+            self._tv_universe_fail_until = now + 600.0
             return self._tv_universe
         except Exception:
+            self._tv_universe_fail_until = now + 600.0
             return self._tv_universe
 
     def is_tv_known(self, symbol: str) -> bool:
@@ -205,14 +221,13 @@ class TradingViewClient:
         self._negative_cache_ttl = int(config.get("tradingviewNegativeCacheTtl", 60))
 
     def is_enabled(self) -> bool:
+        # 2026-09-27: no TRADINGVIEW_TA_AVAILABLE gate. The fetch path uses
+        # tradingview_scanner.ScannerClient (direct scanner API) which needs
+        # nothing from the dead tradingview_ta package — gating on it made a
+        # venv without the package silently kill TV while config said enabled.
         if not self.enabled:
             return False
-        if not TRADINGVIEW_TA_AVAILABLE:
-            return False
-        now = time.time()
-        if now < self._disabled_until:
-            return False
-        if not self._health_status["healthy"] and now < self._disabled_until:
+        if time.time() < self._disabled_until:
             return False
         return True
 
@@ -233,6 +248,7 @@ class TradingViewClient:
     def _check_rate_limit(self, symbol: str) -> bool:
         if self._symbol_on_cooldown(symbol):
             return False
+        spacing = 0.0
         with self._rate_limit_lock:
             now = time.time()
             minute_key = f"{symbol}_{int(now // 60)}"
@@ -247,18 +263,22 @@ class TradingViewClient:
 
             self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
             self._rate_limit_tracker[global_key] = self._rate_limit_tracker.get(global_key, 0) + 1
-            # 2026-08-22: after consuming a rate-limit slot, impose a tiny global
-            # spacing so a tight scan loop cannot burn all 20 global slots in one
-            # burst and trip the 429 circuit. Cheap sleep only when near the cap.
-            if self._rate_limit_tracker.get(global_key, 0) >= self.rate_limit_per_minute:
-                time.sleep(2.0)
+            # 2026-09-27: global spacing is a reserved slot + a sleep OUTSIDE
+            # the lock. The old in-lock sleep(2.0) (taken whenever the global
+            # count passed the per-symbol cap — with live config cap=2 that is
+            # every fetch from the 2nd of each minute) serialized the guardian
+            # and intel_analyze for 2s per fetch while holding the lock.
+            spacing = max(0.0, self._next_global_slot_ts - now)
+            self._next_global_slot_ts = max(now, self._next_global_slot_ts) + 1.0
 
             current_minute = str(int(now // 60))
             old_keys = [k for k in self._rate_limit_tracker if k.split("_")[-1] != current_minute]
             for k in old_keys:
                 del self._rate_limit_tracker[k]
 
-            return True
+        if spacing > 0:
+            time.sleep(min(spacing, 2.0))
+        return True
 
     def _tv_result_to_dict(self, result: TVSignalResult) -> dict:
         if result is None:
@@ -431,12 +451,14 @@ class TradingViewClient:
             # Use the direct scanner client (tradingview_ta v3.3.0 endpoints are
             # dead: symbol-search -> 403, technicals JS -> 404). ScannerClient
             # mirrors the .summary / .oscillators interface the code below expects.
+            # interval=None: ScannerClient ignores it — no Interval enum, so this
+            # path works even when tradingview_ta is not installed.
             from trading.tradingview_scanner import ScannerClient
             handler = ScannerClient(
                 symbol=symbol,
                 screener="CRYPTO",
                 exchange="BINANCE",
-                interval=Interval.INTERVAL_1_HOUR,
+                interval=None,
                 timeout=self.timeout,
             )
 
@@ -693,6 +715,23 @@ class TradingViewClient:
             cached = self._get_from_cache(s, force_refresh=False, skip_stale_disk=True, require_fresh=True)
             if cached is None:
                 need.append(s)
+        # 2026-09-27: auto-heal re-probe. A missing entry older than 1h rides
+        # along in this batch (still ONE HTTP request — no extra rate cost), so
+        # a false positive — e.g. a symbol blacklisted by one glitched response
+        # before the canary guard, or a newly-listed name TV has since added —
+        # comes back within the hour instead of staying dead for the full 24h
+        # TTL. Skipped entries were previously never re-probed at all: the skip
+        # above removes them from `need`, so the "auto-heal pop on return" in
+        # the response loop could never see them again.
+        _reprobed: set = set()
+        if not force_refresh:
+            _reprobe = sorted(
+                ((ts, s) for s, ts in self._tv_missing.items() if (now - ts) >= 3600.0),
+            )[:5]
+            _reprobed = {s for _ts, s in _reprobe}
+            for _ts, s in _reprobe:
+                if s not in need:
+                    need.append(s)
         if not need:
             return {}
 
@@ -706,6 +745,15 @@ class TradingViewClient:
             self._rate_limit_tracker[minute_key] = self._rate_limit_tracker.get(minute_key, 0) + 1
 
         tickers = [f"BINANCE:{s}" for s in need]
+        # 2026-09-27: canary guard. Include one symbol the scanner certainly
+        # knows (BTCUSDT — flagship market, can never be absent). A 200-OK
+        # response without it is a glitch (WAF challenge, partial outage), not
+        # truth: trusting it used to mark every requested symbol missing for
+        # 24h, and since batches skip missing symbols they were never
+        # re-probed — TV silently dead for the whole scan universe for a day.
+        _canary = "BINANCE:BTCUSDT"
+        if _canary not in tickers:
+            tickers.append(_canary)
         try:
             resp = _requests.post(
                 self._SCAN_URL,
@@ -724,23 +772,23 @@ class TradingViewClient:
                 self._update_health(False)
                 return {}
             data = (resp.json() or {}).get("data", [])
-            if not data:
-                # 0 rows is a legitimate response when every requested symbol
-                # is absent from the scanner's crypto universe (stock tokens,
-                # delisted names). That is NOT an API failure — mark them
-                # missing so future batches skip them, and keep the client
-                # healthy. Only HTTP errors / exceptions trip the circuit.
-                for s in need:
-                    self._tv_missing[s] = now
-                self._save_missing_cache()
-                return {}
-
-            results: Dict[str, TVSignalResult] = {}
             found = set()
             for row in data:
                 ticker = str(row.get("s", ""))
+                found.add(ticker.split(":", 1)[-1] if ":" in ticker else ticker)
+            # Canary gate: no BTCUSDT row → suspect response. Do not mark
+            # anything missing and do not trust partial results; count one
+            # health failure so a persistently glitching endpoint still trips
+            # the circuit (without ever blacklisting the universe).
+            if "BTCUSDT" not in found:
+                self._health_status["last_error"] = "batch 200 without canary row — suspect, no missing-marks"
+                self._update_health(False)
+                return {}
+
+            results: Dict[str, TVSignalResult] = {}
+            for row in data:
+                ticker = str(row.get("s", ""))
                 sym = ticker.split(":", 1)[-1] if ":" in ticker else ticker
-                found.add(sym)
                 vals = dict(zip(self._SCAN_COLUMNS, row.get("d", [])))
                 res = self._build_batch_result(sym, vals)
                 if res is not None:
@@ -751,10 +799,15 @@ class TradingViewClient:
                     if sym in self._tv_missing:
                         self._tv_missing.pop(sym, None)
             # Symbols we asked for but the API did not return are absent
-            # from TV — remember them so future batches skip them.
+            # from TV — remember them so future batches skip them. A re-probed
+            # symbol that is still absent gets re-stamped so its 1h re-probe
+            # window restarts (it is not silently retried every batch).
             miss_changed = False
             for s in need:
                 if s not in found and s not in self._tv_missing:
+                    self._tv_missing[s] = now
+                    miss_changed = True
+                elif s not in found and s in _reprobed and s in self._tv_missing:
                     self._tv_missing[s] = now
                     miss_changed = True
             if miss_changed:
@@ -893,13 +946,11 @@ class TradingViewClient:
         if not self._health_status["healthy"] and now >= self._disabled_until:
             self._health_status["healthy"] = True
             self._health_status["fail_count"] = 0
-        # A missing library is a hard, non-transient failure — never report
-        # healthy for it. This was the silent-death case: is_enabled() returns
-        # False but get_health_status() still said healthy=True with no error.
-        if not TRADINGVIEW_TA_AVAILABLE:
-            self._health_status["healthy"] = False
-            self._health_status["last_error"] = "tradingview_ta library not installed"
-            self._health_status["fail_count"] = max(self._health_status["fail_count"], 1)
+        # 2026-09-27: a missing tradingview_ta library is no longer forced
+        # unhealthy — the fetch path (ScannerClient) does not use it, and
+        # forcing unhealthy here made the supervisor healing loop "recover" a
+        # perfectly working client forever. Availability is reported as an
+        # informational field below.
         # Staleness: TV may be "healthy" by the fail-counter but have not
         # produced a successful signal in a long time (silent degradation).
         _stale_sec = float(self._cfg.get("tvStaleSec", 900) or 900)

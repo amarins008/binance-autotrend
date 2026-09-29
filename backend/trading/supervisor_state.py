@@ -158,11 +158,64 @@ def _tuning_mode_lock_status() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Cache for rollback metric checks (avoids re-parsing trades_log on every
-# supervisor cycle). Invalidated by _LIVE_STATS_VERSION bump or TTL.
+# Cache for rollback metric checks — dropped (2026-09-27): the rollback check
+# now reads via _live_closed_trades_from_log which self-caches by mtime/size.
 # ---------------------------------------------------------------------------
-_ROLLBACK_METRICS_CACHE: dict[str, object] = {"version": -1, "ts": 0.0, "stats": {}}
-_ROLLBACK_METRICS_TTL = 30  # seconds
+
+
+def _recent_closed_trades() -> list[dict]:
+    """Closed LIVE trades (newest last) from the shared trade log."""
+    try:
+        from trading.trade_log import _live_closed_trades_from_log  # type: ignore[import]
+        return _live_closed_trades_from_log(symbol=None, mode="ALL") or []
+    except Exception:
+        return []
+
+
+def _windowed_stats_from_trades(
+    rows: list[dict],
+    since_ts: int | None = None,
+    limit: int = 20,
+) -> dict:
+    """Windowed LIVE stats over the most recent closed trades.
+
+    Cleaning mirrors _supervisor_trade_period_reviews (non-finite / outlier
+    pnl dropped). ``since_ts`` keeps only trades closed AFTER that unix
+    second — the post-tune impact window. Returns {} when nothing qualifies.
+    """
+    cleaned: list[tuple[int, float]] = []
+    for trade in rows or []:
+        if not isinstance(trade, dict):
+            continue
+        try:
+            pnl = float(trade.get("_pnl", trade.get("pnl", 0.0)) or 0.0)
+        except Exception:
+            continue
+        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+            continue
+        try:
+            ts = int(float(trade.get("_ts", trade.get("closedAt", trade.get("ts", 0))) or 0))
+        except Exception:
+            ts = 0
+        if since_ts is not None and (ts <= int(since_ts) or ts <= 0):
+            continue
+        cleaned.append((ts, pnl))
+    cleaned.sort(key=lambda x: x[0])
+    recent = cleaned[-max(1, int(limit)):]
+    if not recent:
+        return {}
+    pnls = [p for _, p in recent]
+    wins = [p for p in pnls if p >= 0.0]
+    losses = [p for p in pnls if p < 0.0]
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+    return {
+        "winRatePct": (len(wins) / len(pnls)) * 100.0,
+        "avgPnl": sum(pnls) / len(pnls),
+        "payoffRatio": (avg_win / abs(avg_loss)) if avg_win > 0 and avg_loss < 0 else 0.0,
+        "realizedPnl": sum(pnls),
+        "trades": len(pnls),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,19 +282,21 @@ def _tuning_history_append(
         AUTO_TRADE["tuningHistory"] = history[-50:]
 
 
-def _tuning_rollback_last(key: str) -> dict:
-    """Rollback the most recent un-reverted tuning of *key*.
+def _tuning_rollback_last(key: str, *, mark: bool = True) -> dict:
+    """Get the most recent un-reverted tuning of *key*, optionally mark it.
 
-    Returns:
-        {"reverted": True, "preMetrics": {...}, "changes": {...}}
-        or {"reverted": False, "reason": "..."}
+    ``mark=False`` lets operator rollback preview whether values can safely be
+    restored before consuming the history entry. Automatic rollback uses the
+    default mark=True: an operator change that superseded a tuned value should
+    not be retried indefinitely.
     """
     history = AUTO_TRADE.get("tuningHistory")
     if not isinstance(history, list):
         return {"reverted": False, "reason": "no_history"}
     for entry in reversed(history):
         if entry.get("key") == key and not entry.get("reverted"):
-            entry["reverted"] = True
+            if mark:
+                entry["reverted"] = True
             pre = entry.get("preMetrics", {}) or {}
             return {"reverted": True, "preMetrics": pre, "changes": entry.get("changes", {})}
     return {"reverted": False, "reason": "no_matching_entry"}
@@ -262,9 +317,14 @@ def _apply_rollback_old_values(cfg: dict, rollback: dict) -> dict:
     if not isinstance(prev_changes, dict):
         return reverted
     for k, info in prev_changes.items():
-        if isinstance(info, dict) and "old" in info and info["old"] is not None and k in cfg:
-            cfg[k] = info["old"]
-            reverted[k] = {"old": info.get("new"), "new": info.get("old")}
+        if not isinstance(info, dict) or "old" not in info or info["old"] is None or k not in cfg:
+            continue
+        # Do not overwrite an operator's later change. A rollback only owns a
+        # key while its live value still matches the value this tune wrote.
+        if "new" in info and cfg.get(k) != info.get("new"):
+            continue
+        cfg[k] = info["old"]
+        reverted[k] = {"old": info.get("new"), "new": info.get("old")}
     return reverted
 
 
@@ -272,17 +332,15 @@ def _apply_rollback_old_values(cfg: dict, rollback: dict) -> dict:
 # Metric snapshots
 # ---------------------------------------------------------------------------
 
-def _tuning_pre_metrics() -> dict:
-    """Capture current performance metrics before applying a tune.
+def _tuning_pre_metrics(limit: int = 20) -> dict:
+    """Capture recent-window performance metrics before applying a tune.
 
-    Avoids importing main.py at module level; uses a lazy import so this
-    module stays importable in isolation during tests.
+    Uses the last ``limit`` closed LIVE trades — the same horizon the trade
+    reviews act on. (The old all-time aggregate barely moved after a handful
+    of new trades, which made _tuning_should_rollback unable to detect a real
+    post-tune regression.)
     """
-    try:
-        from main import _aggregate_live_trade_stats_from_log  # type: ignore[import]
-        stats = _aggregate_live_trade_stats_from_log(None) or {}
-    except Exception:
-        stats = {}
+    stats = _windowed_stats_from_trades(_recent_closed_trades(), limit=limit)
     return {
         "winRatePct": float(stats.get("winRatePct", 0.0) or 0.0),
         "avgPnl": float(stats.get("avgPnl", 0.0) or 0.0),
@@ -293,62 +351,42 @@ def _tuning_pre_metrics() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Rollback check (with metrics cache)
+# Rollback check (post-tune impact window)
 # ---------------------------------------------------------------------------
 
 def _tuning_should_rollback(key: str, post_window_trades: int = 3) -> bool:
     """Return True if the most recent tune of *key* has since worsened metrics.
 
-    Uses _ROLLBACK_METRICS_CACHE to avoid re-parsing the full trade log on
-    every supervisor cycle. The cache is invalidated when _LIVE_STATS_VERSION
-    changes (meaning a new trade was closed) or after _ROLLBACK_METRICS_TTL
-    seconds, whichever comes first.
+    Compares the tune's windowed pre-metrics against the trades CLOSED SINCE
+    the tune (its actual impact window). The old version compared all-time
+    aggregates, which barely move after a handful of trades — rollback
+    effectively never fired. Requires at least ``max(3, post_window_trades)``
+    post-tune trades as evidence; fewer means not enough data to judge yet.
     """
     history = AUTO_TRADE.get("tuningHistory")
     if not isinstance(history, list):
         return False
+    min_post = max(3, int(post_window_trades or 3))
     for entry in reversed(history):
         if entry.get("key") != key or entry.get("reverted"):
             continue
-        age = time.time() - int(entry.get("at", 0) or 0)
+        at = int(entry.get("at", 0) or 0)
+        age = time.time() - at
         if age < 60 or age > 3600 * 4:
             continue
         pre = entry.get("preMetrics", {}) or {}
         if not pre:
             continue
-        # Try cache first.
-        now = time.time()
-        cache = _ROLLBACK_METRICS_CACHE
-        try:
-            from main import _LIVE_STATS_VERSION  # type: ignore[import]
-            live_ver = _LIVE_STATS_VERSION
-        except Exception:
-            live_ver = None
-        if (
-            live_ver is not None
-            and cache.get("version") == live_ver
-            and (now - float(cache.get("ts", 0.0) or 0.0)) < _ROLLBACK_METRICS_TTL
-            and isinstance(cache.get("stats"), dict)
-        ):
-            current = cache["stats"]
-        else:
-            try:
-                from main import _aggregate_live_trade_stats_from_log  # type: ignore[import]
-                current = _aggregate_live_trade_stats_from_log(None) or {}
-            except Exception:
-                current = {}
-            _ROLLBACK_METRICS_CACHE.update({
-                "version": live_ver,
-                "ts": now,
-                "stats": dict(current),
-            })
+        post = _windowed_stats_from_trades(_recent_closed_trades(), since_ts=at)
+        if not post or int(post.get("trades", 0) or 0) < min_post:
+            continue
         pre_wr = float(pre.get("winRatePct", 0.0) or 0.0)
-        cur_wr = float(current.get("winRatePct", 0.0) or 0.0)
+        post_wr = float(post.get("winRatePct", 0.0) or 0.0)
         pre_pnl = float(pre.get("avgPnl", 0.0) or 0.0)
-        cur_pnl = float(current.get("avgPnl", 0.0) or 0.0)
-        if pre_wr > 0 and cur_wr < pre_wr - 12.0 and cur_pnl < pre_pnl - 0.05:
+        post_pnl = float(post.get("avgPnl", 0.0) or 0.0)
+        if pre_wr > 0 and post_wr < pre_wr - 15.0 and post_pnl < pre_pnl - 0.05:
             return True
-        if pre_pnl > 0 and cur_pnl < pre_pnl - 0.08:
+        if pre_pnl > 0 and post_pnl < pre_pnl - 0.08:
             return True
     return False
 
@@ -415,28 +453,37 @@ def _commit_supervisor_config_tune(
     cfg: dict,
     changes: dict,
     reason: str,
+    *,
+    advisory: bool = False,
+    allow_when_tuning_disabled: bool = False,
+    record_history: bool = True,
+    only_if_live_matches_old: bool = False,
 ) -> dict:
-    """Apply tuning changes to live config, record history, and persist snapshot."""
-    if not _supervisor_tuning_enabled():
+    """Apply config changes, persist snapshot, and optionally record a tune.
+
+    ``allow_when_tuning_disabled`` is reserved for ops-healing (TradingView
+    recovery), never risk tuning. ``record_history=False`` is used for an
+    already-recorded tune's rollback and for healing. A rollback also sets
+    ``only_if_live_matches_old``: it cannot overwrite an operator value that
+    changed after the original tune.
+    """
+    if advisory:
+        return record_advisory_suggestion(key, changes, reason)
+    if not _supervisor_tuning_enabled() and not allow_when_tuning_disabled:
         return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
-    now = int(time.time())
-    delegations[key] = {
-        "at": now,
-        "reason": reason,
-        "changes": changes,
-    }
-    state["delegations"] = delegations
-    AUTO_TRADE["supervisorAutoTune"] = state
-    # Merge ONLY the tuner's changes onto the CURRENT live config. The old
-    # code replaced the whole config with a deepcopy of the tuner's cfg — a
-    # review holding a stale cfg reference clobbered operator keys applied
-    # moments earlier via /bot/config (mirrors the main.py commit fix from
-    # the 2026-08-01 full-audit).
+
+    # Merge ONLY the tuner's changes onto CURRENT live config. The old code
+    # full-replaced config from a stale review cfg, clobbering /bot/config.
     live = AUTO_TRADE.get("config")
     if not isinstance(live, dict):
         live = cfg if isinstance(cfg, dict) else {}
     merged = copy.deepcopy(live)
+    effective_changes: dict = {}
+    skipped: list[str] = []
     for _k, _v in (changes or {}).items():
+        if only_if_live_matches_old and isinstance(_v, dict) and "old" in _v and merged.get(_k) != _v["old"]:
+            skipped.append(str(_k))
+            continue
         if isinstance(_v, dict) and "new" in _v:
             merged[_k] = _v["new"]
         elif isinstance(_v, dict) and "reverted" in _v:
@@ -445,17 +492,141 @@ def _commit_supervisor_config_tune(
             merged[_k] = _v["set"]
         else:
             merged[_k] = _v
+        effective_changes[_k] = _v
+    if not effective_changes:
+        return {
+            "applied": False,
+            "reason": "operator_override" if skipped else "no_safe_delta",
+            "key": key,
+            "skipped": skipped,
+        }
+
+    now = int(time.time())
+    delegations[key] = {
+        "at": now,
+        "reason": reason,
+        "changes": effective_changes,
+    }
+    state["delegations"] = delegations
+    AUTO_TRADE["supervisorAutoTune"] = state
     try:
         from main import _enforce_entry_confidence_floor  # type: ignore[import]
         _enforce_entry_confidence_floor(merged)
     except Exception:
         pass
     AUTO_TRADE["config"] = merged
-    _tuning_history_append(key, changes, _tuning_pre_metrics())
+    if record_history:
+        _tuning_history_append(key, effective_changes, _tuning_pre_metrics())
     try:
         from main import _persist_autotrade_snapshot, _autotrade_log  # type: ignore[import]
         _persist_autotrade_snapshot(force=True)  # config change must survive restart (throttle would lose it)
-        _autotrade_log(f"Supervisor delegated {key}: {changes}")
+        _autotrade_log(f"Supervisor delegated {key}: {effective_changes}")
     except Exception:
         pass
-    return {"applied": True, "changes": changes, "reason": reason}
+    return {"applied": True, "changes": effective_changes, "reason": reason, "skipped": skipped}
+
+
+def rollback_supervisor_config_tune(
+    state: dict,
+    delegations: dict,
+    key: str,
+    *,
+    reason: str = "rollback_worsened",
+    allow_when_tuning_disabled: bool = False,
+    advisory: bool = False,
+) -> dict:
+    """Safely restore latest tune's old values without clobbering operator cfg.
+
+    Finds the un-reverted entry without consuming it, builds inverse changes
+    against a copy of current live config, commits only keys still owned by the
+    tune, then marks history reverted after successful persistence.
+    """
+    if advisory:
+        return {"applied": False, "rollback": False, "reason": "advisory_mode"}
+    rollback = _tuning_rollback_last(key, mark=False)
+    if not rollback.get("reverted"):
+        return {"applied": False, "rollback": False, "reason": str(rollback.get("reason") or "no_matching_entry")}
+    live = AUTO_TRADE.get("config")
+    if not isinstance(live, dict):
+        return {"applied": False, "rollback": False, "reason": "no_live_config"}
+    # Build inverse changes on a detached copy. _apply_rollback_old_values
+    # verifies every live value still equals the tune's recorded new value.
+    candidate = copy.deepcopy(live)
+    reverted = _apply_rollback_old_values(candidate, rollback)
+    if not reverted:
+        # Operator changed every key this tune owned. Retire the history record
+        # so each supervisor review does not attempt the same rollback forever.
+        _tuning_rollback_last(key, mark=True)
+        return {"applied": False, "rollback": False, "reason": "operator_override"}
+    out = _commit_supervisor_config_tune(
+        state,
+        delegations,
+        key,
+        live,
+        reverted,
+        reason,
+        allow_when_tuning_disabled=allow_when_tuning_disabled,
+        record_history=False,
+        only_if_live_matches_old=True,
+    )
+    if not out.get("applied"):
+        return {"applied": False, "rollback": False, "reason": out.get("reason", "rollback_not_applied"), "skipped": out.get("skipped", [])}
+    _tuning_rollback_last(key, mark=True)
+    out["rollback"] = True
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Observability + operator rollback (single source; main.py imports these)
+# ---------------------------------------------------------------------------
+
+def tuning_status_snapshot() -> dict:
+    """Read-only observability snapshot of the supervisor tuning subsystem.
+
+    Exposes the switches, active domain locks, delegation records (cooldowns),
+    tuning history and advisory suggestions in one payload.
+    """
+    cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
+    state = AUTO_TRADE.get("supervisorAutoTune") if isinstance(AUTO_TRADE.get("supervisorAutoTune"), dict) else {}
+    history = AUTO_TRADE.get("tuningHistory") if isinstance(AUTO_TRADE.get("tuningHistory"), list) else []
+    suggestions = AUTO_TRADE.get("tuningSuggestions") if isinstance(AUTO_TRADE.get("tuningSuggestions"), list) else []
+    delegations = state.get("delegations") if isinstance(state.get("delegations"), dict) else {}
+    return {
+        "switches": {
+            "supervisorAutoTuneEnabled": _supervisor_tuning_enabled(cfg),
+            "supervisorHealingEnabled": _supervisor_healing_enabled(cfg),
+            "supervisorAdvisoryEnabled": _supervisor_advisory_enabled(cfg),
+        },
+        "lockStatus": _tuning_mode_lock_status(),
+        "delegations": delegations,
+        "tuningHistory": history[-20:],
+        "tuningSuggestions": suggestions[-20:],
+        "ts": int(time.time()),
+    }
+
+
+def manual_rollback_tune(key: str) -> dict:
+    """Operator-initiated rollback of latest tune; bypasses tuning kill switch."""
+    key = str(key or "").strip()
+    if not key:
+        return {"ok": False, "reason": "missing_key"}
+    state = AUTO_TRADE.get("supervisorAutoTune")
+    if not isinstance(state, dict):
+        state = {}
+    delegations = state.get("delegations")
+    if not isinstance(delegations, dict):
+        delegations = {}
+    out = rollback_supervisor_config_tune(
+        state,
+        delegations,
+        key,
+        reason="manual_rollback",
+        allow_when_tuning_disabled=True,
+    )
+    if out.get("applied"):
+        try:
+            from main import _autotrade_log  # type: ignore[import]
+            _autotrade_log(f"[Supervisor] manual rollback {key}: {out.get('changes', {})}")
+        except Exception:
+            pass
+    return {"ok": bool(out.get("applied")), "key": key, **out}

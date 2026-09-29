@@ -62,6 +62,11 @@ AUTO_TRADE: dict = {
     "cooldownWatchlist": {},
     "hermesAgents": _new_agent_state(),
     "hermesSupervisorReview": {},
+    # Supervisor tuning state survives restarts so cooldowns and post-tune
+    # rollback evidence cannot reset into a new config-thrash window.
+    "supervisorAutoTune": {},
+    "tuningHistory": [],
+    "tuningSuggestions": [],
     "paper": {
         "position": None,
         "wins": 0,

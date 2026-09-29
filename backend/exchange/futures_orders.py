@@ -150,6 +150,51 @@ async def fetch_mark_price(symbol: str):
         raise HTTPException(status_code=res.status_code, detail=res.text)
     return float(res.json()["markPrice"])
 
+
+def _funding_usdt_from_rate(notional: float, rate_per_8h: float, hold_sec: float) -> float:
+    """Expected funding cost for a position, from a per-8h funding rate.
+
+    Binance charges funding only when the position is still open AT a funding
+    timestamp (every 8h), so hold/8h is the expected number of charge events —
+    capped at 2 so a stale/missing close timestamp cannot inflate the estimate.
+    """
+    try:
+        notional = float(notional or 0.0)
+        rate_per_8h = float(rate_per_8h or 0.0)
+        hold_sec = float(hold_sec or 0.0)
+    except Exception:
+        return 0.0
+    if notional <= 0.0 or not rate_per_8h or hold_sec <= 0.0:
+        return 0.0
+    events = min(2.0, hold_sec / 28800.0)
+    return round(notional * rate_per_8h * events, 6)
+
+
+async def _funding_cost_estimate(symbol: str, entry_price: float, qty: float, opened_ts) -> float:
+    """Estimated funding paid over the hold, using the funding rate at close.
+
+    Best-effort: any fetch/parse failure returns 0.0 so closing a position can
+    never fail because of cost telemetry.
+    """
+    if entry_price <= 0 or qty <= 0:
+        return 0.0
+    try:
+        res = await _data_get(f"/fapi/v1/premiumIndex?symbol={_normalize_symbol(symbol)}")
+        if res.status_code >= 400:
+            return 0.0
+        rate = float((res.json() or {}).get("lastFundingRate") or 0.0)
+    except Exception:
+        return 0.0
+    if not rate:
+        return 0.0
+    try:
+        opened = float(opened_ts or 0)
+    except Exception:
+        opened = 0.0
+    hold = max(0.0, time.time() - opened) if opened > 0 else 0.0
+    return _funding_usdt_from_rate(entry_price * qty, rate, hold)
+
+
 async def _um_client_position_risk(client, symbol: str | None = None):
     timeout_sec = max(2.0, float(os.getenv("BINANCE_ACCOUNT_TIMEOUT_SEC", "5.0") or 5.0))
 
@@ -598,9 +643,11 @@ async def _close_position(symbol: str, key: str, secret: str, base: str, exit_in
         else:
             payload["reduceOnly"] = "true"
         if client:
-            close_results.append(await asyncio.to_thread(client.new_order, **payload))
+            order_resp = await asyncio.to_thread(client.new_order, **payload)
+            close_results.append(order_resp)
         else:
-            close_results.append(await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload))
+            order_resp = await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload)
+            close_results.append(order_resp)
         if entry > 0 and qty > 0:
             fill_px = _extract_fill_price(order_resp)
             exit_px = fill_px if fill_px and fill_px > 0 else close_mark
@@ -608,6 +655,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str, exit_in
             exit_ctx = _exit_context_from_intel(symbol, pos_side, exit_intel)
             fee_est = round(qty * exit_px * (2.0 * _TAKER_FEE_BPS_PER_SIDE / 10000.0), 6)
             entry_snapshot = _entry_snapshot_for_position(symbol, pos_side)
+            funding_est = await _funding_cost_estimate(symbol, entry, qty, entry_snapshot.get("entryDecisionAt"))
             learned_trades.append({
                 "side": pos_side,
                 "entry": entry,
@@ -632,6 +680,7 @@ async def _close_position(symbol: str, key: str, secret: str, base: str, exit_in
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
                 "feeEstUsdt": fee_est,
+                "fundingEstUsdt": funding_est,
                 **exit_ctx,
             })
     if not close_results:
@@ -682,6 +731,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
             exit_ctx = _exit_context_from_intel(symbol, ps, exit_intel)
             fee_est = round(qty * exit_px * (2.0 * _TAKER_FEE_BPS_PER_SIDE / 10000.0), 6)
             entry_snapshot = _entry_snapshot_for_position(symbol, ps)
+            funding_est = await _funding_cost_estimate(symbol, entry, qty, entry_snapshot.get("entryDecisionAt"))
             learned.append({
                 "side": ps,
                 "entry": entry,
@@ -706,6 +756,7 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryBreakdown60mPct": entry_snapshot.get("entryBreakdown60mPct"),
                 "entryRange60mPct": entry_snapshot.get("entryRange60mPct"),
                 "feeEstUsdt": fee_est,
+                "fundingEstUsdt": funding_est,
                 **exit_ctx,
             })
     for t in learned:

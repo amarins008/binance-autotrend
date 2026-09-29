@@ -28,6 +28,29 @@ _TRADES_LOG_ROTATION_LOCK = threading.Lock()
 _TRADES_LOG_LAST_ROTATION = 0.0
 
 
+def net_pnl_of(obj: dict) -> float:
+    """Gross price-delta pnl minus the estimated costs recorded on the trade.
+
+    Close paths stamp ``feeEstUsdt`` (taker roundtrip) and ``fundingEstUsdt``
+    on each record; stats/learning must judge performance NET of those costs.
+    Records without cost fields (pre-telemetry, paper, vault backfill) have no
+    costs invented for them — they stay gross.
+    """
+    try:
+        gross = float(obj.get("pnl", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+    costs = 0.0
+    for key in ("feeUsdt", "feeEstUsdt", "fundingUsdt", "fundingEstUsdt"):
+        try:
+            v = float(obj.get(key) or 0.0)
+        except Exception:
+            v = 0.0
+        if v:
+            costs += v
+    return round(gross - costs, 6)
+
+
 def is_corrupt_trade(entry: dict) -> bool:
     """True when a closed-trade record carries corrupted phantive fields.
 
@@ -211,11 +234,15 @@ def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
         if "pnl" not in obj:
             continue
         try:
-            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            gross = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl) or abs(pnl) > 5000.0:
+        if not math.isfinite(gross) or abs(gross) > 5000.0:
             continue
+        # 2026-09-29: every PnL stat (all-time, today, win/loss sign) is NET of
+        # recorded estimated costs. The old version kept all-time gross and
+        # subtracted fees only on the daily KPI — the two disagreed.
+        pnl = net_pnl_of(obj)
         if pnl >= 0:
             stats["wins"] += 1
         else:
@@ -234,13 +261,7 @@ def _apply_trade_log_delta(stats: dict, lines: list[str], symbol: str) -> dict:
                     stats["winsToday"] += 1
                 else:
                     stats["lossesToday"] += 1
-                # 2026-09-26: daily KPI is NET of estimated round-trip fees —
-                # records without feeEstUsdt (pre-telemetry) stay gross.
-                try:
-                    _fee = float(obj.get("feeEstUsdt") or 0.0)
-                except Exception:
-                    _fee = 0.0
-                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl - _fee, 6)
+                stats["realizedPnlToday"] = round(float(stats["realizedPnlToday"]) + pnl, 6)
     if new_last_trades:
         existing = stats.get("lastTrades") if isinstance(stats.get("lastTrades"), list) else []
         merged: list[dict] = []
@@ -479,15 +500,19 @@ def _live_closed_trades_from_log(symbol: str | None = None, mode: str = "ALL") -
         if mode_up in ("LONG", "SHORT") and side != mode_up:
             continue
         try:
-            pnl = float(obj.get("pnl", 0.0) or 0.0)
+            gross = float(obj.get("pnl", 0.0) or 0.0)
         except Exception:
             continue
-        if not math.isfinite(pnl):
+        if not math.isfinite(gross):
             continue
-        if abs(pnl) > 5000.0:
+        if abs(gross) > 5000.0:
             continue
         if is_corrupt_trade(obj):
             continue
+        # 2026-09-29: _pnl is NET of recorded estimated costs (fees + funding)
+        # so every downstream consumer (stats, tuners, memory windows, streak
+        # guards) judges performance net. Gross is kept alongside for audit.
+        pnl = net_pnl_of(obj)
         ts_raw = obj.get("closedAt", obj.get("ts", 0))
         try:
             ts = int(float(ts_raw or 0))
@@ -495,6 +520,7 @@ def _live_closed_trades_from_log(symbol: str | None = None, mode: str = "ALL") -
             ts = 0
         item = dict(obj)
         item["_pnl"] = pnl
+        item["_grossPnl"] = gross
         item["_ts"] = ts
         dedup_key = (
             f"{item.get('symbol', '')}:{item.get('side', '')}:"

@@ -589,7 +589,8 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     )
     if inp.live_loss_streak >= 2:
         min_net *= 1.0 + (0.18 * min(3, inp.live_loss_streak - 1))
-    if not _step(
+    fee_gate_on = float(cfg.get("feeMinNetProfitUSDT", 0.05) or 0.0) > 0.0
+    if fee_gate_on and not _step(
         pipeline,
         "fee_edge",
         net_u > min_net,

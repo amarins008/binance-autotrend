@@ -11,6 +11,7 @@ canonical dict that ``main`` binds after startup reconciliation.
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 
@@ -227,6 +228,9 @@ def persist_autotrade_snapshot(force: bool = False) -> None:
             "cooldownWatchlist": app_state.AUTO_TRADE.get("cooldownWatchlist") if isinstance(app_state.AUTO_TRADE.get("cooldownWatchlist"), dict) else {},
             "hermesAgents": ensure_agent_state(app_state.AUTO_TRADE.get("hermesAgents")),
             "hermesSupervisorReview": app_state.AUTO_TRADE.get("hermesSupervisorReview") if isinstance(app_state.AUTO_TRADE.get("hermesSupervisorReview"), dict) else {},
+            "supervisorAutoTune": app_state.AUTO_TRADE.get("supervisorAutoTune") if isinstance(app_state.AUTO_TRADE.get("supervisorAutoTune"), dict) else {},
+            "tuningHistory": list(app_state.AUTO_TRADE.get("tuningHistory", []))[-50:] if isinstance(app_state.AUTO_TRADE.get("tuningHistory"), list) else [],
+            "tuningSuggestions": list(app_state.AUTO_TRADE.get("tuningSuggestions", []))[-50:] if isinstance(app_state.AUTO_TRADE.get("tuningSuggestions"), list) else [],
             "trades": list(app_state.AUTO_TRADE.get("trades", []))[-60:],
             "dailyRealizedPnlUSDT": app_state.DAILY_REALIZED_PNL,
             "dailyPnlDateKey": app_state._DAILY_PNL_DATE_KEY,
@@ -268,3 +272,24 @@ def persist_autotrade_snapshot(force: bool = False) -> None:
             pass
     except Exception as exc:
         print(f"[Snapshot] ERROR writing {SNAPSHOT_PATH}: {exc}")
+
+
+def merge_config_delta(cfg_at_start: dict, cfg_now: dict) -> None:
+    """Write back ONLY the keys the autotrade loop changed this cycle.
+
+    The loop deep-copies ``AUTO_TRADE["config"]`` at cycle start and mutates
+    its copy for ~25s. Writing the whole copy back clobbers operator
+    ``/bot/config`` updates that landed mid-cycle (observed 2026-09-29:
+    loosened gates silently reverted within one cycle). Merging the delta
+    keeps operator keys that the loop itself never touched.
+    """
+    cur = app_state.AUTO_TRADE.get("config")
+    if not isinstance(cur, dict):
+        app_state.AUTO_TRADE["config"] = copy.deepcopy(cfg_now)
+        return
+    for k, v in (cfg_now or {}).items():
+        if k not in cfg_at_start or cfg_at_start.get(k) != v:
+            cur[k] = copy.deepcopy(v)
+    for k in list(cur.keys()):
+        if k in cfg_at_start and k not in cfg_now:
+            cur.pop(k, None)

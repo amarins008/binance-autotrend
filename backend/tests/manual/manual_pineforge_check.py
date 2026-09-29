@@ -6,10 +6,10 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"D:\Binance autotrend\backend")
+sys.path.insert(0, r"D:\My Project\Binance autotrend\backend")
 
-STRATEGY_SO = Path(r"D:\Binance autotrend\pineforge-engine\tutorial\macd\strategy.so")
-CSV_PATH = Path(r"D:\Binance autotrend\pineforge-engine\tutorial\data\btcusdt_15m.csv")
+STRATEGY_SO = Path(r"D:\My Project\Binance autotrend\pineforge-engine\tutorial\macd\strategy.so")
+CSV_PATH = Path(r"D:\My Project\Binance autotrend\pineforge-engine\tutorial\data\btcusdt_15m.csv")
 PASSED = 0
 FAILED = 0
 
