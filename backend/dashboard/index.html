@@ -628,6 +628,16 @@
 
     .status-banner.show { display: block; }
 
+    .status-banner.danger {
+
+      border-color: rgba(239, 68, 68, 0.5);
+
+      background: rgba(127, 29, 29, 0.32);
+
+      color: #fecaca;
+
+    }
+
     .toolbar .group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
     .toolbar .group.settings { flex: 1; min-width: 0; gap: 8px; }
@@ -4460,6 +4470,8 @@
 
       <div id="backendBanner" class="status-banner"></div>
 
+      <div id="tvBanner" class="status-banner"></div>
+
 
 
     <div id="view-monitor" class="panel-view active">
@@ -4644,6 +4656,7 @@ const ui = {
   levCapHint: $("levCapHint"), engineVer: $("engineVer"), engineBadge: $("engineBadge"), configVersionBadge: $("configVersionBadge"),
 
   backendBanner: $("backendBanner"),
+      tvBanner: $("tvBanner"),
 
   log: $("log"), scanBoard: $("scanBoard"), entryPipeline: $("entryPipeline"),
 
@@ -6313,31 +6326,87 @@ async function refreshBalance() {
 
 function updateTradingViewStatus(bot) {
   if (!ui.tvStatus) return;
-  
-  // Prioritize checkbox state for immediate UI feedback
+
   const checkbox = $("cfgTradingViewEnabled");
   const checkboxEnabled = checkbox ? checkbox.checked : false;
-  
-  // Check localStorage as backup
   const localEnabled = localStorage.getItem("dashboard_tv_enabled") === "true";
-  
-  // Fall back to backend config if neither checkbox nor localStorage is set
   const cfg = bot?.config || {};
   const backendEnabled = cfg.tradingviewEnabled === true || cfg.tradingviewEnabled === "true";
-  
   const tvEnabled = checkboxEnabled || localEnabled || backendEnabled;
-  
+
+  // TV silent-death canary (backend /autotrade/status-lite: tvCanary + tvNoDataEntryStreak)
+  const canary = bot?.tvCanary || {};
+  const streak = Number(bot?.tvNoDataEntryStreak || 0);
+  const failCap = Number(cfg.tvCanaryMaxFails || 3);
+
   ui.tvStatus.className = "tv-status";
-  
+
+  const bannerEl = ui.tvBanner;
+  const setBanner = (danger, text) => {
+    if (!bannerEl) return;
+    if (!text) {
+      bannerEl.textContent = "";
+      bannerEl.classList.remove("show", "danger");
+      return;
+    }
+    bannerEl.textContent = text;
+    bannerEl.classList.toggle("danger", !!danger);
+    bannerEl.classList.add("show");
+  };
+
   if (!tvEnabled) {
     ui.tvStatus.classList.add("disabled");
     ui.tvStatus.textContent = "Disabled";
-  } else {
-    // Check if tradingview-ta is available (would need backend endpoint)
-    // For now, show as healthy if enabled
-    ui.tvStatus.classList.add("healthy");
-    ui.tvStatus.textContent = "Active";
+    setBanner(false, null);
+    return;
   }
+
+  // 1) Canary confirmed TV dead — hard warning, entries are being blocked
+  if (canary.down) {
+    ui.tvStatus.classList.add("unhealthy");
+    ui.tvStatus.textContent = "TV DOWN";
+    setBanner(
+      true,
+      `🔴 TradingView ตาย (canary ยืนยัน) — บอทบล็อกการเข้าไม้ที่ไร้ TV จนกว่า TV จะฟื้น` +
+        ` · พลาด ${canary.fails} ครั้งติด · ${String(canary.lastError || "").slice(0, 140)}`
+    );
+    return;
+  }
+
+  // 2) TV still answers the canary, but entries are going out TV-less
+  if (streak >= 3) {
+    ui.tvStatus.classList.add("unhealthy");
+    ui.tvStatus.textContent = "TV n/a ×" + streak;
+    setBanner(
+      false,
+      `⚠️ เข้าไม้แบบไร้ TV ต่อเนื่อง ${streak} ไม้ — TV ไม่ส่งข้อมูลตอนเข้า (canary ยัง ok) ควรตรวจ TV subsystem`
+    );
+    return;
+  }
+
+  const ageSec = canary.lastOkTs ? Math.max(0, Math.floor(Date.now() / 1000 - canary.lastOkTs)) : null;
+  const ageText = ageSec != null ? (ageSec < 90 ? `${ageSec}s` : `${Math.floor(ageSec / 60)}m`) : null;
+
+  // 3) Canary failing but not yet tripped — degraded
+  if (Number(canary.fails || 0) > 0) {
+    ui.tvStatus.classList.add("loading");
+    ui.tvStatus.textContent = `Degraded ${canary.fails}/${failCap}` + (ageText ? ` · ✓${ageText}` : "");
+    setBanner(false, null);
+    return;
+  }
+
+  // 4) Healthy — show last canary pass age
+  if (Number(canary.ok || 0) > 0) {
+    ui.tvStatus.classList.add("healthy");
+    ui.tvStatus.textContent = "Active" + (ageText ? ` · ✓${ageText}` : "");
+    setBanner(false, null);
+    return;
+  }
+
+  // 5) Canary has not run yet (fresh startup window)
+  ui.tvStatus.classList.add("healthy");
+  ui.tvStatus.textContent = "Active";
+  setBanner(false, null);
 }
 
 function paintStatus(data) {
