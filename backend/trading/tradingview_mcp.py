@@ -75,6 +75,11 @@ class TradingViewClient:
         # most every 10 min instead of on every scan cycle (the POST is
         # blocking; see get_tv_universe).
         self._tv_universe_fail_until = 0.0
+        # 2026-09-30: global rate-limit slot clock — _acquire_rate_limit_slot
+        # reads this but it was never initialized here, so EVERY TV fetch
+        # raised AttributeError -> "TV unavailable" on all entries since
+        # 09-28 (which ended the profitable streak).
+        self._next_global_slot_ts = 0.0
         self.update_config(config)
         self._load_missing_cache()
         self._load_universe_cache()

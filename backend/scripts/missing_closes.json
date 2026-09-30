@@ -1,0 +1,15 @@
+[
+ {
+  "symbol": "ENAUSDT",
+  "closedAt": 1790701389,
+  "gross": 1.113837,
+  "qty": 805.0,
+  "exit_fee": 0.098721,
+  "exit_px": 0.2452693789,
+  "entry_px": 0.24778,
+  "entry_ts": 1790701043,
+  "trade_ids": [
+   "929556432"
+  ]
+ }
+]
