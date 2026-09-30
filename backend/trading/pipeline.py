@@ -2,12 +2,31 @@
 
 from dataclasses import dataclass, field
 
+from services import app_state
 from trading.risk import (
     effective_min_net_profit_usdt,
     effective_tpsl_pct_for_trade,
     estimate_trade_edge_usdt,
     passes_min_risk_reward,
 )
+
+
+def _note_tv_gate_outcome(alive: bool) -> None:
+    """Track consecutive TV-less entries (silent-death watch).
+
+    ``alive=True`` when the entry saw a real TV signal (align/conflict/WAIT —
+    TV answered anything at all); ``alive=False`` when TV data was absent.
+    The autotrade-loop TV guard alerts when the streak grows too long.
+    """
+    try:
+        if alive:
+            if app_state.AUTO_TRADE.get("tvNoDataEntryStreak"):
+                app_state.AUTO_TRADE["tvNoDataEntryStreak"] = 0
+            app_state.AUTO_TRADE["tvNoDataAlerted"] = False
+        else:
+            app_state.AUTO_TRADE["tvNoDataEntryStreak"] = int(app_state.AUTO_TRADE.get("tvNoDataEntryStreak") or 0) + 1
+    except Exception:
+        pass
 
 
 @dataclass
@@ -233,10 +252,12 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
     tv_strength = float(tv_info.get("strength", 0.0) or 0.0)
     if tv_already_blocked:
         _step(pipeline, "tv_conflict", True, f"TV already blocked by intel_analyze")
+        _note_tv_gate_outcome(True)
     elif tv_sig in ("LONG", "SHORT") and tv_sig != signal:
         from trading.tv_constants import TV_CONFLICT_BLOCK_STRENGTH_DEFAULT
         tv_block_strength = float(cfg.get("tvConflictBlockStrength", TV_CONFLICT_BLOCK_STRENGTH_DEFAULT) or TV_CONFLICT_BLOCK_STRENGTH_DEFAULT)
         if tv_strength >= tv_block_strength:
+            _note_tv_gate_outcome(True)
             return EntryPlan(
                 False,
                 "tv_conflict",
@@ -246,14 +267,29 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                 pipeline=pipeline,
             )
         _step(pipeline, "tv_conflict", True, f"TV {tv_sig} {tv_strength:.2f} < block {tv_block_strength:.2f}")
+        _note_tv_gate_outcome(True)
     elif tv_sig in ("LONG", "SHORT") and tv_sig == signal:
         _step(pipeline, "tv_conflict", True, f"TV align {tv_sig} {tv_strength:.2f}")
+        _note_tv_gate_outcome(True)
     else:
         # TV unavailable / WAIT / ERROR — route to the correct gate based
         # on the snapshot's status field (populated by intel_analyze).
         # status="ok" + signal=WAIT → deliberate non-confirmation → tvWaitMinConf
         # status="unavailable" / "error" → TV data absent → tvUnavailableMinConf
         from trading.tv_constants import TV_UNAVAILABLE_MIN_CONF_DEFAULT, TV_WAIT_MIN_CONF_DEFAULT
+        # 2026-09-30: silent-death guard — when the TV canary has confirmed
+        # the subsystem dead (real fetch failures, not just health claims),
+        # a TV-less entry is exactly how the account bleeds. Block outright.
+        if bool(cfg.get("tvCanaryBlockEntries", True)) and bool(app_state.AUTO_TRADE.get("tvCanaryDown")):
+            _note_tv_gate_outcome(False)
+            return EntryPlan(
+                False,
+                "tv_canary_down",
+                "Skip: TV canary DOWN — blocking TV-less entry (silent-death guard)",
+                signal,
+                conf,
+                pipeline=pipeline,
+            )
         tv_unavail_min_conf = float(cfg.get("tvUnavailableMinConf", TV_UNAVAILABLE_MIN_CONF_DEFAULT) or TV_UNAVAILABLE_MIN_CONF_DEFAULT)
         _tv_age = int(tv_info.get("age", 0) or 0)
         _tv_status = str(tv_info.get("status", "") or "").lower()
@@ -278,7 +314,9 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
                     pipeline=pipeline,
                 )
             _step(pipeline, "tv_conflict", True, f"TV WAIT {signal} (age {_tv_age}s) conf {conf:.3f} >= {tv_wait_min_conf:.2f}")
+            _note_tv_gate_outcome(True)
         elif conf < tv_unavail_min_conf:
+            _note_tv_gate_outcome(False)
             return EntryPlan(
                 False,
                 "tv_unavailable_low_conf",
@@ -289,6 +327,7 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
             )
         else:
             _step(pipeline, "tv_conflict", True, f"TV {_tv_status or 'none'} ({tv_sig or 'none'}) conf {conf:.3f} >= {tv_unavail_min_conf:.2f}")
+            _note_tv_gate_outcome(False)
 
     # Pre-reversal guard: the detector (indicators._detect_pre_reversal) runs
     # every scan cycle and flags bars that look like imminent mean-reversion

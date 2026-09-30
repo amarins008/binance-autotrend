@@ -1070,3 +1070,100 @@ async def async_get_position_guidance(tv_client: TradingViewClient, symbol: str,
     """Async wrapper for get_position_guidance to avoid blocking the event loop."""
     import asyncio
     return await asyncio.to_thread(tv_client.get_position_guidance, symbol, side)
+
+
+# ── 2026-09-30: TV silent-death canary ─────────────────────────────────────
+# get_health_status() can report healthy while every real fetch crashes:
+# _check_rate_limit runs OUTSIDE get_signal's try-block, so an exception there
+# (e.g. the 09-28 _next_global_slot_ts AttributeError) escapes before
+# _update_health(False) ever runs — health stays green, entries go TV-less
+# and the account bleeds for days.  The canary exercises the REAL fetch path
+# (force_refresh=True bypasses the signal cache; the symbol's negative-cache
+# entry is cleared first so the run always proves the live path).
+_CANARY_STATE: Dict[str, Any] = {
+    "fails": 0,
+    "ok": 0,
+    "down": False,
+    "last_ok_ts": 0.0,
+    "last_fail_ts": 0.0,
+    "last_error": "",
+    "symbol": "",
+    "just_went_down": False,
+    "just_recovered": False,
+}
+
+
+def _canary_mirror_to_app_state(state: Dict[str, Any]) -> None:
+    """Mirror canary state into AUTO_TRADE so the pipeline and status-lite
+    can see it (same process, plain dict — no cross-module cycle risk)."""
+    try:
+        from services import app_state as _app_state
+        _app_state.AUTO_TRADE["tvCanaryDown"] = bool(state.get("down"))
+        _app_state.AUTO_TRADE["tvCanary"] = {
+            "down": bool(state.get("down")),
+            "fails": int(state.get("fails", 0) or 0),
+            "ok": int(state.get("ok", 0) or 0),
+            "lastOkTs": state.get("last_ok_ts", 0.0),
+            "lastFailTs": state.get("last_fail_ts", 0.0),
+            "lastError": state.get("last_error", ""),
+            "symbol": state.get("symbol", ""),
+        }
+    except Exception:
+        pass
+
+
+def run_tv_canary(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Active TV heartbeat: one real get_signal fetch on a liquid symbol.
+
+    Returns the canary state dict with edge flags ``just_went_down`` /
+    ``just_recovered`` for once-per-transition alerting.
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    sym = str(cfg.get("tvCanarySymbol", "BTCUSDT") or "BTCUSDT")
+    max_fails = max(1, int(cfg.get("tvCanaryMaxFails", 3) or 3))
+    state = _CANARY_STATE
+    state["symbol"] = sym
+    try:
+        client = get_tv_client(cfg)
+        try:
+            client._negative_cache.pop(sym, None)
+        except Exception:
+            pass
+        res = client.get_signal(sym, "LONG", 0.8, force_refresh=True)
+        sig_val = ""
+        if res is not None and getattr(res, "signal", None) is not None:
+            sig_val = str(getattr(res.signal, "value", res.signal) or "").upper()
+        if res is None or not sig_val or sig_val == "ERROR":
+            raise RuntimeError(f"canary fetch unusable (signal={sig_val or 'none'})")
+        was_down = bool(state["down"])
+        state["ok"] += 1
+        state["fails"] = 0
+        state["last_ok_ts"] = time.time()
+        state["last_error"] = ""
+        state["down"] = False
+        state["just_went_down"] = False
+        state["just_recovered"] = was_down
+    except Exception as exc:
+        state["fails"] = int(state["fails"]) + 1
+        state["last_fail_ts"] = time.time()
+        state["last_error"] = str(exc)[:240]
+        was_down = bool(state["down"])
+        state["down"] = state["fails"] >= max_fails
+        state["just_went_down"] = state["down"] and not was_down
+        state["just_recovered"] = False
+        if state["just_went_down"]:
+            # Escalate once on the transition: soft recovery resets the
+            # circuit breaker / rate-limit trackers so the next canary run
+            # retries a genuinely fresh client.
+            try:
+                attempt_tv_soft_recovery(f"canary down: {state['last_error']}"[:160])
+            except Exception:
+                pass
+    _canary_mirror_to_app_state(state)
+    return dict(state)
+
+
+def tv_canary_down() -> bool:
+    """True when the canary has confirmed the TV subsystem dead."""
+    return bool(_CANARY_STATE.get("down"))
+

@@ -2272,6 +2272,8 @@ _SUPERVISOR_LAST_REVIEW = 0
 _TV_SELFHEAL_LAST_CHECK = 0
 _TV_SELFHEAL_SOFT_ATTEMPTS = 0
 _TV_SELFHEAL_HARD_DONE = False
+# TV silent-death canary (active heartbeat — a real fetch, not a health claim)
+_TV_CANARY_LAST_RUN = 0
 
 # ── Signal confirmation gate: require N consecutive matching cycles ──
 # Key: symbol, Value: list of (timestamp, signal) tuples
@@ -3009,19 +3011,23 @@ async def _exit_after_restart():
     os._exit(0)
 
 
-async def system_restart():
-    """Spawn a fresh backend, then kill the current instance (safe order)."""
+async def system_restart(allow_deep: bool = True):
+    """Spawn a fresh backend, then kill the current instance (safe order).
+
+    ``allow_deep=False`` (automated callers, e.g. TV-HEAL) enforces the
+    respawn-depth cap so a persistently-unhealthy subsystem can never chain
+    restarts into concurrent trading bots.  Manual /system/restart always
+    passes (default True) — an operator must never be locked out.
+    """
     # 2026-09-30: respawn-depth guard. A backend that was itself spawned by a
-    # self-restart (AUTO_RESTART_DEPTH >= 2) must never spawn another one.
-    # Without this, a persistently-unhealthy subsystem (e.g. TV-HEAL) created
-    # an infinite respawn chain of concurrent trading bots.
+    # self-restart must never spawn another one AUTOMATICALLY.
     try:
         _depth = int(os.getenv("AUTO_RESTART_DEPTH", "0") or 0)
     except Exception:
         _depth = 0
-    if _depth >= 2:
-        _autotrade_log(f"[Restart] depth={_depth} — refusing to respawn again (self-restart chain capped)")
-        return {"ok": False, "message": "Restart depth exceeded — refusing to respawn (duplicate-bot guard)"}
+    if not allow_deep and _depth >= 1:
+        _autotrade_log(f"[Restart] depth={_depth} — automated respawn refused (self-restart chain capped)")
+        return {"ok": False, "message": "Automated restart depth exceeded — refusing to respawn (duplicate-bot guard). Use a manual restart."}
     backend_dir = Path(__file__).parent
     py = backend_dir / ".venv" / "Scripts" / "python.exe"
     if not py.exists():
@@ -5277,7 +5283,7 @@ async def _autotrade_loop():
                                 _TV_SELFHEAL_HARD_DONE = True
                                 _autotrade_log("[TV-HEAL] escalation: restarting backend once to reload TV subsystem")
                                 _tv_notify("🔴 TV ยังไม่หายหลัง soft-recover 3 ครั้ง → รีสตาร์ทบอท 1 รอบเพื่อโหลด TV ใหม่")
-                                await system_restart()
+                                await system_restart(allow_deep=False)
                                 return
                     else:
                         if _TV_SELFHEAL_SOFT_ATTEMPTS or _TV_SELFHEAL_HARD_DONE:
@@ -5288,6 +5294,44 @@ async def _autotrade_loop():
                 except Exception as _e:
                     _autotrade_log(f"[TV-HEAL] monitor error: {_format_loop_error(_e)[:80]}")
                 _TV_SELFHEAL_LAST_CHECK = now
+
+            # ── TV silent-death canary (active heartbeat) ────────────────
+            # get_health_status() can say healthy while every real fetch
+            # crashes (09-28 _next_global_slot_ts AttributeError ran
+            # TV-less for days). The canary makes one REAL get_signal fetch
+            # (cache bypassed) and tracks consecutive failures.
+            global _TV_CANARY_LAST_RUN
+            if bool(cfg.get("tvCanaryEnabled", True)):
+                _canary_interval = max(60, int(cfg.get("tvCanaryIntervalSec", 300) or 300))
+                if now - _TV_CANARY_LAST_RUN >= _canary_interval:
+                    _TV_CANARY_LAST_RUN = now
+                    try:
+                        from trading.tradingview_mcp import run_tv_canary
+                        _cs = await asyncio.to_thread(run_tv_canary, cfg)
+                        if _cs.get("just_went_down"):
+                            _autotrade_log(
+                                f"[TV-CANARY] DOWN after {_cs.get('fails')} failed fetch(es): "
+                                f"{str(_cs.get('last_error', ''))[:120]} — TV-less entries "
+                                f"{'BLOCKED' if cfg.get('tvCanaryBlockEntries', True) else 'allowed (block off)'}"
+                            )
+                            _tv_notify(f"🔴 TV canary DOWN ({_cs.get('fails')} fails): {str(_cs.get('last_error', ''))[:100]}")
+                        elif _cs.get("just_recovered"):
+                            _autotrade_log("[TV-CANARY] recovered — real TV fetch OK again")
+                            _tv_notify("✅ TV canary recovered — TV fetch กลับมาปกติ")
+                    except Exception as _ce:
+                        _autotrade_log(f"[TV-CANARY] error: {_format_loop_error(_ce)[:80]}")
+                # TV-less entry streak watch (entry-side signal — catches
+                # cases where the canary passes but the entry path loses TV)
+                _tv_streak = int(AUTO_TRADE.get("tvNoDataEntryStreak") or 0)
+                if _tv_streak >= 3 and not AUTO_TRADE.get("tvNoDataAlerted"):
+                    AUTO_TRADE["tvNoDataAlerted"] = True
+                    _autotrade_log(
+                        f"[TV-GUARD] {_tv_streak} consecutive TV-less entries — "
+                        f"TV data missing at entry time, check TV subsystem"
+                    )
+                    _tv_notify(f"⚠️ เข้าไม้แบบไร้ TV ต่อเนื่อง {_tv_streak} ไม้ — ตรวจ TV subsystem")
+                elif _tv_streak == 0 and AUTO_TRADE.get("tvNoDataAlerted"):
+                    AUTO_TRADE["tvNoDataAlerted"] = False
             running_entries = bool(AUTO_TRADE.get("running"))
             risk_cooldown_enabled = bool(cfg.get("riskCooldownEnabled", False))
             if not risk_cooldown_enabled:
@@ -8818,6 +8862,8 @@ async def autotrade_status_lite():
         "riskCooldownLossSignature": str(AUTO_TRADE.get("riskCooldownLossSignature", "") or ""),
         "riskCooldownBySymbol": _prune_risk_cooldowns(now_ts),
         "consecutiveErrors": int(AUTO_TRADE.get("consecutiveErrors", 0) or 0),
+        "tvCanary": AUTO_TRADE.get("tvCanary") if isinstance(AUTO_TRADE.get("tvCanary"), dict) else {"down": False, "fails": 0, "ok": 0, "lastOkTs": 0.0, "lastError": "", "symbol": ""},
+        "tvNoDataEntryStreak": int(AUTO_TRADE.get("tvNoDataEntryStreak") or 0),
         "lastDecision": AUTO_TRADE.get("lastDecision"),
         "lastSkip": AUTO_TRADE.get("lastSkip"),
         "log": list(AUTO_TRADE.get("log", []))[:8],

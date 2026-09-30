@@ -184,6 +184,17 @@ _FORCE_DEFAULTS_V11: dict = {
     # has no edge. Lower than tvUnavailableMinConf only when TV says
     # nothing at all (n/a); a fresh WAIT is a deliberate non-confirmation.
     "tvWaitMinConf": 0.82,
+    # 2026-09-30: TV silent-death canary. get_health_status() reports
+    # "healthy" without exercising the real fetch path — the 09-28
+    # _next_global_slot_ts AttributeError kept health green while every
+    # entry went TV-less for days. The canary makes one real get_signal
+    # fetch (cache bypassed) every tvCanaryIntervalSec; after max_fails
+    # consecutive failures TV-less entries are blocked outright.
+    "tvCanaryEnabled": True,
+    "tvCanaryIntervalSec": 300,
+    "tvCanaryMaxFails": 3,
+    "tvCanarySymbol": "BTCUSDT",
+    "tvCanaryBlockEntries": True,
 }
 
 _FORCE_DEFAULTS_V12: dict = {
