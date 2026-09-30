@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 
@@ -2094,12 +2095,23 @@ def _delete_guardian_lock_file(lock_key: str, cfg: dict | None = None) -> None:
 
 
 async def _reconcile_disappeared_position(lock_key: str, lock: dict, key: str, secret: str, base: str, cfg: dict | None = None) -> None:
-    """Reconcile position that vanished from active positions on Binance.
+    """Reconcile a position that vanished from the live position list.
 
-    When an exchange-side SL or TP fills, or an order is executed during an API
-    reconnect/outage, the position disappears from live_keys without going
-    through _close_position_one_side. This function queries Binance income/trades,
-    computes the realized PnL and fees, and records the trade into trades_log.jsonl.
+    When an exchange-side SL/TP fills, or a close lands during an API
+    outage / from a duplicate process, the position disappears from
+    ``live_keys`` without going through ``_close_position_one_side``.  This
+    queries Binance income + userTrades for closing evidence and records the
+    trade into trades_log.jsonl so bot stats match the exchange.
+
+    Safety rules (a vanished lock is NOT proof of a close — it can be a
+    transient API glitch or a stale restart-loaded lock):
+      - Income evidence must be newer than both the lock's entry time and
+        the last 15 minutes; otherwise the lock is stale → log and skip.
+      - Only fills whose trade id matches the recent income rows count.
+        No blind "any non-zero pnl fill" fallback (that matched weeks-old
+        income once and fabricated trades).
+      - Skip if an entry with the same symbol+side+closedAt already exists
+        in the recent trade log (dedupe).
     """
     sym = str(lock.get("symbol") or str(lock_key).split(":")[0]).upper().strip()
     side = str(lock.get("side") or (str(lock_key).split(":")[1] if ":" in str(lock_key) else "")).upper().strip()
@@ -2113,68 +2125,97 @@ async def _reconcile_disappeared_position(lock_key: str, lock: dict, key: str, s
         # Give Binance a brief moment to write income / trade ledgers
         await asyncio.sleep(2.0)
 
-        # 1. Fetch recent REALIZED_PNL income for this symbol
+        entry_snap = lock.get("entrySnapshot") if isinstance(lock.get("entrySnapshot"), dict) else {}
+        entry_ts = int(lock.get("entryDecisionAt") or lock.get("openedAt") or 0)
+
+        # Evidence must be newer than the entry AND the last 15 minutes.
+        now_ms = int(time.time() * 1000)
+        cutoff_ms = max(entry_ts * 1000, now_ms - 15 * 60 * 1000)
+
+        # 1. Recent REALIZED_PNL income for this symbol (server-side time filter)
         inc_res = await _signed_request("GET", base, "/fapi/v1/income", key, secret, {
             "symbol": sym,
             "incomeType": "REALIZED_PNL",
+            "startTime": cutoff_ms,
             "limit": 10,
         })
-        income_records = inc_res if isinstance(inc_res, list) else []
-        if not income_records:
-            _autotrade_log(f"[Reconcile] {sym} {side} disappeared but no REALIZED_PNL found in recent income")
-            return
-
-        # Candidate income records from the last 15 minutes
-        cutoff_ms = int((time.time() - 900) * 1000)
-        recent_incomes = [r for r in income_records if int(r.get("time", 0) or 0) >= cutoff_ms]
+        recent_incomes = inc_res if isinstance(inc_res, list) else []
         if not recent_incomes:
-            recent_incomes = income_records[-2:]
-
-        trade_ids = [str(r.get("tradeId") or r.get("info") or "") for r in recent_incomes if r.get("tradeId") or r.get("info")]
-        
-        # 2. Fetch userTrades to get exact fills and commissions
-        all_user_trades = await _signed_request("GET", base, "/fapi/v1/userTrades", key, secret, {
-            "symbol": sym,
-            "limit": 20,
-        })
-        matched_trades = []
-        if isinstance(all_user_trades, list):
-            for ut in all_user_trades:
-                if str(ut.get("id")) in trade_ids or (ut.get("time", 0) >= cutoff_ms and float(ut.get("realizedPnl", 0) or 0) != 0.0):
-                    matched_trades.append(ut)
-
-        if not matched_trades and isinstance(all_user_trades, list):
-            matched_trades = [ut for ut in all_user_trades if float(ut.get("realizedPnl", 0) or 0) != 0.0][-2:]
-
-        if not matched_trades:
-            _autotrade_log(f"[Reconcile] {sym} {side} could not match closing userTrades")
+            _autotrade_log(f"[Reconcile] {sym} {side} disappeared but no REALIZED_PNL since entry — stale lock, skip")
             return
 
-        # Aggregate closing trades
-        tot_realized_pnl = sum(float(t.get("realizedPnl", 0) or 0) for t in matched_trades)
-        tot_exit_fee = sum(float(t.get("commission", 0) or 0) for t in matched_trades)
-        tot_qty = sum(float(t.get("qty", 0) or 0) for t in matched_trades)
-        weighted_exit_px = (
-            sum(float(t.get("price", 0) or 0) * float(t.get("qty", 0) or 0) for t in matched_trades) / tot_qty
-            if tot_qty > 0 else float(matched_trades[-1].get("price", 0) or 0)
-        )
-        last_trade_time = max(int(t.get("time", 0) or 0) for t in matched_trades)
-        closed_at = int(last_trade_time // 1000) if last_trade_time > 0 else int(time.time())
+        trade_ids = {str(r.get("tradeId") or r.get("info") or "") for r in recent_incomes}
+        trade_ids.discard("")
 
-        # Determine reason based on PnL
+        # 2. Match fills by trade id (server-side time filter, exact ids only)
+        ut_res = await _signed_request("GET", base, "/fapi/v1/userTrades", key, secret, {
+            "symbol": sym,
+            "startTime": max(cutoff_ms - 60_000, 0),
+            "limit": 50,
+        })
+        matched = [
+            ut for ut in (ut_res if isinstance(ut_res, list) else [])
+            if str(ut.get("id")) in trade_ids
+        ]
+        if not matched:
+            _autotrade_log(f"[Reconcile] {sym} {side} income found but no matching userTrades — skip")
+            return
+
+        # Aggregate closing fills
+        tot_realized_pnl = sum(float(t.get("realizedPnl", 0) or 0) for t in matched)
+        tot_exit_fee = sum(float(t.get("commission", 0) or 0) for t in matched)
+        tot_qty = sum(float(t.get("qty", 0) or 0) for t in matched)
+        weighted_exit_px = (
+            sum(float(t.get("price", 0) or 0) * float(t.get("qty", 0) or 0) for t in matched) / tot_qty
+            if tot_qty > 0 else float(matched[-1].get("price", 0) or 0)
+        )
+        last_fill = max(matched, key=lambda t: int(t.get("time", 0) or 0))
+        last_fill_ms = int(last_fill.get("time", 0) or 0)
+        closed_at = int(last_fill_ms // 1000) if last_fill_ms > 0 else int(time.time())
+
+        # 3. Dedupe: same symbol+side+closedAt already recorded recently?
+        try:
+            with open(TRADES_LOG_PATH, "r", encoding="utf-8") as fh:
+                tail = fh.readlines()[-50:]
+            for line in tail:
+                if not line.strip():
+                    continue
+                t = json.loads(line)
+                if t.get("symbol") == sym and str(t.get("side", "")).upper() == side and int(t.get("closedAt", 0) or 0) == closed_at:
+                    _autotrade_log(f"[Reconcile] {sym} {side} closedAt={closed_at} already recorded — dedupe skip")
+                    return
+        except FileNotFoundError:
+            pass
+
+        # 4. Reason from the actual closing order type (algo SL/TP vs managed close)
         reason = "EXCHANGE_TP_HIT" if tot_realized_pnl > 0 else "EXCHANGE_SL_HIT"
+        try:
+            exit_order_id = last_fill.get("orderId")
+            if exit_order_id:
+                o = await _signed_request("GET", base, "/fapi/v1/order", key, secret, {
+                    "symbol": sym, "orderId": exit_order_id,
+                })
+                otype = str((o or {}).get("type", "") or "").upper()
+                if otype == "STOP_MARKET":
+                    reason = "EXCHANGE_SL_HIT"
+                elif otype == "TAKE_PROFIT_MARKET":
+                    reason = "EXCHANGE_TP_HIT"
+                elif otype:
+                    reason = "EXTERNAL_CLOSE"
+        except Exception:
+            pass
 
         entry_px = float(lock.get("entryMark", 0) or 0)
         qty = tot_qty if tot_qty > 0 else float(lock.get("qty", 0) or 0)
-        entry_snap = lock.get("entrySnapshot") if isinstance(lock.get("entrySnapshot"), dict) else {}
-        entry_ts = lock.get("entryDecisionAt") or lock.get("openedAt")
 
-        # Estimate entry commission if not in userTrades
+        # Exit fee is exact from userTrades; entry fee estimated like the
+        # recorder does (2 sides × taker bps on exit notional is baked into
+        # tot_exit_fee's sibling — here entry leg only).
         entry_fee_est = round(qty * entry_px * (AUTOTRADE_TAKER_FEE_BPS_PER_SIDE / 10000.0), 6) if entry_px > 0 else 0.0
         tot_fee_est = round(tot_exit_fee + entry_fee_est, 6)
 
         try:
-            funding_est = await _funding_cost_estimate(sym, entry_px, qty, entry_ts)
+            funding_est = await _funding_cost_estimate(sym, entry_px, qty, entry_ts or closed_at)
         except Exception:
             funding_est = 0.0
 
@@ -2183,7 +2224,7 @@ async def _reconcile_disappeared_position(lock_key: str, lock: dict, key: str, s
 
         trade_record = {
             "side": side,
-            "entry": entry_px if entry_px > 0 else weighted_exit_px,
+            "entry": entry_px if entry_px > 0 else round(weighted_exit_px, 6),
             "exit": round(weighted_exit_px, 6),
             "qty": qty,
             "pnl": round(float(tot_realized_pnl), 6),
@@ -2212,8 +2253,7 @@ async def _reconcile_disappeared_position(lock_key: str, lock: dict, key: str, s
         }
 
         _record_learning_trade(sym, trade_record, "LIVE")
-        _autotrade_log(f"[Reconcile] Successfully recorded reconciled trade: {sym} {side} {reason} pnl={tot_realized_pnl:+.4f} net={net_pnl:+.4f}")
+        _autotrade_log(f"[Reconcile] Recorded reconciled trade: {sym} {side} {reason} pnl={tot_realized_pnl:+.4f} net={net_pnl:+.4f}")
 
     except Exception as exc:
         _autotrade_log(f"[Reconcile] Error reconciling disappeared position {sym} {side}: {exc}")
-

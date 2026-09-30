@@ -2998,12 +2998,30 @@ async def debug_direction_bias(symbol: str = "BTCUSDT"):
 async def _exit_after_restart():
     """Wait briefly for new process to bind port, then kill current process."""
     await asyncio.sleep(0.5)
-    _clear_backend_pid()
+    # 2026-09-30: _clear_backend_pid used to run unguarded — when the pid file
+    # was locked, the exception killed this task BEFORE os._exit, leaving BOTH
+    # parent and child running as duplicate trading bots. The exit must be
+    # unconditional.
+    try:
+        _clear_backend_pid()
+    except Exception:
+        pass
     os._exit(0)
 
 
 async def system_restart():
     """Spawn a fresh backend, then kill the current instance (safe order)."""
+    # 2026-09-30: respawn-depth guard. A backend that was itself spawned by a
+    # self-restart (AUTO_RESTART_DEPTH >= 2) must never spawn another one.
+    # Without this, a persistently-unhealthy subsystem (e.g. TV-HEAL) created
+    # an infinite respawn chain of concurrent trading bots.
+    try:
+        _depth = int(os.getenv("AUTO_RESTART_DEPTH", "0") or 0)
+    except Exception:
+        _depth = 0
+    if _depth >= 2:
+        _autotrade_log(f"[Restart] depth={_depth} — refusing to respawn again (self-restart chain capped)")
+        return {"ok": False, "message": "Restart depth exceeded — refusing to respawn (duplicate-bot guard)"}
     backend_dir = Path(__file__).parent
     py = backend_dir / ".venv" / "Scripts" / "python.exe"
     if not py.exists():
@@ -3018,6 +3036,7 @@ async def system_restart():
     env = dict(os.environ)
     env.setdefault("BACKEND_HOST", "0.0.0.0")
     env["BACKEND_PORT"] = port
+    env["AUTO_RESTART_DEPTH"] = str(_depth + 1)
     # 1) Spawn fresh instance FIRST (new uvicorn retries port for ~2s internally)
     try:
         subprocess.Popen(
