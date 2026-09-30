@@ -18,6 +18,12 @@ _FORCE_DEFAULTS_V1: dict = {
     # Guardian safety thresholds
     "guardianMinHoldSec": 180,
     "deadZoneExitSec": 600,
+    # 2026-09-30: fee-proof exits. Dead-zone/weak-signal exits must clear the
+    # round-trip fee twice over (09-30 telemetry: 28% of trades closed at
+    # net ≈ 0 — margin bled one fee at a time despite 57% WR).
+    "deadZoneMinProfitUsdt": 0.25,
+    "profitLockMinUsdt": 0.25,
+    "payoffLossGuardMaxLossUsdt": 0.50,
     "preemptiveLossExitMinEntryPct": 0.50,
     "preemptiveLossExitMinConfirmations": 2,
     "strongFlipMinConfidence": 0.90,

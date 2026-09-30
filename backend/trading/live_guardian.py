@@ -1678,7 +1678,13 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
         # Fee-aware: only exit when profit >= round-trip fee. Closing a stale
         # position at upnl < fee floor converts it into a guaranteed net loss.
         dead_zone_sec = float(cfg.get("deadZoneExitSec", 600) or 600)
-        if held_sec >= dead_zone_sec and weak_now and upnl >= fee_min_capture and upnl < lock_trigger:
+        # 2026-09-30: fee-proof dead-zone floor. The old floor (fee×1) let
+        # stale winners close at gross ≈ round-trip fee -> net ≈ 0 (28% of
+        # 09-30 trades were fee-payers). Dead-zone exits must now clear the
+        # fee twice over (or the configurable floor) so every early exit
+        # still nets real money.
+        _dz_min = max(fee_min_capture * 2.0, float(cfg.get("deadZoneMinProfitUsdt", 0.25) or 0.25))
+        if held_sec >= dead_zone_sec and weak_now and upnl >= _dz_min and upnl < lock_trigger:
             # Stage-2 bias/TV hold matrix: when the M15/M30 structural bias
             # STILL ALIGNS with the position, a dead zone is consolidation, not
             # a reason to flatten -- trail the SL to breakeven-plus and keep

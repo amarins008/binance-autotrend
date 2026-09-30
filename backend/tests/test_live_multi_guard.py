@@ -81,7 +81,7 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(lock["sl"], 0.096236)
 
     async def test_multi_guard_closes_positive_retrace_before_negative(self):
-        cfg = {"takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55, "profitLockBreakevenFloorUsdt": 0.08, "holdWinners": False, "feeMinEdgeVsCostMultiple": 1.0}
+        cfg = {"profitLockTriggerUsdt": 0.60, "proactiveTrailMinProfitPct": 0.45, "takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55, "profitLockBreakevenFloorUsdt": 0.08, "holdWinners": False, "feeMinEdgeVsCostMultiple": 1.0}  # trail trigger 0.45 > 0.30 profit: trailing lock must not pre-empt the dead-zone path
         main.AUTO_TRADE["liveProfitLocks"] = {
             "DOGEUSDT:LONG": {
                 "symbol": "DOGEUSDT",
@@ -90,6 +90,48 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
                 "tp": 1.018,
                 "sl": 0.991,
                 "peak": 0.30,
+                "guardianStats": {"openedAt": int(main.time.time()) - 3600},
+            }
+        }
+        rows = [
+            {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "qty": 100.0,
+                "entryMark": 1.0,
+                "markPrice": 1.0030,
+                "notionalUsdtApprox": 100.30,
+                "unRealizedProfit": 0.30,
+            }
+        ]
+
+        with mock.patch.dict(main.os.environ, {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s"}):
+            with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
+                with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
+                    with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
+                        with mock.patch.object(lg, "_autotrade_log") as log:
+                            changed = await main._live_multi_profit_lock_manage(cfg)
+
+        self.assertTrue(changed)
+        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="DEAD_ZONE_TIMEOUT", exit_intel={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})
+        self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
+        self.assertTrue(any("DEAD_ZONE_TIMEOUT" in call.args[0] for call in log.call_args_list))
+
+    async def test_dead_zone_fee_proof_floor_blocks_fee_payer_exits(self):
+        """2026-09-30: dead-zone must NOT close a stale winner at gross ≈ fee
+        (net ≈ 0). 28% of 09-30 trades were fee-payers under the old floor."""
+        cfg = {"profitLockTriggerUsdt": 0.60, "proactiveTrailMinProfitPct": 0.45,
+               "takeProfitPct": 1.8, "stopLossPct": 0.9, "tpTargetMinUsdt": 0.55,
+               "profitLockBreakevenFloorUsdt": 0.08, "holdWinners": False,
+               "feeMinEdgeVsCostMultiple": 1.0, "deadZoneMinProfitUsdt": 0.25}
+        main.AUTO_TRADE["liveProfitLocks"] = {
+            "DOGEUSDT:LONG": {
+                "symbol": "DOGEUSDT",
+                "side": "LONG",
+                "entryMark": 1.0,
+                "tp": 1.018,
+                "sl": 0.991,
+                "peak": 0.15,
                 "guardianStats": {"openedAt": int(main.time.time()) - 3600},
             }
         }
@@ -109,13 +151,9 @@ class TestLiveMultiGuard(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(lg, "_pick_live_orphan_positions", new=mock.AsyncMock(return_value=rows)):
                 with mock.patch.object(lg, "intel_analyze", new=mock.AsyncMock(return_value={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})):
                     with mock.patch.object(lg, "_close_position_one_side", new=mock.AsyncMock(return_value={"ok": True})) as close_one:
-                        with mock.patch.object(lg, "_autotrade_log") as log:
-                            changed = await main._live_multi_profit_lock_manage(cfg)
-
-        self.assertTrue(changed)
-        close_one.assert_awaited_once_with("DOGEUSDT", "LONG", "k", "s", main._binance_base(), reason="DEAD_ZONE_TIMEOUT", exit_intel={"signal": "WAIT", "confidence": 0.5, "execution": {"momentumPct": 0.0}})
-        self.assertEqual(main.AUTO_TRADE["liveProfitLocks"], {})
-        self.assertTrue(any("DEAD_ZONE_TIMEOUT" in call.args[0] for call in log.call_args_list))
+                        await main._live_multi_profit_lock_manage(cfg)
+                        close_one.assert_not_awaited()
+        self.assertIn("DOGEUSDT:LONG", main.AUTO_TRADE["liveProfitLocks"])
 
     async def test_multi_guard_uses_configured_profit_lock_trigger_and_giveback(self):
         cfg = {
