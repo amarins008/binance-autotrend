@@ -1,0 +1,22 @@
+# GitNexus index exclusions — keep the code graph to live source only.
+
+# Archived/superseded copies pulled in from the forex project. Not live code:
+# reference snapshots kept for comparison, never imported by the backend.
+backend/recovery_artifacts/
+
+# Separate C++ sub-project (own engine + its own tests/benchmarks). Indexed
+# separately; mixing it in distorts backend fan-in and file-size stats.
+pineforge-engine/
+
+# Generated runtime state and per-symbol vaults. Data, not code.
+obsidian_vault/
+backend/autotrade_snapshot.json
+
+# Ad-hoc probe scripts and standalone diagnostics.
+backend/_*.py
+backend/place_test_trade.py
+backend/smoke_test_*.py
+
+# Dashboard backup copy — identical graph to dashboard/app.js.
+backend/dashboard/backup/
+backend/dashboard/test_*.js

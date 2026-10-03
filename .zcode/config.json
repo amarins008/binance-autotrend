@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "servers": {
+      "gitnexus": {
+        "command": "cmd.exe",
+        "args": ["/c", "C:\\nvm4w\\nodejs\\gitnexus.cmd", "mcp"],
+        "env": {
+          "PATH": "C:\\Program Files\\Git\\mingw64\\bin;%PATH%"
+        }
+      }
+    }
+  }
+}
