@@ -227,6 +227,12 @@ _FORCE_DEFAULTS_V13: dict = {
     # 1% SL on a single position can never bleed more than ~0.4 USDT (was 80).
     "tradeNotionalCapUsdt": 40.0,
     "autoScanTradeNotionalCapUsdt": 40.0,
+    # 2026-10-03: fee-optimal per-symbol sizing — TP must be reachable within
+    # feeTpReachMovePct of price (dead-zone exits pay full fee for ~zero gross)
+    # and the round-trip fee stays within feeShareCapPct of the TP target.
+    "feeOptimalSizingEnabled": True,
+    "feeTpReachMovePct": 1.5,
+    "feeShareCapPct": 20.0,
     # 2026-08-20: low-cap / meme symbols that repeatedly SL out (7d telemetry
     # PUMPUSDT -12 trades, LINKUSDT, ALICEUSDT, BOMEUSDT, WLDUSDT, REDUSDT).
     # 2026-09-09: cleared static deny list — replaced by dynamic volatility
@@ -580,6 +586,12 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("marginSizingMaxUsdt", 25.0)
     out.setdefault("tradeNotionalCapUsdt", 80.0)
     out.setdefault("autoScanTradeNotionalCapUsdt", 80.0)
+    out.setdefault("feeOptimalSizingEnabled", True)
+    out.setdefault("feeTpReachMovePct", 1.5)
+    out.setdefault("feeShareCapPct", 20.0)
+    out.setdefault("tpSlScaleWithNotional", False)
+    out.setdefault("tpSlMoveMinPct", 0.6)
+    out.setdefault("tpSlMoveMaxPct", 3.0)
     out.setdefault("adaptiveSizing", True)
     out.setdefault("adaptiveSizeBoostMaxPct", 18.0)
     out.setdefault("supervisorSizeStreakEnabled", True)

@@ -48,6 +48,35 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: Fee-optimal sizing + margin-erosion root cause (เสร็จ 2026-10-03)
+
+### ปัญหา (พิสูจน์ด้วย Binance /fapi/v1/income จริง)
+- PnL บวกตามบันทึก (+1.07 gross, 5 ไม้) แต่ margin ลดลง -3.09 (22.77 → 19.69)
+- Exchange ยืนยัน: COMMISSION -0.93 (10 bps RT จริง) + REALIZED_PNL -2.16
+- **Ghost losses**: -1.963 / -1.112 ปิดบน exchange แต่ไม่มีใน trade log (เศษ position จาก partial-fill หลัง RETRACE_BUDGET close) → loss-streak/riskCooldown ใบ้, QNT เข้าซ้ำ 5 ครั้งใน chop
+- Fee model 4 bps/side vs จริง 5 bps (VIP0 taker) — gate ต่ำไป 20%
+- ไม้ notional 51: fee 0.051 = 75% ของ gross +0.068 (TP ±2 ต้องการ move 3.9% = ไม่มีทางถึง)
+- Cap guard main.py:6724 เทียบ tradeNotionalCapUsdt (margin หลัง redesign) กับ exchange min (notional) ผิดหน่วย → บล็อกทุก symbol ใน margin mode
+
+### Fix
+- **main.py sizing block**: fee-optimal window per symbol — floor N ≥ tpTarget/feeTpReachMovePct (default 1.5% = TP ถึงได้จริง) + exchange min ×1.15; ceiling fee ≤ feeShareCapPct (20%) ของ TP; หน้าต่างว่าง → skip พร้อมเหตุผล; ใช้ lift-margin machinery เดิม (6741-6775)
+- **cap guard**: เทียบเฉพาะ legacy mode (margin mode ใช้ notional-units check ที่ 6733 เดิม)
+- **risk.py**: AUTOTRADE_TAKER_FEE_BPS_PER_SIDE 4→5 (env default + 2 literal defaults) + test_risk expectation 0.24→0.30
+- **config ใหม่**: feeOptimalSizingEnabled=true, feeTpReachMovePct=1.5, feeShareCapPct=20 (schemas + config defaults + setdefault)
+- ผล probe: QNT/UNI/BTC @ lev10 margin16 → N=160, fee 0.16 = **8% ของ TP**, TP move 1.25%; micro (lev 3) → skip อัตโนมัติ
+- Verify: py_compile, 185 tests passed (1 pre-existing), probe math, live restart, config persist snapshot
+
+
+### เพิ่ม: TP/SL per-symbol scale with notional (2026-10-03)
+- **risk.py `effective_tpsl_pct_for_trade`**: band [tpTargetMin/MaxUsdt]=[2,2] pin TP เสมอ — เพิ่ม mode `tpSlScaleWithNotional`: band = notional × move% โดย move% = movePct5m (vol จริงต่อ symbol) ถ้ามี, fallback feeTpReachMovePct (1.5%), clamp [tpSlMoveMinPct 0.6, tpSlMoveMaxPct 3.0] — flow เดิม (candle SL, ATR blend, symmetric re-enforce) ต่อเนื่อง
+- bug จับตอน probe: movePct5m เป็น % แต่ผสม fraction โดยไม่ /100 (vol 1.0% กลายเป็น 3%) — แก้แล้ว
+- ผล: fee/TP คงที่ตาม move% (1.5% → 6.7%, 1.0% → 10%); TP USDT ไล่ตาม notional และ vol ต่อ symbol
+- config: tpSlScaleWithNotional (live=true), tpSlMoveMinPct 0.6, tpSlMoveMaxPct 3.0 — tests default False ไม่กระทบ (171 passed, 1 pre-existing fail)
+- ⚠️ ผลข้างเคียงที่รับทราบ: SL USDT ใหญ่ขึ้นตาม notional (N=160 → SL ±2.4 = -10.5% ของ balance 22.77 ต่อ stop) — guardian cuts (PAYOFF/WEAK_SIGNAL) ยังเป็นตัวคุมจริง
+### ยังไม่ได้ทำ (P1 — ทำตามคำสั่งถัดไป)
+- Ghost accounting: ยืนยัน position=0 จริงหลัง `_close_position_one_side` + บันทึก exchange-side close เข้า trade log + orphan adoption ของ remainder
+
+
 ## Session: TV WAIT gate + SL placement retry (เสร็จ 2026-09-11)
 
 ### ปัญหา

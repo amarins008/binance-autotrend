@@ -4,7 +4,7 @@ import os
 
 from services import app_state
 
-AUTOTRADE_TAKER_FEE_BPS_PER_SIDE = float(os.getenv("AUTOTRADE_TAKER_FEE_BPS_PER_SIDE", "4.0"))
+AUTOTRADE_TAKER_FEE_BPS_PER_SIDE = float(os.getenv("AUTOTRADE_TAKER_FEE_BPS_PER_SIDE", "5.0"))
 AUTOTRADE_MIN_NET_PROFIT_USDT = float(os.getenv("AUTOTRADE_MIN_NET_PROFIT_USDT", "0.05"))
 AUTOTRADE_EXTRA_COST_BPS = float(os.getenv("AUTOTRADE_EXTRA_COST_BPS", "2.0"))
 
@@ -28,7 +28,7 @@ def estimate_trade_edge_usdt(
     tp_pct: float,
     max_slippage_bps: float,
     *,
-    taker_fee_bps_per_side: float = 4.0,
+    taker_fee_bps_per_side: float = 5.0,
     extra_cost_bps: float = 2.0,
     funding_rate: float = 0.0,
 ) -> tuple[float, float, float]:
@@ -47,7 +47,7 @@ def effective_min_net_profit_usdt(
     realized_vol_pct: float | None = None,
     *,
     default_min_net: float = 0.05,
-    taker_fee_bps: float = 4.0,
+    taker_fee_bps: float = 5.0,
     extra_cost_bps: float = 2.0,
     notional_usdt: float | None = None,
     funding_rate: float = 0.0,
@@ -431,6 +431,20 @@ def effective_tpsl_pct_for_trade(
     tp_min_u = max(0.05, float(cfg.get("tpTargetMinUsdt", 0.5) or 0.5))
     tp_max_u = max(tp_min_u, float(cfg.get("tpTargetMaxUsdt", 2.0) or 2.0))
     rr = max(0.35, min(1.0, float(cfg.get("slToTpRatio", 1.0) or 1.0)))
+    # 2026-10-03: per-symbol notional-scaled TP/SL. tpTargetMinUsdt pins the
+    # USDT target (±2) which forces a different price-move per size; scaling
+    # the band with notional keeps the move % constant per symbol (fee share
+    # of TP = feeRT/movePct = constant). Live realized vol (movePct5m) wins
+    # when present, else feeTpReachMovePct; clamped to [tpSlMoveMinPct, max].
+    if bool(cfg.get("tpSlScaleWithNotional", False)):
+        _notional_pre = amt * _lev
+        _mv_lo = max(0.05, float(cfg.get("tpSlMoveMinPct", 0.6) or 0.6)) / 100.0
+        _mv_hi = max(_mv_lo, float(cfg.get("tpSlMoveMaxPct", 3.0) or 3.0)) / 100.0
+        _mv_live = max(0.0, float((precision or {}).get("movePct5m", 0.0) or 0.0)) / 100.0  # movePct5m is in %
+        _mv_def = min(_mv_hi, max(_mv_lo, float(cfg.get("feeTpReachMovePct", 1.5) or 1.5) / 100.0))
+        _mv_use = min(_mv_hi, max(_mv_lo, _mv_live)) if _mv_live > 0 else _mv_def
+        tp_min_u = max(0.05, round(_notional_pre * _mv_use, 4))
+        tp_max_u = tp_min_u
     # Default TP target = fee floor (min). When live vol is present Phase A
     # below overrides it upward to track the symbol's realized move; keeping
     # the vol-missing fallback at the floor (instead of the band midpoint)
@@ -494,6 +508,7 @@ def effective_tpsl_pct_for_trade(
         sl_pct = max(0.13, round(tp_pct * rr, 4))
     meta = {
         "enabled": True,
+        "scaledByNotional": bool(cfg.get("tpSlScaleWithNotional", False)),
         "tpTargetUsdt": round(tp_u, 4),
         "slTargetUsdt": round(sl_u, 4),
         "rr": round(tp_pct / max(sl_pct, 1e-9), 4),

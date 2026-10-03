@@ -145,6 +145,12 @@ class AutoTradeStartRequest(BaseModel):
     adaptiveSizeBoostMaxPct: float = Field(default=18.0, ge=0.0, le=150.0)
     tradeNotionalCapUsdt: float = Field(default=80.0, ge=20.0, le=500.0)
     autoScanTradeNotionalCapUsdt: float = Field(default=80.0, ge=20.0, le=250.0)
+    feeOptimalSizingEnabled: bool = True
+    feeTpReachMovePct: float = Field(default=1.5, ge=0.1, le=10.0)
+    feeShareCapPct: float = Field(default=20.0, ge=1.0, le=100.0)
+    tpSlScaleWithNotional: bool = False
+    tpSlNotionalMoveMinPct: float = Field(default=0.6, ge=0.05, le=10.0)
+    tpSlNotionalMoveMaxPct: float = Field(default=3.0, ge=0.1, le=10.0)
     supervisorSizeStreakEnabled: bool = True
     supervisorSizeMultiplier: float = Field(default=1.0, ge=0.2, le=2.0)
     supervisorSizeWinStreakMin: int = Field(default=3, ge=2, le=20)

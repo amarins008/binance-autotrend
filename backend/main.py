@@ -6714,14 +6714,37 @@ async def _autotrade_loop():
                     _sym_min = float(_flt.get("minNotional", 0.0) or 0.0)
                 except Exception:
                     _sym_min = 0.0
-            min_order_usdt = max(5.0, float(cfg.get("feeMinOrderUsdt", 5.0) or 5.0), _sym_min if _sym_min > 0 else 0.0)
+            # 2026-10-03: fee-optimal per-symbol notional floor. A notional
+            # too small makes the ±tpTarget USDT TP unreachable (dead-zone
+            # exits then pay the full round-trip fee for ~zero gross —
+            # observed: notional 51 → gross +0.068 vs fee 0.051 = 75%).
+            # Require the TP to be reachable within feeTpReachMovePct of
+            # price: N >= tpTarget / movePct.
+            _fee_opt_enabled = bool(cfg.get("feeOptimalSizingEnabled", True))
+            _fee_floor_notional = 0.0
+            if _fee_opt_enabled:
+                _tp_t = float(cfg.get("tpTargetMinUsdt", 2.0) or 2.0)
+                _reach = max(0.1, float(cfg.get("feeTpReachMovePct", 1.5) or 1.5)) / 100.0
+                _fee_floor_notional = _tp_t / _reach
+            min_order_usdt = max(
+                5.0,
+                float(cfg.get("feeMinOrderUsdt", 5.0) or 5.0),
+                _sym_min if _sym_min > 0 else 0.0,
+                _fee_floor_notional,
+            )
             # 2026-08-27 fix: if the symbol's exchange MIN_NOTIONAL is higher than
             # the operator's tradeNotionalCapUsdt, capping trade_usdt below the min
             # would let the order be sent to Binance and rejected with QTY_TOO_SMALL,
             # causing an infinite "place -> reject -> restart" loop. Skip the symbol
             # immediately so the cycle advances to the next candidate instead.
             _trade_cap_usdt = float(cfg.get("tradeNotionalCapUsdt", 80.0) or 80.0)
-            if _sym_min > 0 and _sym_min > _trade_cap_usdt:
+            # 2026-10-03: under marginBasedSizing the cap key caps MARGIN
+            # while _sym_min is a NOTIONAL floor — comparing them directly
+            # false-positives (margin 18 x lev 10 = 160 notional >= 50 min).
+            # Margin mode enforces the exchange floor in notional units
+            # further below (min_order_usdt vs trade_usdt x leverage), so
+            # apply this legacy shortcut only in legacy sizing mode.
+            if _sym_min > 0 and _sym_min > _trade_cap_usdt and not bool(cfg.get("marginBasedSizing", False)):
                 _autotrade_skip(
                     "usdt_too_small",
                     f"Skip: {cfg['symbol']} exchange min {_sym_min:.2f} > tradeNotionalCapUsdt {_trade_cap_usdt:.2f} (cap guard)",
@@ -6767,6 +6790,25 @@ async def _autotrade_loop():
                 cfg["usdtAmount"] = max(float(cfg.get("usdtAmount", 0.0) or 0.0), float(trade_usdt))
                 AUTO_TRADE["config"] = copy.deepcopy(cfg)
                 _autotrade_log(f"Order floor ({cfg['symbol']}): adjusted USDT → {trade_usdt:.2f} (min_notional={_sym_min or 'n/a'} cap={_cap:.2f})")
+            # 2026-10-03: fee-share ceiling — the round-trip fee
+            # (2 × AUTOTRADE_TAKER_FEE_BPS_PER_SIDE) must stay within
+            # feeShareCapPct of the TP target, else winners pay too much
+            # to the exchange. Clamp the margin-based notional down.
+            if _fee_opt_enabled:
+                _fee_rt_bps = 2.0 * float(AUTOTRADE_TAKER_FEE_BPS_PER_SIDE)
+                if _fee_rt_bps > 0:
+                    _share_cap = max(1.0, float(cfg.get("feeShareCapPct", 20.0) or 20.0)) / 100.0
+                    _tp_t2 = float(cfg.get("tpTargetMinUsdt", 2.0) or 2.0)
+                    _fee_ceiling_notional = (_share_cap * _tp_t2) * 10000.0 / _fee_rt_bps
+                    _eff_lev_c = max(1.0, float(eff_leverage or cfg.get("leverage", 5) or 5))
+                    if bool(cfg.get("marginBasedSizing", False)):
+                        _notional_now = float(trade_usdt) * _eff_lev_c
+                        if _notional_now > _fee_ceiling_notional:
+                            trade_usdt = round(_fee_ceiling_notional / _eff_lev_c, 2)
+                            _autotrade_log(f"Fee-optimal ceiling ({cfg['symbol']}): notional {_notional_now:.0f} → {_fee_ceiling_notional:.0f} (fee ≤ {_share_cap * 100:.0f}% of TP)")
+                    elif float(trade_usdt) > _fee_ceiling_notional:
+                        trade_usdt = round(_fee_ceiling_notional, 2)
+                        _autotrade_log(f"Fee-optimal ceiling ({cfg['symbol']}): notional → {trade_usdt:.2f} (fee ≤ {_share_cap * 100:.0f}% of TP)")
             if trade_usdt > float(RISK["max_notional"]):
                 trade_usdt = float(RISK["max_notional"])
 
