@@ -18,26 +18,8 @@ import json
 import urllib.request
 import urllib.error
 from typing import Optional, Dict, Any
-from dataclasses import dataclass
-from enum import Enum
 
-try:
-    from trading.tradingview_mcp import TVSignal, TVSignalResult
-except Exception:  # standalone import safety
-    class TVSignal(Enum):
-        LONG = "LONG"
-        SHORT = "SHORT"
-        WAIT = "WAIT"
-        ERROR = "ERROR"
-
-    @dataclass
-    class TVSignalResult:
-        signal: TVSignal
-        confidence: float
-        timestamp: float
-        source: str = "tv-scanner"
-        metadata: Dict[str, Any] = None
-        _is_stale: bool = False
+from trading.tv_types import TVSignal, TVSignalResult
 
 
 SCANNER_URL = "https://scanner.tradingview.com/crypto/scan"

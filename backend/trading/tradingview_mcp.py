@@ -5,8 +5,6 @@ import json
 import threading
 import random
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
-from enum import Enum
 
 try:
     import requests as _requests
@@ -22,25 +20,7 @@ except ImportError:
     TRADINGVIEW_TA_AVAILABLE = False
 
 
-class TVSignal(Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-    WAIT = "WAIT"
-    ERROR = "ERROR"
-
-
-@dataclass
-class TVSignalResult:
-    signal: TVSignal
-    confidence: float
-    timestamp: float
-    source: str = "tradingview-ta"
-    metadata: Dict[str, Any] = None
-    _is_stale: bool = False
-
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
+from trading.tv_types import TVSignal, TVSignalResult  # re-exported: importers use this module's names
 
 
 class TradingViewClient:
