@@ -69,7 +69,7 @@ async def main():
     kv("healthy", h.get("healthy"), GREEN if h.get("healthy") else RED)
     kv("fail_count", h.get("fail_count", 0), RED if h.get("fail_count", 0) > 0 else GREEN)
     kv("cache_size", h.get("cache_size", 0))
-    kv("tv_ta_available", h.get("tradingview_ta_available"), GREEN if h.get("tradingview_ta_available") else RED)
+    kv("requests_available", h.get("requests_available"), GREEN if h.get("requests_available") else RED)
     if h.get("disabled_until", 0) > time.time():
         remaining = int(h["disabled_until"] - time.time())
         kv("DISABLED FOR", f"{remaining}s", RED)

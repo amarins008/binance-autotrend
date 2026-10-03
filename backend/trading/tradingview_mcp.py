@@ -1,4 +1,4 @@
-"""TradingView client using tradingview-ta library for maximum stability."""
+"""TradingView client backed by the public TradingView scanner API."""
 
 import time
 import json
@@ -12,12 +12,6 @@ try:
 except ImportError:
     _requests = None
     REQUESTS_AVAILABLE = False
-
-try:
-    from tradingview_ta import TA_Handler, Interval, Exchange
-    TRADINGVIEW_TA_AVAILABLE = True
-except ImportError:
-    TRADINGVIEW_TA_AVAILABLE = False
 
 
 from trading.tv_types import TVSignal, TVSignalResult  # re-exported: importers use this module's names
@@ -187,12 +181,8 @@ class TradingViewClient:
     def is_enabled(self) -> bool:
         if not self.enabled:
             return False
-        if not TRADINGVIEW_TA_AVAILABLE:
-            return False
         now = time.time()
         if now < self._disabled_until:
-            return False
-        if not self._health_status["healthy"] and now < self._disabled_until:
             return False
         return True
 
@@ -416,7 +406,6 @@ class TradingViewClient:
                 symbol=symbol,
                 screener="CRYPTO",
                 exchange="BINANCE",
-                interval=Interval.INTERVAL_1_HOUR,
                 timeout=self.timeout,
             )
 
@@ -876,9 +865,9 @@ class TradingViewClient:
         # A missing library is a hard, non-transient failure — never report
         # healthy for it. This was the silent-death case: is_enabled() returns
         # False but get_health_status() still said healthy=True with no error.
-        if not TRADINGVIEW_TA_AVAILABLE:
+        if not REQUESTS_AVAILABLE:
             self._health_status["healthy"] = False
-            self._health_status["last_error"] = "tradingview_ta library not installed"
+            self._health_status["last_error"] = "requests library not installed (batch fetch unavailable)"
             self._health_status["fail_count"] = max(self._health_status["fail_count"], 1)
         # Staleness: TV may be "healthy" by the fail-counter but have not
         # produced a successful signal in a long time (silent degradation).
@@ -920,7 +909,7 @@ class TradingViewClient:
             "last_error": last_error,
             "error_type": error_type,
             "recovery_count": recovery_count,
-            "tradingview_ta_available": TRADINGVIEW_TA_AVAILABLE,
+            "requests_available": REQUESTS_AVAILABLE,
             "symbol_cooldowns": len(self._symbol_cooldown),
         }
 
@@ -957,7 +946,7 @@ def reset_tv_client():
 
 
 def attempt_tv_soft_recovery(reason: str = "") -> bool:
-    """Drop the cached singleton so the next call重建s a fresh client.
+    """Drop the cached singleton so the next call rebuilds a fresh client.
 
     This is the cheap, in-process self-heal: it clears rate-limit trackers,
     symbol cooldowns and the stale cache that can accumulate after a TV
