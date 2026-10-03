@@ -11,7 +11,7 @@ def _lazy_main():
     return _m
 
 
-from schemas import CoinRankRequest, RiskConfig
+from schemas import (AnalyzeRequest, CoinRankRequest, IntelAnalyzeRequest, RiskConfig, StrategyParseRequest, VisionAnalyzeRequest)
 
 router = APIRouter()
 
@@ -134,7 +134,6 @@ def _route_getter(name: str):
 
 
 router.add_api_route('/risk-config', lambda: _route_getter('get_risk_config')(), methods=['GET'])
-router.add_api_route('/symbol-meta', lambda: _route_getter('symbol_meta')(), methods=['GET'])
 
 
 def _set_risk_config(req: RiskConfig):
@@ -142,9 +141,36 @@ def _set_risk_config(req: RiskConfig):
 
 
 router.add_api_route('/risk-config', _set_risk_config, methods=['POST'])
-router.add_api_route('/analyze', lambda: _route_getter('analyze')(), methods=['POST'])
-router.add_api_route('/analyze-vision', lambda: _route_getter('analyze_vision')(), methods=['POST'])
-router.add_api_route('/intel/analyze', lambda: _route_getter('intel_analyze')(), methods=['POST'])
+
+
+def _risk_alerts(symbol: str):
+    return _route_getter('risk_alerts')(symbol)
+
+
+async def _symbol_meta(symbol: str):
+    return await _route_getter('symbol_meta')(symbol)
+
+
+async def _analyze(req: AnalyzeRequest):
+    return await _route_getter('analyze')(req)
+
+
+async def _analyze_vision(req: VisionAnalyzeRequest):
+    return await _route_getter('analyze_vision')(req)
+
+
+async def _intel_analyze(req: IntelAnalyzeRequest):
+    return await _route_getter('intel_analyze')(req)
+
+
+def _parse_strategy(req: StrategyParseRequest):
+    return _route_getter('parse_strategy')(req)
+
+
+router.add_api_route('/analyze', _analyze, methods=['POST'])
+router.add_api_route('/analyze-vision', _analyze_vision, methods=['POST'])
+router.add_api_route('/intel/analyze', _intel_analyze, methods=['POST'])
 router.add_api_route('/intel/rank', rank_coins, methods=['POST'])
-router.add_api_route('/risk-alerts', lambda: _route_getter('risk_alerts')(), methods=['GET'])
-router.add_api_route('/strategy/parse', lambda: _route_getter('parse_strategy')(), methods=['POST'])
+router.add_api_route('/risk-alerts', _risk_alerts, methods=['GET'])
+router.add_api_route('/strategy/parse', _parse_strategy, methods=['POST'])
+router.add_api_route('/symbol-meta', _symbol_meta, methods=['GET'])
