@@ -246,6 +246,9 @@ def _auto_apply_promoted_learning(report: dict[str, Any], payload: dict[str, Any
     cfg = bot_status.get("config") if isinstance(bot_status.get("config"), dict) else {}
     if not bool(bot_status.get("running")):
         return {"enabled": True, "applied": False, "reason": "bot_not_running"}
+    # Supervisor autotune kill switch (fail-closed): promoted-learning auto-apply is a config writer too.
+    if not bool(cfg.get("supervisorAutoTuneEnabled", False)):
+        return {"enabled": True, "applied": False, "reason": "supervisor_autotune_disabled"}
     if str(cfg.get("executionMode", "")).upper() != "LIVE":
         return {"enabled": True, "applied": False, "reason": "not_live_mode", "mode": cfg.get("executionMode")}
 

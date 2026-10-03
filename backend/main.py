@@ -601,7 +601,7 @@ def _maybe_lock_symbol_drag_from_review(review: dict, cfg: dict | None = None) -
 def _maybe_tune_weak_payoff_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled", "signature": ""}
     cfg = cfg if isinstance(cfg, dict) else {}
     try:
@@ -831,7 +831,7 @@ def _enforce_min_conf_brake(cfg: dict, ceiling: float | None = None) -> None:
 
 
 def _commit_supervisor_config_tune(state: dict, delegations: dict, key: str, cfg: dict, changes: dict, reason: str) -> dict:
-    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", True)):
+    if not bool((AUTO_TRADE.get("config") or {}).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled", "key": key}
     now = int(time.time())
     delegations[key] = {
@@ -950,7 +950,7 @@ def _maybe_clear_bad_utc_hour_from_config(skip_code: str, skip_msg: str, cfg: di
 def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: list[dict] | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("low_entry_activity", cfg, 30)
 
@@ -1123,7 +1123,7 @@ def _maybe_tune_low_entry_activity(reason: str, cfg: dict | None = None, board: 
 def _maybe_tune_scan_timeout_from_skip(skip_msg: str, cfg: dict | None = None) -> dict:
     if not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("scan_timeout", cfg, 20)
     if active:
@@ -1277,7 +1277,7 @@ def _daily_trade_regime_review(trades: list[dict], cfg: dict | None = None, *, n
 def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(daily_review, dict) or not isinstance(cfg, dict) or not bool(daily_review.get("degraded")):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     state, delegations, active, cooldown_sec = _supervisor_delegation_cooldown("daily_entry_regression", cfg, 30)
 
@@ -1382,7 +1382,7 @@ def _maybe_tune_daily_entry_regression(daily_review: dict, cfg: dict | None = No
 def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     try:
         trades_n = int(review.get("trades", 0) or 0)
@@ -1460,7 +1460,7 @@ def _maybe_tune_small_profit_capture_from_review(review: dict, cfg: dict | None 
 def _maybe_tune_negative_expectancy_from_review(review: dict, cfg: dict | None = None) -> dict:
     if not isinstance(review, dict) or not isinstance(cfg, dict):
         return {}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     try:
         trades_n = int(review.get("trades", 0) or 0)
@@ -3414,7 +3414,7 @@ def _arm_symbol_risk_cooldown(
 
 def _loss_streak_self_review_tune(cfg: dict, now: int, loss_streak: int, cause: dict | None = None) -> dict:
     out = dict(cfg or {})
-    if not bool(out.get("supervisorAutoTuneEnabled", True)):
+    if not bool(out.get("supervisorAutoTuneEnabled", False)):
         return out
     actions: list[str] = []
     cause = cause if isinstance(cause, dict) else {}
@@ -4467,7 +4467,7 @@ def _restore_fapi_agreement_locks_from_logs(cfg: dict, messages: list[str]) -> d
 def _maybe_auto_heal_scan_config_drift(cfg: dict) -> dict:
     if not isinstance(cfg, dict) or not bool(cfg.get("supervisorAutoHealScanDriftEnabled", True)):
         return {"applied": False}
-    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", True)):
+    if not bool((cfg if isinstance(cfg, dict) else (AUTO_TRADE.get("config") or {})).get("supervisorAutoTuneEnabled", False)):
         return {"applied": False, "reason": "supervisor_autotune_disabled"}
     symbol = str(cfg.get("symbol", "") or "").upper().strip()
     primary = str(cfg.get("primarySymbol", "") or "").upper().strip()

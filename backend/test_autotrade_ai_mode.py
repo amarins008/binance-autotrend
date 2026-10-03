@@ -248,6 +248,7 @@ class TestSupervisorRegimeReview(unittest.TestCase):
 class TestRewardSystem(unittest.TestCase):
     def test_reward_components_reward_quality_win(self):
         cfg = {
+            "supervisorAutoTuneEnabled": True,  # test drives the tuner itself; default is now fail-closed
             "minConfidence": 0.70,
             "maxSpreadBps": 16,
             "takeProfitPct": 1.8,
@@ -363,6 +364,7 @@ class TestLossStreakSelfReview(unittest.TestCase):
                 "pnl": -0.2,
             })
         cfg = {
+            "supervisorAutoTuneEnabled": True,  # test drives the tuner itself; default is now fail-closed
             "minConfidence": 0.70,
             "scanFallbackNearEnabled": True,
             "scanSidePreference": "long",
