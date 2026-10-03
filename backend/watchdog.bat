@@ -8,7 +8,7 @@ REM   - Logs to watchdog.log
 REM ===========================================================
 setlocal enableextensions enabledelayedexpansion
 
-set "ROOT=E:\My Project\Binance autotrend"
+set "ROOT=D:\My Project\Binance autotrend"
 set "BACKEND=%ROOT%\backend"
 set "LOG=%BACKEND%\watchdog.log"
 set "LAUNCHER_PORT=8021"

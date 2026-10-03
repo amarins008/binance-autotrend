@@ -7,7 +7,7 @@ REM   - Run this AS ADMINISTRATOR (right-click -> Run as administrator)
 REM ===========================================================
 setlocal
 
-set "WD_BAT=E:\My Project\Binance autotrend\backend\watchdog.bat"
+set "WD_BAT=D:\My Project\Binance autotrend\backend\watchdog.bat"
 set "TASK_NAME=BinanceAutotrendWatchdog"
 
 if not exist "%WD_BAT%" (

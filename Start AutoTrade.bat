@@ -8,9 +8,9 @@ REM ===========================================================
 setlocal enableextensions enabledelayedexpansion
 
 REM --- Auto-sync with the other copy (Desktop <-> working folder) ---
-if exist "E:\My Project\Binance autotrend\sync_start_autotrade.bat" call "E:\My Project\Binance autotrend\sync_start_autotrade.bat"
+if exist "D:\My Project\Binance autotrend\sync_start_autotrade.bat" call "D:\My Project\Binance autotrend\sync_start_autotrade.bat"
 
-set "ROOT=E:\My Project\Binance autotrend"
+set "ROOT=D:\My Project\Binance autotrend"
 set "BACKEND=%ROOT%\backend"
 set "HEALTH_TIMEOUT=30"
 
@@ -33,6 +33,11 @@ set "TRADINGVIEW_ENABLED=true"
 
 REM Bind to all interfaces so the dashboard is reachable from mobile / Tailscale
 set "BACKEND_HOST=0.0.0.0"
+
+REM Tailscale dashboard URL — prefer the live `tailscale ip -4`, fall back to
+REM the known node IP so http://<TS_IP>:8020/dashboard/ works on every start.
+set "TS_IP=100.89.42.68"
+for /f "tokens=1" %%T in ('tailscale ip -4 2^>nul') do if not "%%T"=="" set "TS_IP=%%T"
 
 echo.
 echo =====================================================
@@ -118,15 +123,16 @@ if errorlevel 1 (
 )
 echo.
 
-REM --- Step 5: Open dashboard in browser -----------------------------
+REM --- Step 5: Open dashboard (local + Tailscale) --------------------
 echo [5/5] Opening dashboard...
 start "" "http://127.0.0.1:8020/dashboard/"
+start "" "http://%TS_IP%:8020/dashboard/"
 echo.
 
 echo =====================================================
 echo   Service started:
 echo     - Dashboard (local)  : http://127.0.0.1:8020/dashboard/
-echo     - Dashboard (mobile) : use this PC's Tailscale IP
+echo     - Dashboard (Tailscale) : http://%TS_IP%:8020/dashboard/
 echo     - Backend health     : http://127.0.0.1:8020/health
 echo     - Launcher (8021)    : watchdog target
 echo     - TradingView MCP    : ENABLED
