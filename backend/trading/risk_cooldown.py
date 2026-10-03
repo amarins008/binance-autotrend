@@ -102,3 +102,49 @@ def _arm_symbol_risk_cooldown(
     state[sym] = rec
     auto_trade["riskCooldownBySymbol"] = state
     return rec
+
+
+def _recent_big_losses_by_symbol(
+    trades: list, min_loss_usdt: float, within_sec: int, now: int | None = None
+) -> dict[str, dict]:
+    """Find single losses big enough to warrant a cooldown on their own.
+
+    A streak counter misses the case that hurts most: one -2 USDT stop-out
+    sandwiched between small wins resets the streak, so the symbol stays
+    tradable and the bot re-enters minutes later. A single loss over
+    ``min_loss_usdt`` is treated as sufficient evidence on its own.
+
+    Only the LAST close per symbol counts — an old large loss followed by
+    profitable trades on the same symbol is not a live risk.
+    """
+    now_i = int(now or time.time())
+    threshold = abs(float(min_loss_usdt or 0.0))
+    if threshold <= 0:
+        return {}
+    latest: dict[str, dict] = {}
+    for t in trades or []:
+        if not isinstance(t, dict):
+            continue
+        sym = str(t.get("symbol", "") or "").upper().strip()
+        if not sym:
+            continue
+        pnl = float(t.get("_pnl", t.get("pnl", 0.0)) or 0.0)
+        ts = int(t.get("_ts", t.get("closedAt", 0)) or 0)
+        prev = latest.get(sym)
+        if prev is None or ts >= int(prev.get("_ts", 0) or 0):
+            latest[sym] = {"_pnl": pnl, "_ts": ts}
+    out: dict[str, dict] = {}
+    for sym, rec in latest.items():
+        pnl = float(rec.get("_pnl", 0.0) or 0.0)
+        ts = int(rec.get("_ts", 0) or 0)
+        if pnl > -threshold:
+            continue
+        if ts and within_sec > 0 and now_i - ts > within_sec:
+            continue
+        out[sym] = {
+            "symbol": sym,
+            "pnl": pnl,
+            "lastClosedAt": ts,
+            "signature": f"{sym}|big_loss:{ts}:{pnl:.8f}",
+        }
+    return out

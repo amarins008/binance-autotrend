@@ -21,6 +21,11 @@ from exchange.binance_client import (
 )
 from services import app_state
 from services.config_paths import TRADES_LOG_PATH
+from trading.close_reconciler import (
+    mark_close_intent as _mark_close_intent,
+    pop_close_intent as _pop_close_intent,
+    reconcile_symbol_closes as _reconcile_symbol_closes,
+)
 from trading.state_ops import (
     autotrade_log as _autotrade_log,
     entry_snapshot_from_intel as _entry_snapshot_from_intel,
@@ -405,8 +410,95 @@ async def _set_leverage_margin(symbol: str, key: str, secret: str, base: str, le
             if not _is_non_blocking_margin_error(detail):
                 raise
 
+_ALGO_ACCEPTED_STATES = {"NEW", "WORKING", "PARTIALLY_FILLED", "PENDING"}
+
+
+def _raise_if_algo_rejected(resp, kind: str) -> None:
+    """Raise when the algo service rejected a protective order it already ACKed.
+
+    ``POST /fapi/v1/algoOrder`` answers HTTP 200 with ``algoStatus: REJECTED``
+    (``rejectReason: "Reduce only reject"``) rather than a 4xx error. Callers
+    that only catch exceptions therefore treat a rejected TP/SL as placed and
+    the position ends up with no exchange-side protection.
+    """
+    if not isinstance(resp, dict):
+        return
+    status = str(resp.get("algoStatus") or resp.get("status") or "").upper()
+    reason = str(resp.get("rejectReason") or "").strip()
+    try:
+        code = int(resp.get("code") or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if code < 0:
+        reason = reason or str(resp.get("msg") or "").strip() or f"code {code}"
+        status = status or "REJECTED"
+    if not status and not reason:
+        return
+    if status in _ALGO_ACCEPTED_STATES and not reason:
+        return
+    raise RuntimeError(
+        f"algo {kind} not accepted: algoStatus={status or 'unknown'}"
+        f" rejectReason={reason or 'unknown'}"
+    )
+
+
+async def _verify_protective_orders(
+    symbol: str, key: str, secret: str, base: str, expected: list[tuple[str, float]]
+) -> None:
+    """Confirm the exchange is actually holding a live order at each level.
+
+    ``expected`` is ``[(kind, trigger_price), ...]``. Catches orders the algo
+    service accepted and then rejected asynchronously, which the submit
+    response cannot show. Raises when an order that should exist is missing so
+    the caller falls back to the in-process guardian lock.
+
+    A failure of the query itself is not treated as missing protection — the
+    endpoint is unavailable on some account tiers and that must not block
+    entries.
+    """
+    rows = None
+    for attempt in range(2):
+        try:
+            rows = await _signed_request("GET", base, "/fapi/v1/openAlgoOrders", key, secret, {"symbol": symbol})
+            break
+        except Exception as exc:  # noqa: BLE001 - verification is best-effort
+            if attempt:  # noqa: SIM108
+                _autotrade_log(f"Protect verify unavailable for {symbol}: {str(exc)[:160]}")
+                return
+            await asyncio.sleep(0.4)
+    if not isinstance(rows, list):
+        return
+    live = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        state = str(row.get("algoStatus") or row.get("status") or "").upper()
+        if state and state not in _ALGO_ACCEPTED_STATES:
+            continue
+        try:
+            live.append(float(row.get("triggerPrice") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    missing = []
+    for kind, price in expected:
+        try:
+            target = float(price)
+        except (TypeError, ValueError):
+            continue
+        # Match on trigger level within one tick; the exchange rounds to tickSize.
+        if not any(abs(v - target) <= max(1e-9, abs(target) * 1e-6) for v in live):
+            missing.append(f"{kind}@{price:g}")
+    if missing:
+        raise RuntimeError(
+            f"protective order(s) missing on exchange after submit: {', '.join(missing)}"
+            f" (live triggers: {sorted(live) or 'none'})"
+        )
+
+
 async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp_pct: float, sl_pct: float, key: str, secret: str, base: str, tick_size: float, tick_size_str: str, hedge_mode: bool, position_side: str | None):
     close_side = "SELL" if side == "LONG" else "BUY"
+
+    placed_levels: list[tuple[str, float]] = []
 
     async def _submit_exit_order(kind: str, base_pct: float):
         market_type = "TAKE_PROFIT_MARKET" if kind == "tp" else "STOP_MARKET"
@@ -421,9 +513,11 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
         _widen_bps = 0.25   # added to distance (%) per retry — wider for low-price coins
         _max_tries = 6
 
-        async def _submit(params: dict, use_algo: bool):
+        async def _submit(params: dict, use_algo: bool, kind: str = ""):
             if use_algo:
-                return await _signed_request("POST", base, "/fapi/v1/algoOrder", key, secret, params)
+                resp = await _signed_request("POST", base, "/fapi/v1/algoOrder", key, secret, params)
+                _raise_if_algo_rejected(resp, kind or str(params.get("type") or "algo"))
+                return resp
             client = _get_um_client(key, secret, base)
             if client:
                 return await asyncio.to_thread(client.new_order, **params)
@@ -482,14 +576,18 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
 
             # Try Algo Order API first
             try:
-                return await _submit(algo_params, True)
+                resp = await _submit(algo_params, True, kind)
+                placed_levels.append((kind, cur_price))
+                return resp
             except Exception as e:
                 algo_err = str(e)
                 _autotrade_log(f"Algo order ({kind}) failed: {algo_err[:200]}; trying legacy endpoint")
 
             # Fallback: legacy /fapi/v1/order
             try:
-                return await _submit(legacy_primary, False)
+                resp = await _submit(legacy_primary, False, kind)
+                placed_levels.append((kind, cur_price))
+                return resp
             except Exception as e:
                 txt = str(e)
                 last_err = e
@@ -501,11 +599,17 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
                     raise
                 if ("-4120" not in txt) and ("Order type not supported" not in txt):
                     raise
-                return await _submit(legacy_fallback, False)
+                resp = await _submit(legacy_fallback, False, kind)
+                placed_levels.append((kind, cur_price))
+                return resp
         raise last_err or RuntimeError(f"{kind} protective order failed after {_max_tries} attempts")
 
     tp = await _submit_exit_order("tp", tp_pct)
     sl = await _submit_exit_order("sl", sl_pct)
+    # Algo rejections can land after the submit response returns, so confirm the
+    # exchange is actually holding both levels before the caller treats the
+    # position as protected.
+    await _verify_protective_orders(symbol, key, secret, base, list(placed_levels))
     return {"tp": tp, "sl": sl}
 
 async def _place_trailing_stop(symbol: str, side: str, key: str, secret: str, base: str, trailing_pct: float):
@@ -537,13 +641,16 @@ async def _place_trailing_stop(symbol: str, side: str, key: str, secret: str, ba
 async def _cancel_all_open_orders(symbol: str, key: str, secret: str, base: str):
     """Cancel all open orders (regular AND algo/conditional) for a symbol.
 
-    Since Binance migrated conditional orders (STOP_MARKET, TAKE_PROFIT_MARKET,
-    TRAILING_STOP_MARKET) to the Algo Service on 2025-12-09, the legacy
-    ``DELETE /fapi/v1/allOpenOrders`` no longer touches them. Lingering algo
-    TP/SL orders on the opposite position side cause Binance error -4067
-    ("Position side cannot be changed if there exists open orders") when
-    entering the opposite side in hedge mode. We therefore also cancel algo
-    orders via ``DELETE /fapi/v1/algoOpenOrders``.
+    Endpoint names changed when Binance moved conditional orders (STOP_MARKET,
+    TAKE_PROFIT_MARKET, TRAILING_STOP_MARKET) to the Algo Service:
+    ``/fapi/v1/allOpenOrders`` and ``/fapi/v1/algoOpenOrders`` both answer 404,
+    so cancels raised nothing and every protective order outlived its position.
+    The live bulk-cancel routes are ``/fapi/v1/openOrders`` and
+    ``/fapi/v1/openAlgoOrders``.
+
+    Lingering algo TP/SL orders on the opposite position side also cause Binance
+    -4067 ("Position side cannot be changed if there exists open orders") when
+    entering the opposite side in hedge mode.
     """
     # 1) Regular open orders (LIMIT / MARKET etc.)
     try:
@@ -551,18 +658,103 @@ async def _cancel_all_open_orders(symbol: str, key: str, secret: str, base: str)
         if client:
             await asyncio.to_thread(client.cancel_all_open_orders, symbol=symbol)
         else:
-            await _signed_request("DELETE", base, "/fapi/v1/allOpenOrders", key, secret, {"symbol": symbol})
+            await _signed_request("DELETE", base, "/fapi/v1/openOrders", key, secret, {"symbol": symbol})
     except Exception as exc:
         # Log but don't fail; position close should still be attempted
-        print(f"[Cancel Orders] {symbol} regular warning: {exc}")
+        _autotrade_log(f"[Cancel Orders] {symbol} regular warning: {str(exc)[:160]}")
 
     # 2) Algo / conditional open orders (STOP_MARKET / TP / TRAILING_STOP)
     #    These are the ones that cause -4067 when left over the opposite side.
     try:
-        await _signed_request("DELETE", base, "/fapi/v1/algoOpenOrders", key, secret, {"symbol": symbol})
+        await _signed_request("DELETE", base, "/fapi/v1/openAlgoOrders", key, secret, {"symbol": symbol})
     except Exception as exc:
         # Endpoint may be unavailable on some account tiers; non-fatal.
-        print(f"[Cancel Orders] {symbol} algo warning: {exc}")
+        _autotrade_log(f"[Cancel Orders] {symbol} algo warning: {str(exc)[:160]}")
+
+async def sweep_orphan_protective_orders(key: str, secret: str, base: str) -> dict:
+    """Cancel algo TP/SL left resting on symbols that have no open position.
+
+    A protective order that outlives its position protects nothing: it only sits
+    there until the symbol is traded again, where it can immediately close the
+    new position (and trips Binance -4067 when flipping side in hedge mode).
+    Closing goes through ``_cancel_all_open_orders``, but orders the exchange
+    fills or auto-cancels leave their sibling TP behind, so they accumulate.
+
+    Fails closed: any error reading positions cancels nothing.
+    """
+    try:
+        open_algo = await _signed_request("GET", base, "/fapi/v1/openAlgoOrders", key, secret, {})
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:200], "cancelledSymbols": []}
+    if not isinstance(open_algo, list) or not open_algo:
+        return {"ok": True, "cancelledSymbols": [], "ordersChecked": 0}
+
+    try:
+        positions = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {})
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"positionRisk: {str(exc)[:160]}", "cancelledSymbols": []}
+    if not isinstance(positions, list):
+        return {"ok": False, "error": "positionRisk returned non-list", "cancelledSymbols": []}
+
+    held = {
+        str(p.get("symbol") or "").upper()
+        for p in positions
+        if isinstance(p, dict) and abs(float(p.get("positionAmt", 0) or 0)) > 0
+    }
+
+    orphan_symbols: dict[str, int] = {}
+    for row in open_algo:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        if not sym or sym in held:
+            continue
+        orphan_symbols[sym] = orphan_symbols.get(sym, 0) + 1
+
+    attempted: list[str] = []
+    for sym in sorted(orphan_symbols):
+        await _cancel_all_open_orders(sym, key, secret, base)
+        attempted.append(sym)
+
+    # Binance answers 200 on algo DELETE without actually cancelling these
+    # orders (observed: algoStatus stays NEW, updateTime unchanged, 52 orders
+    # from 09-23 onward). Re-read and report what really cleared instead of
+    # logging a success the exchange did not perform.
+    cleared: list[str] = []
+    stuck: list[str] = []
+    if attempted:
+        try:
+            after = await _signed_request("GET", base, "/fapi/v1/openAlgoOrders", key, secret, {})
+            still = {
+                str(r.get("symbol") or "").upper()
+                for r in after if isinstance(r, dict)
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": f"post-cancel verify: {str(exc)[:160]}",
+                "ordersChecked": len(open_algo),
+                "attemptedSymbols": attempted,
+            }
+        cleared = [s for s in attempted if s not in still]
+        stuck = [s for s in attempted if s in still]
+
+    if cleared:
+        _autotrade_log(f"Swept orphan protective orders on flat symbols: {', '.join(cleared)}")
+    if stuck:
+        _autotrade_log(
+            f"{sum(orphan_symbols[s] for s in stuck)} orphan protective order(s) on flat symbols "
+            f"would not cancel (exchange returns success but order stays open): {', '.join(stuck)}"
+        )
+    return {
+        "ok": True,
+        "ordersChecked": len(open_algo),
+        "orphanSymbols": orphan_symbols,
+        "attemptedSymbols": attempted,
+        "cancelledSymbols": cleared,
+        "unclearedSymbols": stuck,
+    }
+
 
 async def _close_position(symbol: str, key: str, secret: str, base: str):
     hedge_mode = await _is_hedge_mode(key, secret, base)
@@ -621,14 +813,25 @@ async def _close_position(symbol: str, key: str, secret: str, base: str):
             })
     if not close_results:
         return {"message": "No open position"}
+    order_ids = sorted(
+        {int((o or {}).get("orderId", 0) or 0) for o in close_results if isinstance(o, dict)} - {0}
+    )
     for t in learned_trades:
+        t["orderIds"] = order_ids
         await _record_learning_trade_async(symbol, t, "LIVE")
-    return {"closed": close_results}
+    return {"closed": close_results, "orderIds": order_ids}
 
 async def _close_position_one_side(symbol: str, side_to_close: str, key: str, secret: str, base: str, reason: str = "LIVE_CUT_LOSING_SIDE"):
     target = side_to_close.upper()
     if target not in ("LONG", "SHORT"):
         raise HTTPException(status_code=400, detail="side_to_close must be LONG or SHORT")
+    # Mark the intent BEFORE any exchange call. An exchange-side TP/SL may have
+    # filled already, in which case positionRisk below comes back flat, the
+    # loop has nothing to close, and without this marker the close vanishes
+    # from the trade log entirely (observed: QNTUSDT 2026-10-03 07:48->07:55,
+    # -1.084 USDT over two partial fills, no trades.jsonl entry).
+    _mark_close_intent(symbol, reason, target)
+    close_start_ms = int(time.time() * 1000)
     hedge_mode = await _is_hedge_mode(key, secret, base)
     close_mark = await fetch_mark_price(symbol)
     client = _get_um_client(key, secret, base)
@@ -682,9 +885,54 @@ async def _close_position_one_side(symbol: str, side_to_close: str, key: str, se
                 "entryMomentumPct": entry_snapshot.get("entryMomentumPct", 0.0),
                 "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
             })
-    for t in learned:
-        _record_learning_trade(symbol, t, "LIVE")
-    return {"closed": closed}
+    # Exchange truth beats the arithmetic above: a partially filled MARKET
+    # close only realises on what actually filled, and an exchange-triggered
+    # SL/TP never appears in `rows` at all. reconcile_symbol_closes is
+    # idempotent (fill ids already in trades.jsonl are skipped), so it is safe
+    # to always run. Returns None when userTrades could not be read.
+    #
+    # A reducing MARKET order fills milliseconds after it is accepted, so the
+    # first userTrades read almost always comes back empty. Settle for a beat
+    # before falling back to arithmetic, otherwise the exact numbers are lost
+    # to a race and only the estimate survives.
+    reconciled = None
+    settle_tries = max(1, int(os.getenv("CLOSE_RECONCILE_SETTLE_TRIES", "3") or 3))
+    settle_delay = max(0.0, float(os.getenv("CLOSE_RECONCILE_SETTLE_DELAY_SEC", "0.5") or 0.5))
+    for attempt in range(settle_tries):
+        try:
+            reconciled = await _reconcile_symbol_closes(
+                symbol, key, secret, base, reason=reason, since_ms=close_start_ms - 5000
+            )
+        except Exception as exc:
+            _autotrade_log(f"[Close] reconcile failed {symbol} {target}: {exc}")
+            break
+        if reconciled or reconciled is None or not closed:
+            break
+        if attempt < settle_tries - 1:
+            await asyncio.sleep(settle_delay)
+
+    order_ids = sorted(
+        {int((o or {}).get("orderId", 0) or 0) for o in closed if isinstance(o, dict)}
+        - {0}
+    )
+    if reconciled:
+        _pop_close_intent(symbol)
+    else:
+        # Fallback to the pre-existing behaviour when the exchange could not be
+        # read or confirmed no fills: record what our own order implies. The
+        # order ids anchor the row so a later scan that finally sees the fills
+        # attaches them to this trade instead of recording it a second time.
+        for t in learned:
+            t["orderIds"] = order_ids
+            _record_learning_trade(symbol, t, "LIVE")
+        if not closed:
+            # Nothing left the exchange and no fills appeared: the position was
+            # already flat (an exchange-side TP/SL won the race). There is
+            # nothing to wait for.
+            _pop_close_intent(symbol)
+        # else: our order is in flight or the fill has not surfaced yet — keep
+        # the intent so the background cycle records the real numbers.
+    return {"closed": closed, "reconciled": len(reconciled or []), "orderIds": order_ids}
 
 async def place_futures_order(symbol: str, side: str, quantity: float | None = None, usdt_amount: float | None = None, leverage: int | None = None, margin_type: str | None = None, tp_pct: float | None = None, sl_pct: float | None = None, trailing_stop_pct: float = 0.0):
     symbol = _normalize_symbol(symbol)
@@ -806,6 +1054,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
         # Preserve existing Guardian-updated fields (peak, lockUsdt, guardianStats, etc.)
         # instead of overwriting with defaults.  See: peak-0.0 root-cause fix.
         _existing_lock = locks.get(lock_key, {})
+        _warn = str(protective.get("warning") or "")[:200]
         locks[lock_key] = {
             **_existing_lock,
             "armed": _existing_lock.get("armed", False),
@@ -824,6 +1073,7 @@ async def place_futures_order(symbol: str, side: str, quantity: float | None = N
             "updatedAt": int(time.time()),
         }
         AUTO_TRADE["liveProfitLocks"] = locks
-        _autotrade_log(f"LIVE profit lock seeded for {symbol} {side} TP={tp_price:.6f} SL={sl_price:.6f}")
+        _autotrade_log(f"LIVE profit lock seeded for {symbol} {side} TP={tp_price:.6f} SL={sl_price:.6f}"
+                         + (f" | exchange protection NOT confirmed: {_warn}" if _warn else ""))
     trailing = await _place_trailing_stop(symbol, side, key, secret, base, trailing_stop_pct)
     return {"mode": "live", "entry": entry, "protective": protective, "localGuardian": None, "trailing": trailing, "entrySnapshot": entry_snapshot}

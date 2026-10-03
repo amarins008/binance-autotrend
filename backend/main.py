@@ -52,6 +52,7 @@ from obsidian_memory import (
     ensure_trading_vault,
     write_self_review_memory,
 )
+from trading.close_reconciler import reconcile_cycle as _reconcile_close_cycle
 from trading.regime import detect_market_regime
 from trading.vol_model import preferred_sizing_vol_pct
 from trading.config import ENTRY_MIN_CONFIDENCE_FLOOR, apply_autotrade_defaults
@@ -97,6 +98,7 @@ from exchange.futures_orders import (
     place_futures_order,
     _qty_retry_candidates,
     _round_to_tick,
+    sweep_orphan_protective_orders as _sweep_orphan_protective_orders,
 )
 from analysis.intel_analyze import (
     _candlestick_pattern_context,
@@ -327,6 +329,7 @@ from trading.learning import (
     _record_learning_trade_async,
 )
 from trading.position import should_hold_winner
+from trading.risk_cooldown import _recent_big_losses_by_symbol
 from trading.supervisor_tuning import (
     _supervisor_trade_period_reviews as _supervisor_trade_period_reviews,
     _maybe_tune_size_multiplier_from_streak as _maybe_tune_size_multiplier_from_streak,
@@ -433,6 +436,34 @@ def _scan_health_state(symbol: str) -> dict[str, int]:
         "lastErrorAt": max(0, int(pr.get("lastScanErrorAt", 0) or 0)),
         "lastSuccessAt": max(0, int(pr.get("lastScanSuccessAt", 0) or 0)),
     }
+
+
+def _tv_confirmation_streak(symbol: str, signal: str, confidence: float, cfg: dict, now: int) -> int:
+    """Count consecutive agreeing TradingView readings for one symbol.
+
+    TV oscillates LONG/WAIT every 30-90s on these symbols, so one fresh reading
+    says nothing about persistence — with ``tvEntryMaxAgeSec`` at 30 an entry can
+    be taken on the first LONG tick of a flip-flop. Requiring N consecutive
+    agreeing readings inside a short window filters those out. The counter is
+    in-memory: a restart resets it to zero, which costs at most one delayed
+    entry.
+    """
+    sym = str(symbol or "").upper()
+    sig = str(signal or "").upper()
+    conf = float(confidence or 0.0)
+    if not sym or not sig:
+        return 0
+    store = AUTO_TRADE.get("tvConfirmStreaks")
+    if not isinstance(store, dict):
+        store = {}
+        AUTO_TRADE["tvConfirmStreaks"] = store
+    window = max(30, int(cfg.get("tvConfirmWindowSec", 180) or 180))
+    prev = store.get(sym) if isinstance(store.get(sym), dict) else {}
+    same = str(prev.get("signal", "") or "") == sig
+    fresh = (now - int(prev.get("ts", 0) or 0)) <= window
+    count = (int(prev.get("count", 0) or 0) + 1) if (same and fresh) else 1
+    store[sym] = {"signal": sig, "count": count, "ts": now, "confidence": conf}
+    return count
 
 
 def _record_scan_health(symbol: str, ok: bool, reason: str | None = None) -> None:
@@ -2249,6 +2280,20 @@ async def _pick_best_symbol_from_scan(cfg: dict, exclude_symbols: set[str] | Non
                     else:
                         qualified = False
                         reject_reason = "short_tv_low_conf"
+        # TV persistence gate: require the same TV reading N times in a row
+        # before entering. A single fresh TV tick is not evidence — on these
+        # symbols TV flips LONG/WAIT every 30-90s, so the first tick of a
+        # flip-flop otherwise passes the freshness+confidence checks above.
+        if qualified and bool(cfg.get("tradingviewEnabled", False)):
+            _tv = out.get("tv") if isinstance(out.get("tv"), dict) else {}
+            if _tv:
+                _tv_sig = str(_tv.get("signal", "") or "").upper()
+                _tv_conf = float(_tv.get("confidence", 0.0) or 0.0)
+                _required = max(1, int(cfg.get("tvConfirmReadings", 2) or 2))
+                _streak = _tv_confirmation_streak(sym, _tv_sig, _tv_conf, cfg, int(time.time()))
+                if _tv_sig in ("LONG", "SHORT") and _streak < _required:
+                    qualified = False
+                    reject_reason = "tv_unconfirmed"
         perf_ok, perf_reason, perf = _symbol_perf_gate(cfg, sym)
         soft_perf_eligible = False
         soft_perf_reason = ""
@@ -2925,6 +2970,59 @@ async def _lifespan(app: FastAPI):
     asyncio.create_task(_maybe_resume())
     asyncio.create_task(_autotrade_watchdog_loop())
 
+    # ── LIVE close reconciliation ─────────────────────────────────────
+    # The bot used to record a close only when it submitted the reducing
+    # order itself AND the exchange still showed the position. An
+    # exchange-side TP/SL fill that lands first leaves the trade unrecorded
+    # (QNTUSDT 2026-10-03 07:48->07:55), and a partial close records the
+    # optimistic full-quantity PnL. reconcile_cycle re-reads userTrades and
+    # fills those gaps idempotently. Orphan adoption stays in live_guardian
+    # Phase 1, which already seeds a lock on the entry's own TP/SL path.
+    async def _close_reconcile_loop():
+        interval = max(30, int(os.getenv("CLOSE_RECONCILE_INTERVAL_SEC", "60") or 60))
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                res = await _reconcile_close_cycle()
+                # Logged, not swallowed: this loop is the only thing that
+                # backfills a close the bot missed, so a silent failure here
+                # means unreported PnL. reconcile_cycle reports refusals as
+                # ok=False instead of raising.
+                if res and not res.get("ok", True):
+                    _autotrade_log(f"[CloseReconcile] cycle refused: {res.get('reason') or res}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _autotrade_log(f"[CloseReconcile] cycle raised: {exc}")
+
+    asyncio.create_task(_close_reconcile_loop())
+
+    # ── Orphan protective order sweep ─────────────────────────────────
+    # A TP/SL left resting after its position is gone protects nothing: it
+    # can close the NEXT position on that symbol the moment price reaches its
+    # trigger, and it blocks side flips with Binance -4067. 55 such orders had
+    # accumulated on flat symbols.
+    async def _orphan_algo_sweep_loop():
+        interval = max(120, int(os.getenv("ORPHAN_ALGO_SWEEP_INTERVAL_SEC", "600") or 600))
+        while True:
+            # Sweep first, then wait: orphans inherited from a previous run block
+            # opposite-side entries (-4067), so they must not sit untouched for a
+            # whole interval after every restart.
+            try:
+                key = os.getenv("BINANCE_API_KEY")
+                secret = os.getenv("BINANCE_API_SECRET")
+                if key and secret:
+                    res = await _sweep_orphan_protective_orders(key, secret, _binance_base())
+                    if res and not res.get("ok", True):
+                        _autotrade_log(f"[OrphanSweep] refused: {res.get('error')}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _autotrade_log(f"[OrphanSweep] raised: {exc}")
+            await asyncio.sleep(interval)
+
+    asyncio.create_task(_orphan_algo_sweep_loop())
+
     # ── Learning scheduler (daily background training) ────────────────────
     async def _learning_scheduler_loop():
         interval = max(300, int(os.getenv("LEARNING_TRAIN_INTERVAL_SEC", "86400")))
@@ -3057,6 +3155,7 @@ AUTO_TRADE = {
     "log": [],
     "consecutiveErrors": 0,
     "liveProfitLocks": {},
+    "closeIntents": {},
     "scanBoard": [],
     "cooldownWatchlist": {},
     "hermesAgents": new_agent_state(),
@@ -5260,6 +5359,8 @@ def _load_autotrade_snapshot():
         AUTO_TRADE["riskCooldownLastMarketCheckAt"] = int(data.get("riskCooldownLastMarketCheckAt", 0) or 0)
         lks = data.get("liveProfitLocks")
         AUTO_TRADE["liveProfitLocks"] = lks if isinstance(lks, dict) else {}
+        _ci = data.get("closeIntents")
+        AUTO_TRADE["closeIntents"] = _ci if isinstance(_ci, dict) else {}
         # Per-symbol risk-cooldown restore: supplement the global snapshot with
         # each symbol's independent runtime copy (only keys missing globally).
         try:
@@ -6147,6 +6248,37 @@ async def _autotrade_loop():
                 if armed_any:
                     # Keep scanning; newly cooled symbols are excluded below.
                     AUTO_TRADE["riskCooldownLossSignature"] = ""
+
+            if risk_cooldown_enabled and bool(cfg.get("bigLossCooldownEnabled", True)):
+                # One large stop-out is cooldown-worthy on its own. The streak
+                # counter above resets on any win, so a -2 USDT loss between two
+                # small wins never arms and the symbol is re-entered minutes later.
+                _big_loss_min = float(cfg.get("bigLossCooldownUsdt", 1.0) or 0.0)
+                _big_loss_win = int(cfg.get("bigLossCooldownRecentWindowSec", 2 * 3600) or 0)
+                if _big_loss_min > 0:
+                    _big_states = _recent_big_losses_by_symbol(
+                        _live_closed_trades_from_log(symbol=None, mode="ALL"),
+                        _big_loss_min,
+                        _big_loss_win,
+                        now,
+                    )
+                    _big_minutes = max(1, int(cfg.get("bigLossCooldownMinutes", 30) or 30))
+                    for _big_symbol, _big in _big_states.items():
+                        _big_sig = str(_big.get("signature", "") or "")
+                        _big_last = int(_big.get("lastClosedAt", 0) or 0)
+                        if not _big_sig:
+                            continue
+                        _existing = _symbol_risk_cooldown_record(_big_symbol, now)
+                        if isinstance(_existing, dict) and str(_existing.get("signature", "") or "") == _big_sig:
+                            continue
+                        _arm_symbol_risk_cooldown(
+                            _big_symbol, _big_minutes, _big_sig, 1, "big_loss", now, _big_last,
+                        )
+                        _autotrade_skip(
+                            "big_loss_cooldown",
+                            f"Skip: armed {_big_symbol} cooldown {_big_minutes}m after "
+                            f"{float(_big.get('pnl', 0.0) or 0.0):.2f} USDT loss",
+                        )
 
             scan_mode = bool(cfg.get("marketScan")) or str(cfg.get("symbol", "")).upper() in ("AUTO", "SCAN")
             open_symbol_blacklist: set[str] = set(_risk_cooldown_symbols(now))

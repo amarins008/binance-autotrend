@@ -700,6 +700,13 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("riskCooldownPauseOnVolatile", True)
     out.setdefault("riskCooldownVolatileMinutes", 10)
     out.setdefault("riskCooldownResumeScoreGapMin", 2.0)
+    out.setdefault("bigLossCooldownEnabled", True)
+    out.setdefault("bigLossCooldownUsdt", 1.0)
+    out.setdefault("bigLossCooldownMinutes", 30)
+    out.setdefault("bigLossCooldownRecentWindowSec", 2 * 3600)
+    # TV persistence: require the same TV reading N scans in a row before entry.
+    out.setdefault("tvConfirmReadings", 2)
+    out.setdefault("tvConfirmWindowSec", 180)
     out.setdefault("maxDailyTradesPerSymbol", 14)
     out.setdefault("perfGateMinSamples", 8)
     out.setdefault("perfGateMinWinRatePct", 40)

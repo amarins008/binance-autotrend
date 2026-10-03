@@ -229,6 +229,10 @@ class AutoTradeStartRequest(BaseModel):
     riskCooldownPauseOnVolatile: bool = True
     riskCooldownVolatileMinutes: int = Field(default=10, ge=1, le=240)
     riskCooldownResumeScoreGapMin: float = Field(default=2.0, ge=0.0, le=10.0)
+    bigLossCooldownEnabled: bool = True
+    bigLossCooldownUsdt: float = Field(default=1.0, ge=0.0, le=100.0)
+    bigLossCooldownMinutes: int = Field(default=30, ge=1, le=1440)
+    bigLossCooldownRecentWindowSec: int = Field(default=7200, ge=0, le=86400)
     selfReviewMinHourSamples: int = Field(default=8, ge=3, le=200)
     usdtTooSmallAction: Literal["multiply", "skip"] = "multiply"
     # Adaptive multiplier range when USDT is too small (5x-10x).
@@ -279,6 +283,8 @@ class AutoTradeStartRequest(BaseModel):
     tradingviewConfidenceBoost: float = Field(default=0.08, ge=0.0, le=0.3)
     tradingviewStalenessThreshold: int = Field(default=300, ge=60, le=1800)
     tradingviewMaxFailures: int = Field(default=5, ge=1, le=20)
+    tvConfirmReadings: int = Field(default=2, ge=1, le=10)
+    tvConfirmWindowSec: int = Field(default=180, ge=30, le=1800)
     supervisorTradingViewHealthCooldownMinutes: int = Field(default=15, ge=5, le=120)
 
 

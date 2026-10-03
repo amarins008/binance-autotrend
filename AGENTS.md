@@ -77,6 +77,37 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 - Ghost accounting: ยืนยัน position=0 จริงหลัง `_close_position_one_side` + บันทึก exchange-side close เข้า trade log + orphan adoption ของ remainder
 
 
+## Session: LIVE close reconciliation — userTrades เป็นความจริงเดียว (P1 ghost close)
+
+### ปัญหา
+- **QNTUSDT 2026-10-03 07:48→07:55 ปิด -1.084 USDT ไม่มีใน `trades.jsonl` เลย** (2 partial fills)
+- Root cause: `_close_position_one_side` บันทึกเฉพาะตอนที่ *มันเอง* ส่ง order ปิด **และ** exchange ยังเห็น position อยู่ ถ้า exchange-side `STOP_MARKET` fill ก่อน (ซึ่ง session ก่อนทำ `-2021` widen-retry ให้วาง SL สำเร็จจริงแล้ว) → Guardian เช็คราคาเจอว่า position แฟลต → ไม่ส่งอะไร → ไม่บันทึกอะไร และ Phase 2 pop lock ทิ้งไปแล้ว
+- ผลกระทบ: loss-streak, riskCooldown, KPI, supervisor review **มองไม่เห็นไม้ขาดทุนนี้เลย**
+- Defect รอง: partial close บันทึก PnL แบบเต็มจำนวน `(exit-entry)×qty` (optimistic) และไม่หัก commission
+
+### Fix (5 ไฟล์)
+- **`trading/close_reconciler.py` (ใหม่)** — อ่าน `/fapi/v1/userTrades` เป็น source of truth: `_close_events` จัดกลุ่ม fills เป็น event (gap ≤120s), `_event_trade` derive entry/exit/qty จาก fills (`LONG entry = (Σpx·q − ΣrealizedPnl)/Σq`, SHORT คูณบวก) แยก `commission`/`netPnl` แต่คง `pnl` เป็น gross (semantics เดิมไม่เปลี่ยน), dedupe ด้วย `fills:[id,...]` + cache ต่อ symbol (key บน mtime+size ของ `trades.jsonl`), `mark/pop/peek_close_intent` เก็บใน `AUTO_TRADE["closeIntents"]` (persist ใน snapshot), `find_untracked_positions` รายงาน position ที่ไม่มี lock, `reconcile_cycle` รวมทั้งสองอย่าง
+  - `fetch_recent_fills` คืน `None` = อ่านไม่ได้ (รอรอบหน้า), `[]` = exchange ตอบแล้วไม่มี fill (ปล่อย intent ได้)
+- **`exchange/futures_orders.py`** — `_close_position_one_side` mark intent **ก่อน** เรียก exchange แล้ว reconcile ท้ายฟังก์ชัน: สำเร็จ → pop intent, ไม่มี → fallback เดิม `_record_learning_trade` (กัน regression เวลา endpoint ล่ม)
+- **`trading/live_guardian.py`** — เพิ่ม `_safe_close_position_one_side` (กลืน exception + log) ครอบทุก call site 14 แห่ง เพราะทุก site pop lock ต่อทันที ถ้า raise หลุด → ไม้ไม่ถูก manage และไม่ถูกบันทึก
+- **`main.py`** — task `_close_reconcile_loop` ใน lifespan (60s, `CLOSE_RECONCILE_INTERVAL_SEC`), log เมื่อ `ok=False`/exception (เดิม `except: pass` ทำให้เงียบจนไม่รู้ว่าพัง), default `closeIntents: {}` + restore ใน `_load_autotrade_snapshot`
+- **`trading/state_ops.py`** — เพิ่ม `closeIntents` ใน payload ของ `persist_autotrade_snapshot`
+
+### การตัดสินใจ: ไม่ adopt orphan ใน reconciler
+- เขียน `adopt_position_lock()` แล้ว**ลบทิ้ง** — `live_guardian.py:1248` Phase 1 **adopt orphan อยู่แล้ว** ผ่าน `locks.get(k, {...})` และคำนวณ TP/SL ด้วย `_effective_tpsl_pct_for_trade` (path ±2 USDT ทางถูก) ส่วนของผมใช้ `_effective_tp_sl` แบบเก่า (comment ที่ 1274-1280 ระบุเองว่าผิด) แถวที่ worse: ถ้า seed `tp`/`sl` ทิ้งไว้ Phase 1 จะข้ามการ derive ที่ถูกต้องเพราะ `if not st.get("tp")`
+- `reconcile_cycle` เลย**รายงาน**อย่างเดียว (`untracked`) + log — Phase 1 adopt รอบถัดไป (มี regression test ล็อกการตัดสินใจนี้)
+
+### Verification
+- py_compile 5 ไฟล์ OK
+- `backend/tests/` **82 passed** (เพิ่ม `test_close_reconciler.py` 16 เทสต์: fill classification / event grouping / event math / reconcile / cycle)
+- integration 9 ไฟล์: **21 failed, 242 passed** = baseline ที่ worktree HEAD เป๊ะ (failures เดิมหมดอยู่ใน `test_live_multi_guard.py`)
+- `gitnexus detect-changes`: 4 ไฟล์ / 11 symbols / 45 processes / risk **critical** (รวม `_close_position_one_side`, `place_futures_order`, `_lifespan`, `persist_autotrade_snapshot`)
+- Live: restart ผ่าน launcher `8021 /restart` → `/health` ok, `autotradeRunning: true`, `errors: 0`, positions `[]`, watchdog tick ยืนยัน `backend :8020 OK`
+- Live probe `reconcile_cycle()` กับ Binance จริง → `{"ok": true, "recorded": [], "untracked": []}` (book แฟลต = ผลถูกต้อง)
+
+### ยังไม่ได้ทำ
+- backfill ไม้ ghost ย้อนหลัง 3 ครั้งวันนี้ (QNT −1.084 + 2 ก่อนหน้า) — ต้องเปิด `record=True` พร้อม `since_ms` เจาะจง เสี่ยงบันทึกซ้ำ ควรทำแยก
+- งานนี้**ยังไม่ commit** (รอผู้ใช้สั่ง)
 ## Session: TV WAIT gate + SL placement retry (เสร็จ 2026-09-11)
 
 ### ปัญหา

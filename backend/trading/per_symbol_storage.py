@@ -194,8 +194,10 @@ class PerSymbolStorage:
         try:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Not silent: a dropped row is a closed trade the profile counts but
+            # nothing else can see, which is how real closes went missing.
+            print(f"[PerSymbolStorage] append_trade FAILED {path}: {exc}")
 
     # ------------------------------------------------------------------
     # Windows cache (rolling window / memory window snapshot)

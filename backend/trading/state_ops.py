@@ -171,6 +171,7 @@ def persist_autotrade_snapshot(force: bool = False) -> None:
             "startedAt": app_state.AUTO_TRADE.get("startedAt", 0),
             "lastTradeAt": app_state.AUTO_TRADE.get("lastTradeAt", 0),
             "liveProfitLocks": app_state.AUTO_TRADE.get("liveProfitLocks"),
+            "closeIntents": app_state.AUTO_TRADE.get("closeIntents") if isinstance(app_state.AUTO_TRADE.get("closeIntents"), dict) else {},
             "scanBoard": list(app_state.AUTO_TRADE.get("scanBoard", []))[:10],
             "cooldownWatchlist": app_state.AUTO_TRADE.get("cooldownWatchlist") if isinstance(app_state.AUTO_TRADE.get("cooldownWatchlist"), dict) else {},
             "hermesAgents": ensure_agent_state(app_state.AUTO_TRADE.get("hermesAgents")),
