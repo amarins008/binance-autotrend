@@ -87,6 +87,8 @@ from trading.risk import (
 )
 from exchange.binance_client import configure_clients as _configure_binance_clients
 from exchange.futures_orders import (
+    _cancel_all_open_orders,
+    _close_position,
     _close_position_one_side,
     _entry_snapshot_for_position,
     _floor_to_step,
@@ -5707,122 +5709,6 @@ async def _place_trailing_stop(symbol: str, side: str, key: str, secret: str, ba
         "workingType": "MARK_PRICE",
         "reduceOnly": "true",
     })
-
-
-def _extract_fill_price(order_resp: dict | list | None) -> float | None:
-    """Extract average fill price from Binance order response."""
-    if order_resp is None:
-        return None
-    if isinstance(order_resp, list):
-        if not order_resp:
-            return None
-        order_resp = order_resp[0]
-    if not isinstance(order_resp, dict):
-        return None
-    for k in ("avgPrice", "price", "executedPrice"):
-        val = order_resp.get(k)
-        if val is not None:
-            try:
-                v = float(val)
-                if v > 0:
-                    return v
-            except (TypeError, ValueError):
-                continue
-    fills = order_resp.get("fills")
-    if isinstance(fills, list) and fills:
-        total_qty = 0.0
-        weighted_px = 0.0
-        for f in fills:
-            if not isinstance(f, dict):
-                continue
-            p = float(f.get("price", 0) or 0)
-            q = float(f.get("qty", 0) or 0)
-            if p > 0 and q > 0:
-                weighted_px += p * q
-                total_qty += q
-        if total_qty > 0:
-            return weighted_px / total_qty
-    return None
-
-
-async def _cancel_all_open_orders(symbol: str, key: str, secret: str, base: str):
-    """Cancel all open orders (regular AND algo/conditional) for a symbol."""
-    try:
-        client = _get_um_client(key, secret, base)
-        if client:
-            await asyncio.to_thread(client.cancel_all_open_orders, symbol=symbol)
-        else:
-            await _signed_request("DELETE", base, "/fapi/v1/allOpenOrders", key, secret, {"symbol": symbol})
-    except Exception as exc:
-        print(f"[Cancel Orders] {symbol} regular warning: {exc}")
-    try:
-        await _signed_request("DELETE", base, "/fapi/v1/algoOpenOrders", key, secret, {"symbol": symbol})
-    except Exception as exc:
-        print(f"[Cancel Orders] {symbol} algo warning: {exc}")
-
-
-async def _close_position(symbol: str, key: str, secret: str, base: str):
-    hedge_mode = await _is_hedge_mode(key, secret, base)
-    close_mark = await fetch_mark_price(symbol)
-    client = _get_um_client(key, secret, base)
-    if client:
-        pos = await asyncio.to_thread(client.get_position_risk, symbol=symbol)
-    else:
-        pos = await _signed_request("GET", base, "/fapi/v2/positionRisk", key, secret, {"symbol": symbol})
-    if isinstance(pos, dict):
-        pos = [pos]
-    if not isinstance(pos, list):
-        pos = []
-    await _cancel_all_open_orders(symbol, key, secret, base)
-    close_results = []
-    learned_trades = []
-    for p in pos:
-        amt = float(p.get("positionAmt", 0) or 0)
-        if amt == 0:
-            continue
-        entry = float(p.get("entryPrice", 0) or 0)
-        pos_side = (p.get("positionSide") or ("LONG" if amt > 0 else "SHORT")).upper()
-        side = "SELL" if amt > 0 else "BUY"
-        qty = abs(amt)
-        payload = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": str(qty)}
-        if hedge_mode:
-            ps = (p.get("positionSide") or "").upper()
-            if ps in ("LONG", "SHORT"):
-                payload["positionSide"] = ps
-        else:
-            payload["reduceOnly"] = "true"
-        if client:
-            order_resp = await asyncio.to_thread(client.new_order, **payload)
-        else:
-            order_resp = await _signed_request("POST", base, "/fapi/v1/order", key, secret, payload)
-        close_results.append(order_resp)
-        if entry > 0 and qty > 0:
-            fill_px = _extract_fill_price(order_resp)
-            exit_px = fill_px if fill_px and fill_px > 0 else close_mark
-            pnl = (exit_px - entry) * qty if pos_side == "LONG" else (entry - exit_px) * qty
-            entry_snapshot = _entry_snapshot_for_position(symbol, pos_side)
-            learned_trades.append({
-                "side": pos_side,
-                "entry": entry,
-                "exit": exit_px,
-                "qty": qty,
-                "pnl": round(float(pnl), 6),
-                "reason": "LIVE_CLOSE",
-                "closedAt": int(time.time()),
-                "patternTags": entry_snapshot.get("patternTags", []),
-                "patternBias": entry_snapshot.get("patternBias", 0.0),
-                "patternScore": entry_snapshot.get("patternScore", 0.0),
-                "entryConfidence": entry_snapshot.get("entryConfidence", 0.0),
-                "entryScore": entry_snapshot.get("entryScore", 0.0),
-                "entrySpreadBps": entry_snapshot.get("entrySpreadBps", 0.0),
-                "entryMomentumPct": entry_snapshot.get("entryMomentumPct", 0.0),
-                "entryDecisionAt": entry_snapshot.get("entryDecisionAt", 0),
-            })
-    if not close_results:
-        return {"message": "No open position"}
-    for t in learned_trades:
-        _record_learning_trade(symbol, t, "LIVE")
-    return {"closed": close_results}
 
 
 async def trade(req: TradeRequest):
