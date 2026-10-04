@@ -2627,7 +2627,14 @@ def _risk_cooldown_resume_ok(cfg: dict, symbol: str | None, intel: dict | None) 
     spread_bps = float(ex.get("spreadBps", 0.0) or 0.0)
     regime = _risk_cooldown_regime(intel)
     regime_name = str(regime.get("name", "UNKNOWN")).upper()
-    min_conf = max(float(cfg.get("minConfidence", 0.62) or 0.62), float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62), _scan_board_median_conf(board))))
+    # `board` is not in scope here — referencing it raised NameError on every
+    # adaptive check since ec7e0c6 (2026-08-24), silently disabling the
+    # market-based cooldown release. Read the live scan board like the other
+    # _scan_board_median_conf call sites do.
+    min_conf = max(
+        float(cfg.get("minConfidence", 0.62) or 0.62),
+        float(_learned_min_conf(symbol, float(cfg.get("minConfidence", 0.62) or 0.62), _scan_board_median_conf(AUTO_TRADE.get("scanBoard")))),
+    )
     # 2026-08-16: Selective SHORT — require a higher confidence floor for SHORT
     # entries than LONG. SHORT historically bleeds (7d WR 29% vs LONG 59%), so
     # only take SHORT when the signal is strong. No-op when key is 0/disabled.
