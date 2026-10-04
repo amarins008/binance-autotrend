@@ -117,8 +117,8 @@ def _atr_series(highs: list[float], lows: list[float], closes: list[float], peri
 
 def _detect_market_session() -> str:
     """Classify current UTC hour into trading session."""
-    import datetime
-    h = datetime.datetime.utcnow().hour
+    from datetime import datetime, timezone
+    h = datetime.now(timezone.utc).hour
     if 0 <= h < 8:
         return "ASIA"
     if 8 <= h < 13:
