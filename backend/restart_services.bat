@@ -3,7 +3,7 @@ REM Stop backend + dashboard, then restart via start_all.bat.
 REM Right-click -> Run as administrator if taskkill gives "Access denied".
 
 setlocal
-set ROOT=E:\My Project\Binance autotrend
+set ROOT=D:\My Project\Binance autotrend
 set BACKEND=%ROOT%\backend
 
 echo === Killing existing services on 8020 / 8021 / 8040 ===
