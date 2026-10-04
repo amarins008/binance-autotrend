@@ -24,3 +24,10 @@ Temp/
 
 # Temp backup of removed test/garbage symbol dirs (not part of repo)
 _garbage_symbols_backup/
+
+# Scratch probes and tool state (recurring session leftovers)
+/_*.txt
+backend/_*.py
+.claude/skills/
+.freebuff/
+backend/dashboard/backup/

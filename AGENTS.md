@@ -48,6 +48,30 @@ This project is indexed by GitNexus as **binance-autotrend-standalone-final** (1
 
 ### สถานะปัจจุบัน: Phase 1 เสร็จแล้ว — กำลังทดสอบ
 
+## Session: TP/SL GTD expiry + ghost-close dedup + adaptive-cooldown NameError (เสร็จ 2026-10-04, commit 848980e/57275ed/633a4e3/8d8f96e, force-push main)
+
+### ปัญหาที่พบจากวิเคราะห์ไม้ติดลบ 2026-10-03
+- QNT 8 ไม้ -3.573 (3 ไม้ใหญ่ -4.159 = 89% ของความเสียหาย) — 2 ใน 3 เป็น exchange SL fill จริง ทำงานถูก, `EXCHANGE_CLOSE` เป็น label แหล่งที่มา ไม่ใช่สาเหตุ
+- `POST /fapi/v1/algoOrder` ตอบ HTTP 200 + `algoStatus: REJECTED` / `rejectReason: "Reduce only reject"` (async reject) — โค้ดเดิมจับแค่ exception เลยถือว่าวาง TP สำเร็จ → ไม่มี fallback ไม่มี local lock (place_futures_order seed เฉพาะเมื่อมี warning จาก exception)
+
+### Fix (4 commits, force-push ทับ remote หลัง user เลือกสายนี้ — สายเก่าเก็บไว้ branch `backup/parallel-line-2026-10-04`)
+- **848980e**: `_raise_if_algo_rejected` (raise เมื่อ REJECTED/code<0) + `_verify_protective_orders` (อ่าน openAlgoOrders ยืนยัน TP/SL จริง, endpoint fail = no-op ไม่ raise) + `_cancel_all_open_orders` แก้ endpoint ตาย (`allOpenOrders`/`algoOpenOrders` 404 → `openOrders`/`openAlgoOrders`) + `sweep_orphan_protective_orders` (loop 600s ใน lifespan, sweep ก่อน sleep, fail-closed ถ้า positionRisk อ่านไม่ได้, รายงาน `unclearedSymbols` แทน success ปลอม) + big-loss cooldown (`_recent_big_losses_by_symbol`: เฉพาะ close ล่าสุดต่อ symbol, threshold `bigLossCooldownUsdt=1.0`/30 นาที/ย้อน 2 ชม.) + TV confirm gate (`_tv_confirmation_streak`, `tvConfirmReadings=2` ภายใน `tvConfirmWindowSec=180`, reset เมื่อสัญญาณพลิก)
+- **57275ed**: ลบ `_close_position`/`_cancel_all_open_orders`/`_extract_fill_price` ซ้ำใน main.py (ตัว main เรียก endpoint ตาย → `POST /autotrade/close-orphan` ปิดไม้แต่ไม่ cancel algo) — futures_orders เป็น canonical + บันทึก PnL ด้วยราคา fill จริง (`_extract_fill_price`) แทน close_mark; identity ตรงทั้ง 3
+- **633a4e3**: **GTD expiry** — TP/SL ทุกตัวใส่ `timeInForce=GTD` + `goodTillDate = now + protectiveOrderGtdSec (default 7200, 0=GTC)` ทั้ง algo/legacy branch เพราะ **Binance ตอบ 200 ทุก DELETE โดยไม่ยกเลิก** (ทดสอบครบ: by algoId / clientAlgoId / batch / allOpenOrders 404) — order ที่ค้างจากการปิดไม้จึงเป็นอมตะและ trigger ตัดไม้ใหม่ได้ (demo จริง: orphan TP 2713.1 ต่ำกว่า TP ไม้ปัจจุบัน 2718.6 → ตัดก่อน) — พิสูจน์แล้ว: algo รับ GTD (NEW) และ order probe หมดอายุเองใน 15 นาที (ZEC 9→8); closePosition=true ไม่ช่วย (freqtrade #12681 + trigger ยังโดนไม้ใหม่)
+- **8d8f96e**: `_risk_cooldown_resume_ok` อ้าง `board` ที่ไม่มีใน scope → NameError ทุกรอบ adaptive check ตั้งแต่ ec7e0c6 (2026-08-24) → adaptive release ตาย 6 สัปดาห์ (log มีแต่ "adaptive check failed") — แก้เป็นอ่าน `AUTO_TRADE["scanBoard"]` เหมือน call site อื่น; verify สด: เห็น reason จริง `no market intel`
+- Tests: +31 (test_protective_orders) +2 (test_risk_cooldown_resume); integration 26 failed = baseline สองฝั่ง (stash พิสูจน์)
+
+### การวิเคราะห์บัญชี (สำคัญ — ค้างให้ user ตัดสินใจ)
+- **บัญชีเทรดโดยไม่ลง log**: 09-20→10-03 มี REALIZED_PNL +30.94 / COMMISSION -46.56 (net **-15.62**, 3521 income rows) แต่ trades_log ว่างเปล่า; fingerprint ไม่ตรงบอท (notional median 16 vs บอท 100-400, pnl/ไม้ median 0.03 vs ±2) → มี client อื่นใช้ key นี้เทรด — ยังไม่เคลียร์ว่าคืออะไร
+- SHORT ขาดทุนเชิงโครงสร้าง all-time: 1,926 ไม้ -17.15 (WR 48.9%) — ไม่มี SHORT ตั้งแต่ 09-17
+- orphan เกิดใหม่วันละ 10-20 ตัวจากการปิดของบอทเอง (มาก่อน GTD); 67 ตัวเก่าเป็น GTC → **ต้องกด Cancel All บนเว็บ Binance** (API ลบไม่ได้) + ticket แนบ algoId 4000001944597475
+- **-2015 ต้นตอ = dynamic IP**: IP หมุน 223.24.218.27 → 27.55.78.92 → กลับ — whitelist เฉพาะ IP จะพังซ้ำ → ต้อง whitelist CIDR / ปิด IP restriction / static IP; บอท fail-closed ถูกต้องทุกครั้ง (`LIVE paused`, sweep refused)
+- GitHub: credential ผ่าน `gh` (config `credential.https://github.com.helper=gh auth git-credential`) — สลับด้วย `gh auth switch --user amarins008`
+
+### ยืนยันบนระบบจริง (10-04)
+- 17 ไม้ +6.26 gross / ~+4.2 net, EXCHANGE_CLOSE ลง log ครบพร้อม netPnl (reconciler ทำงานจริง), adaptive release ฟื้น, LINK loss-streak cooldown จน 11:27, fee-edge gate ตัด ONEUSDT (edge -0.29 ≤ 1.96)
+- config นิ่ง: drift 0/381 fields ใน 210s, kill switch False fail-closed 12 จุด
+
 ## Session: Fee-optimal sizing + margin-erosion root cause (เสร็จ 2026-10-03)
 
 ### ปัญหา (พิสูจน์ด้วย Binance /fapi/v1/income จริง)
