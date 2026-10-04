@@ -126,7 +126,7 @@ import json
 import re
 import math
 import asyncio
-import datetime
+from datetime import datetime, timezone
 import copy
 import subprocess
 from functools import wraps
@@ -6087,7 +6087,7 @@ async def _autotrade_loop():
             # Entry Time Window Guard — skip scan cycle outside allowed UTC hours
             allowed_hours = cfg.get("entryAllowedHoursUtc")
             if allowed_hours:
-                current_utc_hour = datetime.utcnow().hour
+                current_utc_hour = datetime.now(timezone.utc).hour
                 if current_utc_hour not in allowed_hours:
                     _agent_mark("risk_manager", "blocked", "entry time window", f"UTC hour {current_utc_hour} not in allowed {allowed_hours}")
                     _autotrade_skip("entry_time_window", f"Skip: UTC hour {current_utc_hour} not in allowed {allowed_hours} — skipping scan")
