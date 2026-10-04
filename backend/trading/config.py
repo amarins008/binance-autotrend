@@ -707,6 +707,10 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     # TV persistence: require the same TV reading N scans in a row before entry.
     out.setdefault("tvConfirmReadings", 2)
     out.setdefault("tvConfirmWindowSec", 180)
+    # Exchange TP/SL expire after this window (GTD). Binance ignores algo-order
+    # DELETEs, so without an expiry every closed trade leaves a lethal trigger
+    # behind on the symbol; the guardian lock is the primary exit path anyway.
+    out.setdefault("protectiveOrderGtdSec", 2 * 3600)
     out.setdefault("maxDailyTradesPerSymbol", 14)
     out.setdefault("perfGateMinSamples", 8)
     out.setdefault("perfGateMinWinRatePct", 40)

@@ -495,10 +495,28 @@ async def _verify_protective_orders(
         )
 
 
+def _protective_order_gtd_ms() -> int:
+    """Expiry for resting protective orders, as epoch ms; 0 means GTC (no expiry).
+
+    Binance's algo service answers 200 on every DELETE without cancelling, so a
+    TP/SL sibling left behind by a market close would rest forever — and its
+    stale trigger closes the NEXT position the moment price reaches it. A GTD
+    window bounds that hazard; the in-process guardian lock is the primary exit
+    path anyway, so a lapsed exchange backstop after the window is acceptable.
+    """
+    cfg = AUTO_TRADE.get("config") if isinstance(AUTO_TRADE.get("config"), dict) else {}
+    sec = int(cfg.get("protectiveOrderGtdSec", 7200) or 0)
+    if sec <= 0:
+        return 0
+    return int(time.time() * 1000) + sec * 1000
+
+
 async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp_pct: float, sl_pct: float, key: str, secret: str, base: str, tick_size: float, tick_size_str: str, hedge_mode: bool, position_side: str | None):
     close_side = "SELL" if side == "LONG" else "BUY"
 
     placed_levels: list[tuple[str, float]] = []
+    gtd_ms = _protective_order_gtd_ms()
+    gtd_params = {"timeInForce": "GTD", "goodTillDate": gtd_ms} if gtd_ms else {}
 
     async def _submit_exit_order(kind: str, base_pct: float):
         market_type = "TAKE_PROFIT_MARKET" if kind == "tp" else "STOP_MARKET"
@@ -541,6 +559,7 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
                 "algoType": "CONDITIONAL",
                 "triggerPrice": cur_price_str,
                 "workingType": "MARK_PRICE",
+                **gtd_params,
             }
             if hedge_mode and position_side:
                 algo_params["positionSide"] = position_side
@@ -555,6 +574,7 @@ async def _place_tp_sl(symbol: str, side: str, qty: float, entry_mark: float, tp
                 "type": market_type,
                 "stopPrice": cur_price_str,
                 "workingType": "MARK_PRICE",
+                **gtd_params,
             }
             legacy_fallback = {
                 "symbol": symbol,

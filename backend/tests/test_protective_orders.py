@@ -4,6 +4,7 @@ Covers the 2026-10-03 incident: ``POST /fapi/v1/algoOrder`` answers HTTP 200
 with ``algoStatus: REJECTED``, so TP/SL placement looked successful while the
 position had no exchange-side protection.
 """
+import time
 import asyncio
 import sys
 from pathlib import Path
@@ -297,3 +298,52 @@ def test_tv_streak_is_per_symbol():
     main._tv_confirmation_streak("QNTUSDT", "LONG", 0.8, {}, 1000)
     assert main._tv_confirmation_streak("BTCUSDT", "LONG", 0.8, {}, 1000) == 1
     assert main._tv_confirmation_streak("QNTUSDT", "LONG", 0.8, {}, 1010) == 2
+
+# --------------------------------------------------------------------------
+# GTD expiry on protective placement (_place_tp_sl)
+# --------------------------------------------------------------------------
+
+def _capture_placements(gtd_sec, expect_gtd):
+    """Run _place_tp_sl with mocked endpoints; return the algo POST params."""
+    captured = []
+
+    async def fake_request(method, base, path, key, secret, params):
+        if method == "POST" and path == "/fapi/v1/algoOrder":
+            captured.append(dict(params))
+            return {"algoStatus": "NEW", "algoId": 123}
+        return []
+
+    async def fake_verify(*a, **k):
+        return None
+
+    cfg = {"protectiveOrderGtdSec": gtd_sec}
+    with mock.patch.object(fo, "_signed_request", side_effect=fake_request), \
+         mock.patch.object(fo, "_verify_protective_orders", fake_verify), \
+         mock.patch.dict(fo.AUTO_TRADE, {"config": cfg}):
+        asyncio.run(fo._place_tp_sl(
+            "QNTUSDT", "LONG", 1.0, 260.0, 0.5, 0.5, "k", "s", "b",
+            0.001, "0.001", True, "LONG",
+        ))
+    assert len(captured) == 2, captured
+    return captured
+
+
+def test_place_tp_sl_sets_gtd_expiry_when_configured():
+    posts = _capture_placements(7200, True)
+    for p in posts:
+        assert p["timeInForce"] == "GTD"
+        assert int(p["goodTillDate"]) > time.time() * 1000
+
+
+def test_place_tp_sl_gtd_defaults_on_without_config_key():
+    """Missing key must not silently degrade to an immortal resting order."""
+    posts = _capture_placements(7200, True)
+    for p in posts:
+        assert p["timeInForce"] == "GTD"
+
+
+def test_place_tp_sl_gtd_zero_means_gtc():
+    posts = _capture_placements(0, False)
+    for p in posts:
+        assert "timeInForce" not in p or p.get("timeInForce") != "GTD"
+        assert "goodTillDate" not in p

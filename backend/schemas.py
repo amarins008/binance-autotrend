@@ -285,6 +285,7 @@ class AutoTradeStartRequest(BaseModel):
     tradingviewMaxFailures: int = Field(default=5, ge=1, le=20)
     tvConfirmReadings: int = Field(default=2, ge=1, le=10)
     tvConfirmWindowSec: int = Field(default=180, ge=30, le=1800)
+    protectiveOrderGtdSec: int = Field(default=7200, ge=0, le=604800)
     supervisorTradingViewHealthCooldownMinutes: int = Field(default=15, ge=5, le=120)
 
 
