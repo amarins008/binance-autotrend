@@ -6084,6 +6084,15 @@ async def _autotrade_loop():
                     _autotrade_skip("bad_utc_hour", f"Skip: bad UTC hour {utc_h:02d}")
                     await asyncio.sleep(cfg["intervalSec"])
                     continue
+            # Entry Time Window Guard — skip scan cycle outside allowed UTC hours
+            allowed_hours = cfg.get("entryAllowedHoursUtc")
+            if allowed_hours:
+                current_utc_hour = datetime.utcnow().hour
+                if current_utc_hour not in allowed_hours:
+                    _agent_mark("risk_manager", "blocked", "entry time window", f"UTC hour {current_utc_hour} not in allowed {allowed_hours}")
+                    _autotrade_skip("entry_time_window", f"Skip: UTC hour {current_utc_hour} not in allowed {allowed_hours} — skipping scan")
+                    await asyncio.sleep(cfg["intervalSec"])
+                    continue
             AUTO_TRADE["trades"] = [t for t in AUTO_TRADE["trades"] if now - t < 3600]
             if now - AUTO_TRADE["lastTradeAt"] < cfg["cooldownSec"]:
                 await asyncio.sleep(cfg["intervalSec"])
