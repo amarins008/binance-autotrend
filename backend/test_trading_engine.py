@@ -68,6 +68,32 @@ class TradingEngineTests(unittest.TestCase):
         cfg = apply_autotrade_defaults({"liveBadUtcHours": [7, 15, 16, 17, 19, 21]})
         self.assertEqual(cfg.get("liveBadUtcHours"), [15, 16, 17, 19, 21])
 
+    def test_apply_defaults_margin_based_sizing_ties_floor_to_cap(self):
+        # Case: marginBasedSizing=true, marginSizingMaxUsdt=8.0, usdtAmount=7.0
+        cfg = apply_autotrade_defaults({
+            "_configVersion": 23,
+            "symbol": "AUTO",
+            "marketScan": True,
+            "marginBasedSizing": True,
+            "marginSizingMaxUsdt": 8.0,
+            "usdtAmount": 7.0,
+        })
+        self.assertLessEqual(float(cfg.get("usdtAmount") or 0.0), 8.0)
+        self.assertLessEqual(float(cfg.get("tradeNotionalCapUsdt") or 0.0), float(cfg.get("marginSizingMaxUsdt") or 0.0))
+
+    def test_apply_defaults_margin_based_sizing_disabled_clamps_at_ten(self):
+        # Case: marginBasedSizing=false -> retains 10.0 floor
+        cfg = apply_autotrade_defaults({
+            "_configVersion": 23,
+            "symbol": "AUTO",
+            "marketScan": True,
+            "marginBasedSizing": False,
+            "marginSizingMaxUsdt": 8.0,
+            "usdtAmount": 7.0,
+        })
+        self.assertEqual(float(cfg.get("usdtAmount") or 0.0), 10.0)
+        self.assertGreaterEqual(float(cfg.get("tradeNotionalCapUsdt") or 0.0), 10.0)
+
     def test_confluence_chop_blocks(self):
         pk = {
             "trendUp": True,

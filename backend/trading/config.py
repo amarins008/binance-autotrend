@@ -742,14 +742,25 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
         except (TypeError, ValueError):
             cap_usdt = 80.0
         out["autoScanTradeNotionalCapUsdt"] = cap_usdt
+        if bool(out.get("marginBasedSizing", False)):
+            try:
+                margin_cap = float(out.get("marginSizingMaxUsdt", 25.0) or 25.0)
+            except (TypeError, ValueError):
+                margin_cap = 25.0
+            floor = min(10.0, margin_cap)
+            effective_cap = min(cap_usdt, margin_cap)
+        else:
+            floor = 10.0
+            effective_cap = cap_usdt
+
         out["tradeNotionalCapUsdt"] = min(
-            cap_usdt,
-            max(10.0, float(out.get("tradeNotionalCapUsdt", cap_usdt) or cap_usdt)),
+            effective_cap,
+            max(floor, float(out.get("tradeNotionalCapUsdt", effective_cap) or effective_cap)),
         )
         try:
-            out["usdtAmount"] = max(10.0, min(cap_usdt, float(out.get("usdtAmount", cap_usdt) or cap_usdt)))
+            out["usdtAmount"] = max(floor, min(effective_cap, float(out.get("usdtAmount", effective_cap) or effective_cap)))
         except (TypeError, ValueError):
-            out["usdtAmount"] = cap_usdt
+            out["usdtAmount"] = effective_cap
         try:
             out["adaptiveSizeBoostMaxPct"] = min(
                 12.0,
