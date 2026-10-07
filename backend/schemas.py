@@ -137,6 +137,7 @@ class AutoTradeStartRequest(BaseModel):
     scanFallbackNearEnabled: bool = True
     scanFallbackNearConfRelax: float = Field(default=0.04, ge=0.0, le=0.15)
     scanSidePreference: Literal["score", "long", "short"] = "score"
+    shortEntriesEnabled: bool = False
     whitelistSymbols: list[str] = Field(default_factory=list)
     scanDenySymbols: list[str] = Field(
         default_factory=lambda: ["XAUUSDT", "XAGUSDT", "SPCXUSDT", "CLUSDT", "MRVLUSDT", "INTCUSDT", "HYPEUSDT", "LABUSDT", "XRPUSDT", "DOGEUSDT", "NEARUSDT", "AKEUSDT", "BANKUSDT"]

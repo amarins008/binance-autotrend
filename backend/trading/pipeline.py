@@ -99,6 +99,18 @@ def evaluate_entry_plan(inp: EntryInputs) -> EntryPlan:
         _step(pipeline, "sizing_guard", False,
               "WARNING: session sizing not applied upstream — pipeline will NOT apply it")
 
+    short_enabled = bool(cfg.get("shortEntriesEnabled", False))
+    if signal == "SHORT" and not short_enabled:
+        _step(pipeline, "side", True, "SHORT blocked — long-only")
+        return EntryPlan(
+            False,
+            "side_blocked",
+            "Skip: SHORT entries disabled (long-only mode)",
+            signal,
+            conf,
+            pipeline=pipeline,
+        )
+
     if not _step(pipeline, "signal", signal in ("LONG", "SHORT"), signal):
         return EntryPlan(False, "signal_wait", "Skip: signal WAIT", signal, conf, pipeline=pipeline)
 

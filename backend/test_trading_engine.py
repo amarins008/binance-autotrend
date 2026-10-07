@@ -94,6 +94,15 @@ class TradingEngineTests(unittest.TestCase):
         self.assertEqual(float(cfg.get("usdtAmount") or 0.0), 10.0)
         self.assertGreaterEqual(float(cfg.get("tradeNotionalCapUsdt") or 0.0), 10.0)
 
+    def test_apply_defaults_short_entries_disabled_by_default(self):
+        cfg = apply_autotrade_defaults({})
+        self.assertFalse(cfg.get("shortEntriesEnabled"))
+
+    def test_schema_short_entries_disabled_by_default(self):
+        from schemas import AutoTradeStartRequest
+        req = AutoTradeStartRequest(usdtAmount=50.0)
+        self.assertFalse(req.shortEntriesEnabled)
+
     def test_confluence_chop_blocks(self):
         pk = {
             "trendUp": True,

@@ -439,6 +439,7 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("cooldownSec", 20)
     out.setdefault("maxTradesPerHour", 8)
     out.setdefault("allowFlip", False)
+    out.setdefault("shortEntriesEnabled", False)
     out.setdefault("strongFlipEnabled", True)
     out.setdefault("strongFlipMinConfidence", 0.90)
     out.setdefault("strongFlipMinScoreGap", 1.5)

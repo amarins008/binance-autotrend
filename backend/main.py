@@ -7043,7 +7043,8 @@ async def _autotrade_loop():
                 _agent_mark("strategy_builder", "blocked", skip_code, skip_msg)
                 _autotrade_skip(skip_code, f"Skip: {skip_msg}")
                 if scan_mode and picked_symbol:
-                    _cooldown_scan_symbol(str(picked_symbol), 30, f"pipeline:{skip_code}")
+                    if skip_code != "side_blocked":
+                        _cooldown_scan_symbol(str(picked_symbol), 30, f"pipeline:{skip_code}")
                 await asyncio.sleep(cfg["intervalSec"])
                 continue
 
