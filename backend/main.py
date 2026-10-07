@@ -3327,6 +3327,12 @@ def _symbol_perf_gate(cfg: dict, symbol: str) -> tuple[bool, str, dict]:
             locks.pop(sym, None)
             AUTO_TRADE["perfLocks"] = locks
             lock_until = 0
+            deny = set(_parse_symbol_whitelist(cfg.get("scanDenySymbols")))
+            if sym in deny:
+                deny.discard(sym)
+                cfg["scanDenySymbols"] = sorted(deny)
+                if isinstance(AUTO_TRADE.get("config"), dict):
+                    AUTO_TRADE["config"]["scanDenySymbols"] = sorted(deny)
         else:
             active_perf = dict(perf)
             active_perf["lockReason"] = str(st.get("reason", "active") or "active")
@@ -3337,6 +3343,12 @@ def _symbol_perf_gate(cfg: dict, symbol: str) -> tuple[bool, str, dict]:
     if lock_until > 0 and lock_until <= now:
         locks.pop(sym, None)
         AUTO_TRADE["perfLocks"] = locks
+        deny = set(_parse_symbol_whitelist(cfg.get("scanDenySymbols")))
+        if sym in deny:
+            deny.discard(sym)
+            cfg["scanDenySymbols"] = sorted(deny)
+            if isinstance(AUTO_TRADE.get("config"), dict):
+                AUTO_TRADE["config"]["scanDenySymbols"] = sorted(deny)
 
     pr = _load_single_profile(sym)
     reward_score = float(pr.get("rewardScore", 0.0) or 0.0) if isinstance(pr, dict) else 0.0
@@ -3378,6 +3390,36 @@ def _symbol_perf_gate(cfg: dict, symbol: str) -> tuple[bool, str, dict]:
         AUTO_TRADE["perfLocks"] = locks
         return False, "perf_lock_new", perf
     return True, "", perf
+
+
+def _prune_perf_locks(cfg: dict | None = None, now: int | None = None) -> dict:
+    now_i = int(now or time.time())
+    locks = AUTO_TRADE.get("perfLocks")
+    if not isinstance(locks, dict):
+        locks = {}
+    active_locks = {}
+    expired_syms = set()
+    for s, data in list(locks.items()):
+        if not isinstance(data, dict):
+            expired_syms.add(str(s).upper().strip())
+            continue
+        sym = str(s).upper().strip()
+        until = int(data.get("until", 0) or 0)
+        if until <= now_i:
+            expired_syms.add(sym)
+        else:
+            active_locks[sym] = data
+    AUTO_TRADE["perfLocks"] = active_locks
+
+    target_cfg = cfg if isinstance(cfg, dict) else AUTO_TRADE.get("config")
+    if isinstance(target_cfg, dict):
+        cur_deny = set(_parse_symbol_whitelist(target_cfg.get("scanDenySymbols")))
+        if expired_syms:
+            cur_deny.difference_update(expired_syms)
+        target_cfg["scanDenySymbols"] = sorted(cur_deny)
+        if target_cfg is not AUTO_TRADE.get("config") and isinstance(AUTO_TRADE.get("config"), dict):
+            AUTO_TRADE["config"]["scanDenySymbols"] = sorted(cur_deny)
+    return active_locks
 
 
 def _switch_fixed_symbol_to_scan(cfg: dict, symbol: str, reason: str, detail: str = "", *, lock_minutes: int = 0) -> dict:
@@ -5763,7 +5805,102 @@ async def autotrade_update_config(payload: dict = Body(default_factory=dict)):
     cur = dict(AUTO_TRADE.get("config") or {})
     if not cur:
         return {"ok": False, "updated": False, "reason": "NO_ACTIVE_CONFIG"}
+
+    # Handle perfLocks payload if present (fail-closed, converts list/dict to runtime dict)
+    parsed_locks: dict[str, dict] = {}
+    if "perfLocks" in (payload or {}):
+        raw_locks = (payload or {}).get("perfLocks")
+        now_ts = int(time.time())
+        default_lock_min = max(1, int(cur.get("perfLockMinutes", 90) or 90))
+        if isinstance(raw_locks, list):
+            for item in raw_locks:
+                if isinstance(item, str):
+                    sym = str(item).upper().strip()
+                    if not sym or not re.match(r"^[A-Z0-9_:-]{3,30}$", sym):
+                        return {"ok": False, "updated": False, "reason": f"INVALID_PERF_LOCKS_SYMBOL: {item}"}
+                    parsed_locks[sym] = {
+                        "until": now_ts + (default_lock_min * 60),
+                        "at": now_ts,
+                        "reason": "operator",
+                    }
+                elif isinstance(item, dict):
+                    sym = str(item.get("symbol") or item.get("name") or "").upper().strip()
+                    if not sym or not re.match(r"^[A-Z0-9_:-]{3,30}$", sym):
+                        return {"ok": False, "updated": False, "reason": f"INVALID_PERF_LOCKS_SYMBOL: {item}"}
+                    mins = int(item.get("minutes", default_lock_min) or default_lock_min)
+                    until = int(item.get("until", now_ts + (mins * 60)) or (now_ts + (mins * 60)))
+                    reason = str(item.get("reason", "operator") or "operator")
+                    at_val = int(item.get("at", now_ts) or now_ts)
+                    parsed_locks[sym] = {"until": until, "at": at_val, "reason": reason}
+                else:
+                    return {
+                        "ok": False,
+                        "updated": False,
+                        "reason": f"INVALID_PERF_LOCKS_ITEM_TYPE: expected str or dict, got {type(item).__name__}",
+                    }
+        elif isinstance(raw_locks, dict):
+            for raw_sym, val in raw_locks.items():
+                sym = str(raw_sym).upper().strip()
+                if not sym or not re.match(r"^[A-Z0-9_:-]{3,30}$", sym):
+                    return {"ok": False, "updated": False, "reason": f"INVALID_PERF_LOCKS_SYMBOL: {raw_sym}"}
+                if isinstance(val, dict):
+                    mins = int(val.get("minutes", default_lock_min) or default_lock_min)
+                    until = int(val.get("until", now_ts + (mins * 60)) or (now_ts + (mins * 60)))
+                    reason = str(val.get("reason", "operator") or "operator")
+                    at_val = int(val.get("at", now_ts) or now_ts)
+                    parsed_locks[sym] = {"until": until, "at": at_val, "reason": reason}
+                elif isinstance(val, (int, float)):
+                    if val > 1_000_000_000:
+                        until = int(val)
+                    else:
+                        until = now_ts + int(val * 60)
+                    parsed_locks[sym] = {"until": until, "at": now_ts, "reason": "operator"}
+                else:
+                    return {
+                        "ok": False,
+                        "updated": False,
+                        "reason": f"INVALID_PERF_LOCKS_VALUE: expected dict or number, got {type(val).__name__}",
+                    }
+        else:
+            return {
+                "ok": False,
+                "updated": False,
+                "reason": f"INVALID_PERF_LOCKS_TYPE: expected list or dict, got {type(raw_locks).__name__}",
+            }
+
+        existing_locks = AUTO_TRADE.get("perfLocks")
+        if not isinstance(existing_locks, dict):
+            existing_locks = {}
+        merged_locks = dict(existing_locks)
+        for sym, new_entry in parsed_locks.items():
+            curr_entry = merged_locks.get(sym)
+            if isinstance(curr_entry, dict):
+                curr_until = int(curr_entry.get("until", 0) or 0)
+                new_until = int(new_entry.get("until", 0) or 0)
+                if curr_until > new_until and curr_until > now_ts:
+                    continue
+            merged_locks[sym] = new_entry
+        AUTO_TRADE["perfLocks"] = merged_locks
+
+        cur_deny = set(_parse_symbol_whitelist(cur.get("scanDenySymbols")))
+        if parsed_locks:
+            cur_deny.update(parsed_locks.keys())
+        cur["scanDenySymbols"] = sorted(cur_deny)
+        cur["perfLocks"] = sorted(list(parsed_locks.keys()))
+
+        if parsed_locks:
+            max_rem_min = max(1, max((e["until"] - now_ts) // 60 for e in parsed_locks.values()))
+            _autotrade_log(
+                f"AutoTrade operator perfLocks applied: {len(parsed_locks)} symbols [{', '.join(sorted(parsed_locks.keys()))}] (locked ~{max_rem_min}m)"
+            )
+
     cur.update(payload or {})
+    if "perfLocks" in (payload or {}):
+        cur["perfLocks"] = sorted(list(parsed_locks.keys()))
+        cur_deny = set(_parse_symbol_whitelist(cur.get("scanDenySymbols")))
+        if parsed_locks:
+            cur_deny.update(parsed_locks.keys())
+        cur["scanDenySymbols"] = sorted(cur_deny)
     _requested_min_conf = cur.get("minConfidence")
     _enforce_entry_confidence_floor(cur)
     if _requested_min_conf is not None and cur.get("minConfidence") != _requested_min_conf:
@@ -6097,6 +6234,8 @@ async def _autotrade_loop():
             if now - AUTO_TRADE["lastTradeAt"] < cfg["cooldownSec"]:
                 await asyncio.sleep(cfg["intervalSec"])
                 continue
+
+            _prune_perf_locks(cfg, now)
 
             # Symbol-scoped safety brake after repeated recent losses.
             if risk_cooldown_enabled:

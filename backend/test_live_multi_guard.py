@@ -1719,6 +1719,113 @@ class TestSymbolPerfGate(unittest.TestCase):
         self.assertEqual(out, perf)
         self.assertEqual(main.AUTO_TRADE["perfLocks"]["BADUSDT"]["reason"], "payoff")
 
+    def test_autotrade_update_config_converts_perflocks_and_syncs_to_scan_deny(self):
+        main.AUTO_TRADE["config"] = {
+            "symbol": "AUTO",
+            "perfLockMinutes": 90,
+            "scanDenySymbols": ["EXISTINGUSDT"],
+        }
+        main.AUTO_TRADE["perfLocks"] = {}
+        now = int(main.time.time())
+
+        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            res = main.asyncio.run(
+                main.autotrade_update_config({"perfLocks": ["AAAUSDT", "BBBUSDT"]})
+            )
+
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["updated"])
+
+        # assert AUTO_TRADE["perfLocks"] เป็น dict มี 2 key + until > now
+        locks = main.AUTO_TRADE.get("perfLocks")
+        self.assertIsInstance(locks, dict)
+        self.assertIn("AAAUSDT", locks)
+        self.assertIn("BBBUSDT", locks)
+        self.assertEqual(len(locks), 2)
+        self.assertGreater(locks["AAAUSDT"]["until"], now)
+        self.assertGreater(locks["BBBUSDT"]["until"], now)
+        self.assertEqual(locks["AAAUSDT"]["reason"], "operator")
+
+        # assert อยู่ใน scanDenySymbols
+        deny = main.AUTO_TRADE["config"].get("scanDenySymbols", [])
+        self.assertIn("AAAUSDT", deny)
+        self.assertIn("BBBUSDT", deny)
+        self.assertIn("EXISTINGUSDT", deny)
+
+        # เทสต์ expire path
+        future = now + (90 * 60) + 10
+        main._prune_perf_locks(main.AUTO_TRADE["config"], now=future)
+        self.assertNotIn("AAAUSDT", main.AUTO_TRADE["perfLocks"])
+        self.assertNotIn("BBBUSDT", main.AUTO_TRADE["perfLocks"])
+        self.assertNotIn("AAAUSDT", main.AUTO_TRADE["config"]["scanDenySymbols"])
+        self.assertNotIn("BBBUSDT", main.AUTO_TRADE["config"]["scanDenySymbols"])
+        self.assertIn("EXISTINGUSDT", main.AUTO_TRADE["config"]["scanDenySymbols"])
+
+    def test_autotrade_update_config_perflocks_dict_format(self):
+        main.AUTO_TRADE["config"] = {
+            "symbol": "AUTO",
+            "perfLockMinutes": 90,
+            "scanDenySymbols": [],
+        }
+        main.AUTO_TRADE["perfLocks"] = {}
+        now = int(main.time.time())
+
+        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            res = main.asyncio.run(
+                main.autotrade_update_config(
+                    {"perfLocks": {"CCCUSDT": {"minutes": 120, "reason": "manual_review"}}}
+                )
+            )
+
+        self.assertTrue(res["ok"])
+        locks = main.AUTO_TRADE.get("perfLocks")
+        self.assertIsInstance(locks, dict)
+        self.assertIn("CCCUSDT", locks)
+        self.assertEqual(locks["CCCUSDT"]["reason"], "manual_review")
+        self.assertGreaterEqual(locks["CCCUSDT"]["until"], now + (120 * 60))
+        self.assertIn("CCCUSDT", main.AUTO_TRADE["config"]["scanDenySymbols"])
+
+    def test_autotrade_update_config_perflocks_fail_closed(self):
+        main.AUTO_TRADE["config"] = {"symbol": "AUTO", "scanDenySymbols": []}
+        main.AUTO_TRADE["perfLocks"] = {}
+
+        # Invalid string type
+        with mock.patch.object(main, "_persist_autotrade_snapshot"):
+            res1 = main.asyncio.run(main.autotrade_update_config({"perfLocks": "INVALID_NOT_LIST"}))
+        self.assertFalse(res1["ok"])
+        self.assertIn("INVALID_PERF_LOCKS", res1["reason"])
+
+        # Invalid item type in list
+        with mock.patch.object(main, "_persist_autotrade_snapshot"):
+            res2 = main.asyncio.run(main.autotrade_update_config({"perfLocks": [12345]}))
+        self.assertFalse(res2["ok"])
+        self.assertIn("INVALID_PERF_LOCKS", res2["reason"])
+
+        # Invalid symbol character
+        with mock.patch.object(main, "_persist_autotrade_snapshot"):
+            res3 = main.asyncio.run(main.autotrade_update_config({"perfLocks": ["BAD$$$SYM"]}))
+        self.assertFalse(res3["ok"])
+        self.assertIn("INVALID_PERF_LOCKS", res3["reason"])
+
+        # Ensure perfLocks remained untouched (empty dict)
+        self.assertEqual(main.AUTO_TRADE.get("perfLocks"), {})
+
+    def test_autotrade_update_config_perflocks_preserves_longer_active_lock(self):
+        main.AUTO_TRADE["config"] = {"symbol": "AUTO", "perfLockMinutes": 90, "scanDenySymbols": []}
+        now = int(main.time.time())
+        longer_until = now + (180 * 60)
+        main.AUTO_TRADE["perfLocks"] = {
+            "AAAUSDT": {"until": longer_until, "at": now, "reason": "long_active"}
+        }
+
+        with mock.patch.object(main, "_persist_autotrade_snapshot"), mock.patch.object(main, "_autotrade_log"):
+            res = main.asyncio.run(main.autotrade_update_config({"perfLocks": ["AAAUSDT"]}))
+
+        self.assertTrue(res["ok"])
+        # Should keep longer until, not overwrite with 90m
+        self.assertEqual(main.AUTO_TRADE["perfLocks"]["AAAUSDT"]["until"], longer_until)
+        self.assertEqual(main.AUTO_TRADE["perfLocks"]["AAAUSDT"]["reason"], "long_active")
+
 
 class TestStatusLitePositionCard(unittest.TestCase):
     def setUp(self):
