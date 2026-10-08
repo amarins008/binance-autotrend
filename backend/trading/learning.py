@@ -1418,6 +1418,8 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         else:
             trade_log_entry["mode"] = str(mode).upper()
         
+
+        
         # Attach TV data from disk (tv_signal.json) — snapshot at time of close (both LIVE and PAPER)
         try:
             _tv_path = VAULT_DIR / "symbols" / sym / "tv_signal.json"
@@ -1436,6 +1438,8 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
         except Exception as e:
             print(f"[Record Trade] {sym}: Error reading TV signal file: {e}")
         
+        # ---------- New entry‑fields (snapshot info) ----------
+
         # Attach params_at_entry and guardian_stats from per-symbol storage
         # (lock may already be popped from in-memory dict, so read from disk)
         try:
@@ -1445,19 +1449,38 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             if isinstance(_gl, dict) and _gl:
                 _snap = _gl.get("entrySnapshot", {})
                 if isinstance(_snap, dict):
+                    # copy entry fields if present
+                    for _sk, _dk in (("entryConfidence", "entryConfidence"),
+                                      ("entryScore", "entryScore"),
+                                      ("patternBias", "biasValue"),
+                                      ("patternScore", "biasConfShift")):
+                        if _snap.get(_sk) is not None:
+                            trade_log_entry[_dk] = _snap[_sk]
+                    # tvWaitMinConfUsed placeholder (set None if tvConfidence present)
+                    if _snap.get("tvConfidence") is not None:
+                        trade_log_entry["tvWaitMinConfUsed"] = None
+                    # entryNotional from snapshot (fallback to 'notional')
+                    _notional = _snap.get("entryNotional") or _snap.get("notional")
+                    if _notional is not None:
+                        try:
+                            trade_log_entry["entryNotional"] = float(_notional)
+                        except Exception:
+                            pass
+                    # copy other optional fields if present (no zero defaults)
+                    for _sk in ("tvConfirmHits", "biasValue", "perfLockedAtEntry",
+                                "leverageAtEntry", "feesPaidOnEntry", "adaptiveMinConf"):
+                        if _snap.get(_sk) is not None:
+                            trade_log_entry[_sk] = _snap[_sk]
+
+
+
+                    # existing fields for completeness / legacy
                     if _snap.get("params_at_entry"):
                         trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
-                        print(f"[Record Trade] {sym}: Found params_at_entry: {_snap['params_at_entry']}")
-                    else:
-                        print(f"[Record Trade] {sym}: No params_at_entry in entrySnapshot")
                     if _snap.get("tvSignal"):
                         trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
-                        print(f"[Record Trade] {sym}: TV at entry - signal={_snap['tvSignal']}")
-                    else:
-                        print(f"[Record Trade] {sym}: No tvSignal in entrySnapshot")
                     if _snap.get("tvConfidence") is not None:
                         trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
-                        print(f"[Record Trade] {sym}: TV at entry confidence={_snap['tvConfidence']}")
                 _gs = _gl.get("guardianStats", {})
                 if isinstance(_gs, dict) and _gs:
                     trade_log_entry["guardian_stats"] = {
@@ -1474,7 +1497,7 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
                 print(f"[Record Trade] {sym}: No guardian lock found")
         except Exception as e:
             print(f"[Record Trade] {sym}: Error reading guardian lock: {e}")
-        
+
         _append_trade_log(trade_log_entry)
         ctx.record_trade(trade_log_entry)
         append_trade_memory(VAULT_DIR, trade_log_entry, mode)
