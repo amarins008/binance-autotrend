@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Any
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from uuid import uuid4
@@ -10259,7 +10259,6 @@ def learning_train_now(payload: dict = Body(default_factory=dict)):
         return {"ok": False, "error": str(e)}
 
 
-# ── IP info helpers ─────────────────────────────────────────────────────
 _PUBLIC_IP_CACHE: dict[str, Any] = {}
 _PUBLIC_IP_LOCK = threading.Lock()
 _ACCESS_HOST: str | None = None  # last host the dashboard was actually accessed from (e.g. Tailscale IP)
