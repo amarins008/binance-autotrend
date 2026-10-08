@@ -1,6 +1,7 @@
-import sys, os
-sys.path.append(os.getcwd())
-from backend.trading import learning as learning_mod
+import sys, os, pathlib
+# Add project root to sys.path
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from trading import learning as learning_mod
 from backend import main
 import unittest
 
@@ -37,7 +38,10 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
             "biasValue": 0.01,
         }
         # mock per_symbol_storage module
-        import types
+        import types, tempfile, shutil
+        temp_dir = tempfile.mkdtemp()
+        # Ensure learning_mod uses temp VAULT_DIR to avoid side effects
+        learning_mod.VAULT_DIR = temp_dir
         class MockPerSymbolStorage:
             def __init__(self, *a, **kw):
                 pass
@@ -49,12 +53,15 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
         learning_mod._append_trade_log = lambda entry: captured.update(entry)
         trade = {"pnl": 1.2, "closedAt": 1700000000, "reason": "LOCAL_TP_HIT"}
         learning_mod._record_learning_trade("TESTUSDT", trade, "LIVE")
+        # cleanup temp dir
+        shutil.rmtree(temp_dir)
+
         # assertions
         self.assertEqual(captured["entryConfidence"], dummy_snapshot["entryConfidence"])
         self.assertEqual(captured["entryScore"], dummy_snapshot["entryScore"])
         self.assertEqual(captured["biasValue"], dummy_snapshot["biasValue"])
         self.assertEqual(captured["biasConfShift"], dummy_snapshot["patternScore"])
-        self.assertIsNone(captured.get("tvWaitMinConfUsed"))
+        self.assertEqual(captured["tvWaitMinConfUsed"], dummy_snapshot["tvWaitMinConfUsed"])
         self.assertEqual(captured["entryNotional"], dummy_snapshot["entryNotional"])
         self.assertEqual(captured["tvConfirmHits"], dummy_snapshot["tvConfirmHits"])
         self.assertEqual(captured["perfLockedAtEntry"], dummy_snapshot["perfLockedAtEntry"])
