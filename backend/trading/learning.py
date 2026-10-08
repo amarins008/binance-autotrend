@@ -1454,7 +1454,7 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
                     for _sk, _dk in (("entryConfidence", "entryConfidence"),
                                       ("entryScore", "entryScore"),
                                       ("patternBias", "biasValue"),
-                                      ("patternScore", "biasConfShift")):
+                                      ("patternScore", "patternScoreAtEntry")):
                         if _snap.get(_sk) is not None:
                             trade_log_entry[_dk] = _snap[_sk]
                     # tvWaitMinConfUsed from snapshot (if present)

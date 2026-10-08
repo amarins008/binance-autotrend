@@ -35,7 +35,6 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
             "leverageAtEntry": 4,
             "feesPaidOnEntry": 0.04,
             "adaptiveMinConf": 0.78,
-            "biasValue": 0.01,
         }
         # mock per_symbol_storage module
         import types, tempfile, shutil
@@ -59,8 +58,8 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
         # assertions
         self.assertEqual(captured["entryConfidence"], dummy_snapshot["entryConfidence"])
         self.assertEqual(captured["entryScore"], dummy_snapshot["entryScore"])
-        self.assertEqual(captured["biasValue"], dummy_snapshot["biasValue"])
-        self.assertEqual(captured["biasConfShift"], dummy_snapshot["patternScore"])
+        self.assertEqual(captured["biasValue"], dummy_snapshot["patternBias"])
+        self.assertEqual(captured["patternScoreAtEntry"], dummy_snapshot["patternScore"])
         self.assertEqual(captured["tvWaitMinConfUsed"], dummy_snapshot["tvWaitMinConfUsed"])
         self.assertEqual(captured["entryNotional"], dummy_snapshot["entryNotional"])
         self.assertEqual(captured["tvConfirmHits"], dummy_snapshot["tvConfirmHits"])
@@ -68,7 +67,6 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
         self.assertEqual(captured["leverageAtEntry"], dummy_snapshot["leverageAtEntry"])
         self.assertEqual(captured["feesPaidOnEntry"] , dummy_snapshot["feesPaidOnEntry"])
         self.assertEqual(captured["adaptiveMinConf"], dummy_snapshot["adaptiveMinConf"])
-        self.assertEqual(captured["biasValue"], dummy_snapshot["biasValue"])
 
 if __name__ == "__main__":
     unittest.main()
