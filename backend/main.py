@@ -55,7 +55,7 @@ from obsidian_memory import (
 from trading.close_reconciler import reconcile_cycle as _reconcile_close_cycle
 from trading.regime import detect_market_regime
 from trading.vol_model import preferred_sizing_vol_pct
-from trading.config import ENTRY_MIN_CONFIDENCE_FLOOR, apply_autotrade_defaults
+from trading.config import CONFIG_VERSION, ENTRY_MIN_CONFIDENCE_FLOOR, apply_autotrade_defaults
 from trading.live_guardian import (
     _manage_live_open_positions_once,
     _live_multi_profit_lock_manage,
@@ -2933,7 +2933,7 @@ async def _lifespan(app: FastAPI):
             if SNAPSHOT_PATH.exists():
                 snap_data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
             was_running = bool(snap_data.get("running"))
-            cfg = snap_data.get("config")
+            cfg = AUTO_TRADE.get("config") or snap_data.get("config")
             if not was_running or not isinstance(cfg, dict) or not cfg.get("symbol"):
                 return
             force_single_present = "orphanAutoAdoptForceSingleSymbol" in cfg
@@ -2960,6 +2960,7 @@ async def _lifespan(app: FastAPI):
             AUTO_TRADE["startedAt"] = int(time.time())
             _sync_autotrade_leverage_cap_from_cfg(cfg)
             AUTO_TRADE["config"] = apply_autotrade_defaults(copy.deepcopy(cfg))
+            _enforce_entry_confidence_floor(AUTO_TRADE["config"])
             AUTO_TRADE["consecutiveErrors"] = 0
             AUTO_TRADE["lastSkip"] = None
             AUTO_TRADE["scanBoard"] = snap_data.get("scanBoard") if isinstance(snap_data.get("scanBoard"), list) else []
@@ -5383,6 +5384,133 @@ async def _flush_snapshot_async(force: bool = False):
     await asyncio.to_thread(_persist_autotrade_snapshot, force=force)
 
 
+_KNOWN_LIST_CONFIG_KEYS = {
+    "whitelistSymbols", "scanDenySymbols", "denySymbols", "noTradeWindows",
+    "liveBadUtcHours", "entryAllowedHoursUtc", "blockedEntryPatterns",
+}
+
+_KNOWN_BOOL_CONFIG_KEYS = {
+    "leverageAutoEnabled", "adaptiveLeverageEnabled", "requireVisionConsensus",
+    "allowFlip", "shortEntriesEnabled", "strongFlipEnabled", "strongFlipStructureConfirmEnabled",
+    "aggressiveScalp", "earlyEntryEnabled", "earlyEntryPullbackResetEnabled",
+    "holdWinners", "aiTpSlFromLearning", "marketScan", "scanFallbackNearEnabled",
+    "adaptiveSizing", "feeOptimalSizingEnabled", "tpSlScaleWithNotional",
+    "supervisorSizeStreakEnabled", "supervisorAutoTuneEnabled", "supervisorAutoHealScanDriftEnabled",
+    "marginBasedSizing", "htfStrictEnabled", "ema200StrictEnabled", "atrTpSlEnabled",
+    "benchmarkFilterEnabled", "pairLockEnabled", "riskCooldownEnabled",
+    "riskCooldownPauseOnVolatile", "tradingviewEnabled", "momentumDirectionConfirmation",
+    "tradingviewSlTrailingEnabled", "tradingviewTpExtensionEnabled", "tradingviewEarlyExitEnabled",
+    "tvEarlyExitStructureConfirm", "orphanAutoAdoptEnabled", "orphanAutoAdoptForceSingleSymbol",
+    "orphanAutoAdoptMultiEnabled", "learningRewardEnabled", "learningPnlClipEnabled",
+    "learningBehaviorRewardEnabled", "qualityLessonsLiveOnly", "qualityLessonsUseRegime",
+    "feeAdaptiveNetEnabled", "todayPerformanceGuardEnabled", "tpSlTargetUsdtEnabled",
+}
+
+
+def _scrub_and_merge_config(raw_cfg: dict, base_cfg: dict) -> dict:
+    if not isinstance(raw_cfg, dict):
+        return copy.deepcopy(base_cfg)
+
+    merged = copy.deepcopy(base_cfg)
+    merged.setdefault("whitelistSymbols", [])
+    merged.setdefault("scanDenySymbols", [])
+    merged.setdefault("denySymbols", [])
+    merged.setdefault("noTradeWindows", [])
+    merged.setdefault("liveBadUtcHours", [])
+    merged.setdefault("entryAllowedHoursUtc", [])
+
+    for k, v in raw_cfg.items():
+        if v is None:
+            continue
+        try:
+            expected = base_cfg.get(k)
+            # 1. Booleans
+            if isinstance(expected, bool) or k in _KNOWN_BOOL_CONFIG_KEYS or k.endswith("Enabled"):
+                if isinstance(v, bool):
+                    merged[k] = v
+                elif isinstance(v, (int, str)) and str(v).strip().lower() in ("true", "1", "yes"):
+                    merged[k] = True
+                elif isinstance(v, (int, str)) and str(v).strip().lower() in ("false", "0", "no"):
+                    merged[k] = False
+
+            # 2. Lists
+            elif isinstance(expected, list) or k in _KNOWN_LIST_CONFIG_KEYS or k.endswith("Symbols") or k.endswith("Windows"):
+                if isinstance(v, list):
+                    if k in ("whitelistSymbols", "scanDenySymbols", "denySymbols"):
+                        valid_syms = [
+                            str(s).upper().strip()
+                            for s in v
+                            if isinstance(s, str) and re.match(r"^[A-Z0-9_:-]{2,30}$", str(s).upper().strip())
+                        ]
+                        merged[k] = sorted(set(valid_syms))
+                    elif k == "noTradeWindows":
+                        merged[k] = [str(w).strip() for w in v if isinstance(w, str)]
+                    elif k in ("liveBadUtcHours", "entryAllowedHoursUtc"):
+                        merged[k] = [int(h) for h in v if str(h).strip().isdigit() and 0 <= int(h) <= 23]
+                    else:
+                        merged[k] = list(v)
+
+            # 3. Integers
+            elif (isinstance(expected, int) and not isinstance(expected, bool)) or (
+                not isinstance(v, bool) and isinstance(v, int) and not isinstance(expected, float) and not isinstance(expected, str)
+            ):
+                if not isinstance(v, bool):
+                    i_val = int(v)
+                    if k in ("leverage", "leverageMin", "leverageMax", "adaptiveLeverageMax"):
+                        merged[k] = max(1, min(25, i_val))
+                    elif i_val >= 0:
+                        merged[k] = i_val
+
+            # 4. Floats
+            elif isinstance(expected, float) or (not isinstance(v, bool) and isinstance(v, (float, int)) and not isinstance(expected, (str, list, dict))):
+                if not isinstance(v, bool):
+                    f_val = float(v)
+                    if math.isfinite(f_val):
+                        if k in ("minConfidence", "minConfidenceHardFloor", "earlyEntryMinConfidence",
+                                 "holdMinConfidence", "tvWaitMinConf", "biasGateNeutralConfMin",
+                                 "htfMinStrength", "strongFlipMinConfidence"):
+                            if 0.0 <= f_val <= 1.0:
+                                merged[k] = f_val
+                        elif k in ("usdtAmount", "takeProfitPct", "stopLossPct"):
+                            if f_val > 0.0:
+                                merged[k] = f_val
+                        elif k in ("tradeNotionalCapUsdt", "autoScanTradeNotionalCapUsdt",
+                                   "marginSizingMaxUsdt", "marginSizingMinUsdt", "feeMinOrderUsdt",
+                                   "maxSpreadBps", "maxSlippageBps", "trailingStopPct"):
+                            if f_val >= 0.0:
+                                merged[k] = f_val
+                        else:
+                            merged[k] = f_val
+
+            # 5. Strings
+            elif isinstance(expected, str) or k in ("symbol", "primarySymbol", "marginType", "executionMode", "scanSidePreference"):
+                if isinstance(v, str):
+                    s_val = v.strip()
+                    if k in ("symbol", "primarySymbol"):
+                        if re.match(r"^[A-Z0-9_:-]{2,30}$", s_val.upper()):
+                            merged[k] = s_val.upper()
+                    elif k == "marginType":
+                        if s_val.upper() in ("ISOLATED", "CROSSED"):
+                            merged[k] = s_val.upper()
+                    elif k == "executionMode":
+                        if s_val.upper() in ("LIVE", "PAPER"):
+                            merged[k] = s_val.upper()
+                    elif k == "scanSidePreference":
+                        if s_val.lower() in ("score", "long", "short"):
+                            merged[k] = s_val.lower()
+                    else:
+                        merged[k] = s_val
+
+            # 6. Dicts
+            elif isinstance(expected, dict) or isinstance(v, dict):
+                if isinstance(v, dict):
+                    merged[k] = copy.deepcopy(v)
+        except Exception:
+            continue
+
+    return merged
+
+
 def _load_autotrade_snapshot():
     AUTO_TRADE["_snapshot_recovered_log"] = None
     AUTO_TRADE["_snapshot_loaded_at"] = None
@@ -5393,6 +5521,28 @@ def _load_autotrade_snapshot():
         # Paper-trading mode removed 2026-08-24 (Boss directive): LIVE-only.
         # Do not restore any paper position/state from snapshot.
         _paper_reset()
+
+        # Restore and scrub config from snapshot
+        raw_cfg = data.get("config")
+        if isinstance(raw_cfg, dict) and raw_cfg:
+            base_cfg = dict(AUTO_TRADE.get("config") or {})
+            base_cfg = apply_autotrade_defaults(base_cfg)
+            _enforce_entry_confidence_floor(base_cfg)
+            scrubbed_cfg = _scrub_and_merge_config(raw_cfg, base_cfg)
+            if "_configVersion" not in scrubbed_cfg:
+                scrubbed_cfg["_configVersion"] = CONFIG_VERSION
+            scrubbed_cfg = apply_autotrade_defaults(scrubbed_cfg)
+            _enforce_entry_confidence_floor(scrubbed_cfg)
+            AUTO_TRADE["config"] = copy.deepcopy(scrubbed_cfg)
+            _sync_autotrade_leverage_cap_from_cfg(scrubbed_cfg)
+
+        plks = data.get("perfLocks")
+        if isinstance(plks, dict) and plks:
+            existing_plks = AUTO_TRADE.get("perfLocks") if isinstance(AUTO_TRADE.get("perfLocks"), dict) else {}
+            merged_plks = dict(existing_plks)
+            merged_plks.update(plks)
+            AUTO_TRADE["perfLocks"] = merged_plks
+
         sb = data.get("scanBoard")
         AUTO_TRADE["scanBoard"] = sb[:10] if isinstance(sb, list) else []
         cw = data.get("cooldownWatchlist")

@@ -1,5 +1,11 @@
-﻿import unittest
+﻿import sys
+import unittest
+import tempfile
+import json
+import math
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unittest import mock
 
 import main
@@ -1825,6 +1831,146 @@ class TestSymbolPerfGate(unittest.TestCase):
         # Should keep longer until, not overwrite with 90m
         self.assertEqual(main.AUTO_TRADE["perfLocks"]["AAAUSDT"]["until"], longer_until)
         self.assertEqual(main.AUTO_TRADE["perfLocks"]["AAAUSDT"]["reason"], "long_active")
+
+
+class TestSnapshotConfigRestore(unittest.TestCase):
+    def setUp(self):
+        self.prev_config = main.AUTO_TRADE.get("config")
+        self.prev_perf_locks = main.AUTO_TRADE.get("perfLocks")
+        self.prev_running = main.AUTO_TRADE.get("running")
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.fake_snapshot_path = Path(self.temp_dir.name) / "autotrade_snapshot.json"
+        self.orig_snapshot_path = main.SNAPSHOT_PATH
+        main.SNAPSHOT_PATH = self.fake_snapshot_path
+
+    def tearDown(self):
+        main.SNAPSHOT_PATH = self.orig_snapshot_path
+        main.AUTO_TRADE["config"] = self.prev_config
+        main.AUTO_TRADE["perfLocks"] = self.prev_perf_locks
+        main.AUTO_TRADE["running"] = self.prev_running
+        self.temp_dir.cleanup()
+
+    def test_load_autotrade_snapshot_restores_config_and_enforces_floor(self):
+        saved_config = {
+            "symbol": "BTCUSDT",
+            "usdtAmount": 8.0,
+            "marginSizingMaxUsdt": 8.0,
+            "marginBasedSizing": True,
+            "pairLockMinutes": 123,
+            "feeOptimalSizingEnabled": False,
+            "tvWaitMinConf": 0.88,
+            "minConfidence": 0.50,  # Below ENTRY_MIN_CONFIDENCE_FLOOR (0.72)
+            "leverage": 15,
+            "_configVersion": 23,
+        }
+        payload = {
+            "savedAt": int(main.time.time()),
+            "running": False,
+            "config": saved_config,
+        }
+        self.fake_snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+        main.AUTO_TRADE["config"] = None
+
+        main._load_autotrade_snapshot()
+
+        restored = main.AUTO_TRADE.get("config")
+        self.assertIsInstance(restored, dict)
+        self.assertEqual(restored.get("symbol"), "BTCUSDT")
+        self.assertEqual(restored.get("usdtAmount"), 8.0)
+        self.assertEqual(restored.get("pairLockMinutes"), 123)
+        self.assertFalse(restored.get("feeOptimalSizingEnabled"))
+        self.assertEqual(restored.get("tvWaitMinConf"), 0.88)
+        self.assertEqual(restored.get("leverage"), 15)
+        # Floor must be enforced
+        self.assertGreaterEqual(restored.get("minConfidence"), main.ENTRY_MIN_CONFIDENCE_FLOOR)
+        self.assertGreaterEqual(restored.get("minConfidenceHardFloor"), main.ENTRY_MIN_CONFIDENCE_FLOOR)
+
+    def test_load_autotrade_snapshot_scrubs_corrupted_types_and_out_of_range(self):
+        corrupted_config = {
+            "symbol": "ETHUSDT",
+            "usdtAmount": "invalid_string",
+            "takeProfitPct": -5.0,
+            "marginType": 12345,  # Not str
+            "leverage": 999,  # Out of range [1, 25]
+            "whitelistSymbols": "NOT_A_LIST",
+            "minConfidence": float("nan"),
+            "_configVersion": 23,
+        }
+        payload = {
+            "savedAt": int(main.time.time()),
+            "running": False,
+            "config": corrupted_config,
+        }
+        self.fake_snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+        main.AUTO_TRADE["config"] = None
+
+        main._load_autotrade_snapshot()
+
+        restored = main.AUTO_TRADE.get("config")
+        self.assertIsInstance(restored, dict)
+        self.assertEqual(restored.get("symbol"), "ETHUSDT")
+        # Invalid values fall back to defaults or safe clamped range
+        self.assertIsInstance(restored.get("usdtAmount"), float)
+        self.assertGreater(restored.get("usdtAmount"), 0.0)
+        self.assertGreater(restored.get("takeProfitPct"), 0.0)
+        self.assertIn(restored.get("marginType"), ("ISOLATED", "CROSSED"))
+        self.assertEqual(restored.get("leverage"), 25)  # Clamped to 25
+        self.assertIsInstance(restored.get("whitelistSymbols"), list)
+        self.assertTrue(math.isfinite(restored.get("minConfidence")))
+
+    def test_load_autotrade_snapshot_without_config_or_file_does_not_regress(self):
+        # Case A: File doesn't exist
+        if self.fake_snapshot_path.exists():
+            self.fake_snapshot_path.unlink()
+        main.AUTO_TRADE["config"] = {"symbol": "TESTUSDT"}
+        main._load_autotrade_snapshot()
+        self.assertEqual(main.AUTO_TRADE["config"]["symbol"], "TESTUSDT")
+
+        # Case B: File exists but has no "config" key
+        self.fake_snapshot_path.write_text(json.dumps({"running": False}), encoding="utf-8")
+        main.AUTO_TRADE["config"] = {"symbol": "EXISTINGUSDT"}
+        main._load_autotrade_snapshot()
+        self.assertEqual(main.AUTO_TRADE["config"]["symbol"], "EXISTINGUSDT")
+
+    def test_persist_and_load_roundtrip_preserves_distinctive_config(self):
+        distinctive_cfg = {
+            "symbol": "SOLUSDT",
+            "usdtAmount": 8.0,
+            "marginSizingMaxUsdt": 8.0,
+            "marginBasedSizing": True,
+            "pairLockMinutes": 123,
+            "biasGateNeutralConfMin": 0.85,
+            "tvConfirmReadings": 3,
+            "tvConfirmWindowSec": 300,
+            "feeMinOrderUsdt": 5.0,
+            "supervisorAutoTuneEnabled": False,
+            "shortEntriesEnabled": False,
+            "_configVersion": 23,
+        }
+        main.AUTO_TRADE["config"] = distinctive_cfg
+
+        from trading.state_ops import persist_autotrade_snapshot
+        with mock.patch("trading.state_ops.SNAPSHOT_PATH", self.fake_snapshot_path):
+            persist_autotrade_snapshot(force=True)
+
+        self.assertTrue(self.fake_snapshot_path.exists())
+        # Clear runtime config
+        main.AUTO_TRADE["config"] = None
+
+        # Reload from snapshot
+        main._load_autotrade_snapshot()
+
+        restored = main.AUTO_TRADE.get("config")
+        self.assertIsInstance(restored, dict)
+        self.assertEqual(restored.get("symbol"), "SOLUSDT")
+        self.assertEqual(restored.get("usdtAmount"), 8.0)
+        self.assertEqual(restored.get("pairLockMinutes"), 123)
+        self.assertEqual(restored.get("biasGateNeutralConfMin"), 0.85)
+        self.assertEqual(restored.get("tvConfirmReadings"), 3)
+        self.assertEqual(restored.get("tvConfirmWindowSec"), 300)
+        self.assertEqual(restored.get("feeMinOrderUsdt"), 5.0)
+        self.assertFalse(restored.get("supervisorAutoTuneEnabled"))
+        self.assertFalse(restored.get("shortEntriesEnabled"))
 
 
 class TestStatusLitePositionCard(unittest.TestCase):

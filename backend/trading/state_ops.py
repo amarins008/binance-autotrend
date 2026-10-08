@@ -158,15 +158,24 @@ def persist_autotrade_snapshot(force: bool = False) -> None:
                 for _sk in _stale_keys:
                     _locks_data.pop(_sk, None)
                 autotrade_log(f"[Snapshot] Cleaned {len(_stale_keys)} stale lock(s): {', '.join(_stale_keys)}")
+        persisted_cfg = app_state.AUTO_TRADE.get("config")
+        if (not isinstance(persisted_cfg, dict) or not persisted_cfg) and SNAPSHOT_PATH.exists():
+            try:
+                _old_snap = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                if isinstance(_old_snap.get("config"), dict) and _old_snap.get("config"):
+                    persisted_cfg = _old_snap.get("config")
+            except Exception:
+                pass
         payload = {
             "savedAt": int(time.time()),
             "paper": dict(app_state.AUTO_TRADE["paper"]),
-            "config": app_state.AUTO_TRADE.get("config"),
+            "config": persisted_cfg,
             "running": bool(app_state.AUTO_TRADE.get("running")),
             "pauseUntil": int(app_state.AUTO_TRADE.get("pauseUntil", 0) or 0),
             "riskCooldownLossSignature": str(app_state.AUTO_TRADE.get("riskCooldownLossSignature", "") or ""),
             "riskCooldownBySymbol": _prune_risk_cooldowns(app_state.AUTO_TRADE),
             "riskCooldownLastMarketCheckAt": int(app_state.AUTO_TRADE.get("riskCooldownLastMarketCheckAt", 0) or 0),
+            "perfLocks": app_state.AUTO_TRADE.get("perfLocks") if isinstance(app_state.AUTO_TRADE.get("perfLocks"), dict) else {},
             "sessionId": app_state.AUTO_TRADE.get("sessionId"),
             "startedAt": app_state.AUTO_TRADE.get("startedAt", 0),
             "lastTradeAt": app_state.AUTO_TRADE.get("lastTradeAt", 0),
