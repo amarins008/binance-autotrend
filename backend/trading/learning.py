@@ -1446,27 +1446,43 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
             from trading.per_symbol_storage import PerSymbolStorage
             _ps = PerSymbolStorage(VAULT_DIR, sym)
             _gl = _ps.load_guardian_lock()
+            _snap = {}
             if isinstance(_gl, dict) and _gl:
                 _snap = _gl.get("entrySnapshot", {})
-                if isinstance(_snap, dict):
-                    # copy entry fields if present
-                    
-                    for _sk, _dk in (("entryConfidence", "entryConfidence"),
-                                      ("entryScore", "entryScore"),
-                                      ("patternBias", "biasValue"),
-                                      ("patternScore", "patternScoreAtEntry")):
-                        if _snap.get(_sk) is not None:
-                            trade_log_entry[_dk] = _snap[_sk]
-                    # tvWaitMinConfUsed from snapshot (if present)
-                    if _snap.get("tvWaitMinConfUsed") is not None:
-                        trade_log_entry["tvWaitMinConfUsed"] = _snap["tvWaitMinConfUsed"]
-                    # entryNotional from snapshot (fallback to 'notional')
-                    _notional = _snap.get("entryNotional") or _snap.get("notional")
-                    if _notional is not None:
-                        try:
-                            trade_log_entry["entryNotional"] = float(_notional)
-                        except Exception:
-                            pass
+            # If lock missing or entrySnapshot absent, fallback to persisted snapshot file
+            if not isinstance(_snap, dict) or not _snap:
+                try:
+                    import json, os
+                    snap_path = os.path.join(VAULT_DIR, "symbols", sym, "entry_snapshot.json")
+                    if os.path.exists(snap_path):
+                        with open(snap_path, "r", encoding="utf-8") as f:
+                            combined = json.load(f)
+                        _snap = combined.get("entrySnapshot", {})
+                        _gs_fallback = combined.get("guardianStats", {})
+                except Exception:
+                    _snap = {}
+                    _gs_fallback = {}
+
+                except Exception:
+                    _snap = {}
+            if isinstance(_snap, dict) and _snap:
+                # copy entry fields if present
+                for _sk, _dk in (("entryConfidence", "entryConfidence"),
+                                  ("entryScore", "entryScore"),
+                                  ("patternBias", "biasValue"),
+                                  ("patternScore", "patternScoreAtEntry")):
+                    if _snap.get(_sk) is not None:
+                        trade_log_entry[_dk] = _snap[_sk]
+                # tvWaitMinConfUsed from snapshot (if present)
+                if _snap.get("tvWaitMinConfUsed") is not None:
+                    trade_log_entry["tvWaitMinConfUsed"] = _snap["tvWaitMinConfUsed"]
+                # entryNotional from snapshot (fallback to 'notional')
+                _notional = _snap.get("entryNotional") or _snap.get("notional")
+                if _notional is not None:
+                    try:
+                        trade_log_entry["entryNotional"] = float(_notional)
+                    except Exception:
+                        pass
                     # copy other optional fields if present (no zero defaults)
                     for _sk in ("tvConfirmHits", "perfLockedAtEntry",
                                 "leverageAtEntry", "feesPaidOnEntry", "adaptiveMinConf"):
@@ -1475,23 +1491,27 @@ def _record_learning_trade(symbol: str, trade: dict, mode: str):
 
 
 
-                    # existing fields for completeness / legacy
-                    if _snap.get("params_at_entry"):
-                        trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
-                        print(f"[Record Trade] {sym}: Found params_at_entry: {trade_log_entry['params_at_entry']}")
-                    else:
-                        print(f"[Record Trade] {sym}: No params_at_entry in entrySnapshot")
-                    if _snap.get("tvSignal"):
-                        trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
-                        print(f"[Record Trade] {sym}: TV at entry - signal={_snap.get('tvSignal')}, confidence={_snap.get('tvConfidence')}")
-                    else:
-                        print(f"[Record Trade] {sym}: No tvSignal in entrySnapshot")
-                    if _snap.get("tvConfidence") is not None:
-                        trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
-                        print(f"[Record Trade] {sym}: TV at entry confidence={_snap.get('tvConfidence')}")
-                    else:
-                        print(f"[Record Trade] {sym}: No tvConfidence in entrySnapshot")
-                _gs = _gl.get("guardianStats", {})
+                # existing fields for completeness / legacy
+                if _snap.get("params_at_entry"):
+                    trade_log_entry["params_at_entry"] = _snap["params_at_entry"]
+                    print(f"[Record Trade] {sym}: Found params_at_entry: {trade_log_entry['params_at_entry']}")
+                else:
+                    print(f"[Record Trade] {sym}: No params_at_entry in entrySnapshot")
+                if _snap.get("tvSignal"):
+                    trade_log_entry["tvAtEntry"] = _snap["tvSignal"]
+                    print(f"[Record Trade] {sym}: TV at entry - signal={_snap.get('tvSignal')}, confidence={_snap.get('tvConfidence')}")
+                else:
+                    print(f"[Record Trade] {sym}: No tvSignal in entrySnapshot")
+                if _snap.get("tvConfidence") is not None:
+                    trade_log_entry["tvAtEntryConfidence"] = _snap["tvConfidence"]
+                    print(f"[Record Trade] {sym}: TV at entry confidence={_snap.get('tvConfidence')}")
+                else:
+                    print(f"[Record Trade] {sym}: No tvConfidence in entrySnapshot")
+                # Load guardianStats from lock or fallback combined snapshot
+                _gs = _gl.get("guardianStats", {}) if isinstance(_gl, dict) else {}
+                if not _gs:
+                    _gs = _gs_fallback if '_gs_fallback' in locals() else {}
+
                 if isinstance(_gs, dict) and _gs:
                     trade_log_entry["guardian_stats"] = {
                         "peakProfitUsdt": _gs.get("peakProfitUsdt", 0.0),

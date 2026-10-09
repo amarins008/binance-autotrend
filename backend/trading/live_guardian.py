@@ -1257,7 +1257,15 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             st["entryMark"] = round(float(entry), 10)
         if not isinstance(st.get("entrySnapshot"), dict):
             st["entrySnapshot"] = _entry_snapshot_from_intel(sym, side, _last_decision_intel(sym, max_age_sec=30))
-        # Add per-symbol effective profile to the entry snapshot (idempotent).
+            # Remove stale entry_snapshot file to avoid mixing old entry data
+            try:
+                from pathlib import Path
+                old_snap_path = Path(VAULT_DIR) / "symbols" / sym / "entry_snapshot.json"
+                if old_snap_path.exists():
+                    old_snap_path.unlink()
+            except Exception:
+                pass
+            # Add per-symbol effective profile to the entry snapshot (idempotent).
         if isinstance(st.get("entrySnapshot"), dict):
             _eff_snap = _effective_tp_sl(sym, cfg, _last_decision_intel(sym, max_age_sec=30))
             _eff_prof = _symbol_effective_profile(sym, cfg)
@@ -2028,10 +2036,14 @@ def _persist_per_symbol_guardian_locks(locks: dict, cfg: dict | None = None) -> 
 
 
 def _persist_single_lock_before_close(lock: dict, cfg: dict | None = None) -> None:
-    """Persist a single guardian lock to disk BEFORE it's popped from in-memory.
+    """Persist guardian lock and entry snapshot before lock deletion.
 
-    This ensures _record_learning_trade can read params_at_entry and
-    guardianStats from per-symbol storage after the lock is removed.
+    ``_record_learning_trade`` reads ``entrySnapshot`` from the per‑symbol lock.
+    When the lock file is deleted during close, the snapshot disappears, causing
+    missing fields in trade logs (15/19 entries). This function now writes the
+    lock (as before) **and** stores a copy of ``entrySnapshot`` to
+    ``entry_snapshot.json`` in the symbol's vault directory. ``_record_learning_trade``
+    will fall back to this file when the lock is absent.
     """
     if not isinstance(lock, dict):
         return
@@ -2043,9 +2055,24 @@ def _persist_single_lock_before_close(lock: dict, cfg: dict | None = None) -> No
         from services.config_paths import VAULT_DIR
         from trading.per_symbol_context import PerSymbolContext
         from trading.shared_cache_layer import get_shared_cache
+        import json, os
+        from pathlib import Path
         cache = get_shared_cache(VAULT_DIR)
         ctx = PerSymbolContext(sym, cache, cfg)
+        # Save full lock for normal flow
         ctx.save_guardian_lock(lock)
+        # Save entrySnapshot and guardianStats together for learning fallback
+        # Save entrySnapshot and guardianStats together for learning fallback
+        entry_snap = lock.get("entrySnapshot")
+        guardian_stats = lock.get("guardianStats")
+        if isinstance(entry_snap, dict):
+            combined = {"entrySnapshot": entry_snap}
+            if isinstance(guardian_stats, dict):
+                combined["guardianStats"] = guardian_stats
+            snap_path = Path(VAULT_DIR) / "symbols" / sym / "entry_snapshot.json"
+            snap_path.parent.mkdir(parents=True, exist_ok=True)
+            snap_path.write_text(json.dumps(combined), encoding="utf-8")
+
     except Exception:
         pass
 
