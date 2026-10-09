@@ -4,6 +4,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from trading import learning as learning_mod
 from backend import main
 import unittest
+import unittest.mock
 
 class DummyCtx:
     def __init__(self, *args, **kwargs):
@@ -36,7 +37,10 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
             "feesPaidOnEntry": 0.04,
             "adaptiveMinConf": 0.78,
         }
-        # mock per_symbol_storage module
+        # Mock per_symbol_storage module for the duration of this call only.
+        # Assigning into sys.modules permanently replaces the real module, which
+        # breaks `import main` (which needs per_symbol_lock from it) in every
+        # test that runs afterwards — restore it in a finally.
         import types, tempfile, shutil
         temp_dir = tempfile.mkdtemp()
         # Ensure learning_mod uses temp VAULT_DIR to avoid side effects
@@ -46,14 +50,17 @@ class TestEntrySnapshotFromGuardian(unittest.TestCase):
                 pass
             def load_guardian_lock(self):
                 return {"entrySnapshot": dummy_snapshot}
-        sys.modules['trading.per_symbol_storage'] = types.SimpleNamespace(PerSymbolStorage=MockPerSymbolStorage)
-        # capture output
         captured = {}
         learning_mod._append_trade_log = lambda entry: captured.update(entry)
-        trade = {"pnl": 1.2, "closedAt": 1700000000, "reason": "LOCAL_TP_HIT"}
-        learning_mod._record_learning_trade("TESTUSDT", trade, "LIVE")
-        # cleanup temp dir
-        shutil.rmtree(temp_dir)
+        try:
+            with unittest.mock.patch.dict(
+                sys.modules,
+                {"trading.per_symbol_storage": types.SimpleNamespace(PerSymbolStorage=MockPerSymbolStorage)},
+            ):
+                trade = {"pnl": 1.2, "closedAt": 1700000000, "reason": "LOCAL_TP_HIT"}
+                learning_mod._record_learning_trade("TESTUSDT", trade, "LIVE")
+        finally:
+            shutil.rmtree(temp_dir)
 
         # assertions
         self.assertEqual(captured["entryConfidence"], dummy_snapshot["entryConfidence"])

@@ -1,4 +1,10 @@
-"""Comprehensive PineForge Engine integration tests."""
+"""Comprehensive PineForge Engine integration tests.
+
+This file is a standalone script runner: every check executes at import time
+and the results are printed, so pytest has nothing to collect. ``__test__ =
+False`` keeps pytest from trying to collect the ``test``/``test_*`` helper
+functions as real test cases (which fails with "fixture 'name' not found").
+"""
 import csv
 import math
 import os
@@ -6,10 +12,13 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"E:\My Project\Binance autotrend\backend")
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "backend"))
 
-STRATEGY_SO = Path(r"E:\My Project\Binance autotrend\pineforge-engine\tutorial\macd\strategy.so")
-CSV_PATH = Path(r"E:\My Project\Binance autotrend\pineforge-engine\tutorial\data\btcusdt_15m.csv")
+__test__ = False  # standalone script runner, not a pytest module
+
+STRATEGY_SO = _ROOT / "pineforge-engine" / "tutorial" / "macd" / "strategy.so"
+CSV_PATH = _ROOT / "pineforge-engine" / "tutorial" / "data" / "btcusdt_15m.csv"
 PASSED = 0
 FAILED = 0
 
@@ -330,4 +339,7 @@ test("4-config sweep speed", test_sweep_speed)
 print(f"\n{'='*60}")
 print(f"  RESULTS: {PASSED} passed, {FAILED} failed, {PASSED+FAILED} total")
 print(f"{'='*60}")
-sys.exit(1 if FAILED else 0)
+# sys.exit here aborts a pytest run with INTERNALERROR, so only exit when
+# invoked directly as a script runner.
+if __name__ == "__main__":
+    sys.exit(1 if FAILED else 0)

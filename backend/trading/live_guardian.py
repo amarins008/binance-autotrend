@@ -1911,6 +1911,12 @@ async def _live_multi_profit_lock_manage(cfg: dict) -> bool:
             st["armed"] = True
             st["lockUsdt"] = round(max(fee_min_capture, lock_policy_lock_usdt), 6)
             _autotrade_log(f"Profit lock armed: {sym} {side} lock={st['lockUsdt']:.3f} peak={st['peak']:.3f}")
+        # ratchet lockUsd upward if peak grows while armed
+        if st.get("armed"):
+            new_lock = round(max(fee_min_capture, lock_policy_lock_usdt), 6)
+            if new_lock > st.get("lockUsdt", 0):
+                st["lockUsdt"] = new_lock
+                _autotrade_log(f"Profit lock ratcheted: {sym} {side} lock={st['lockUsdt']:.3f} peak={st['peak']:.3f}")
 
         if st.get("armed") and st["peak"] >= max(fee_min_capture, 0.12):
             max_giveback = max(0.01,

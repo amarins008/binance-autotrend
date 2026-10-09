@@ -7,11 +7,11 @@ REM   - Run this AS ADMINISTRATOR (right-click -> Run as administrator)
 REM ===========================================================
 setlocal
 
-set "WD_BAT=D:\My Project\Binance autotrend\backend\watchdog.bat"
+set "WD_VBS=D:\My Project\Binance autotrend\backend\watchdog_silent.vbs"
 set "TASK_NAME=BinanceAutotrendWatchdog"
 
-if not exist "%WD_BAT%" (
-    echo ERROR: Missing script: %WD_BAT%
+if not exist "%WD_VBS%" (
+    echo ERROR: Missing script: %WD_VBS%
     pause
     exit /b 1
 )
@@ -20,10 +20,10 @@ echo.
 echo === Removing old task (if any) ===
 schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
 
-echo === Creating scheduled task: %TASK_NAME% ===
+echo === Creating scheduled task: %TASK_NAME% (Silent Background) ===
 schtasks /Create ^
   /TN "%TASK_NAME%" ^
-  /TR "\"%WD_BAT%\"" ^
+  /TR "wscript.exe //B //Nologo \"%WD_VBS%\"" ^
   /SC MINUTE ^
   /MO 5 ^
   /RL LIMITED ^
