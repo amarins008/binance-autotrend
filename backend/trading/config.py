@@ -683,15 +683,14 @@ def apply_autotrade_defaults(cfg: dict | None, *, preset: str | None = "pro") ->
     out.setdefault("benchmarkFilterEnabled", True)
     out.setdefault("liveBadUtcHours", [])
     if isinstance(out.get("liveBadUtcHours"), list):
-        unlocked_hours = []
+        valid_hours = []
         for h in out["liveBadUtcHours"]:
             try:
                 hour = int(h)
             except (TypeError, ValueError):
                 continue
-            if hour != 7:
-                unlocked_hours.append(hour)
-        out["liveBadUtcHours"] = unlocked_hours
+            valid_hours.append(hour)
+        out["liveBadUtcHours"] = valid_hours
     out.setdefault("riskCooldownEnabled", True)  # V13.8: per-symbol cooldown after loss streaks (was False)
     out.setdefault("riskCooldownAdaptiveMarket", True)
     out.setdefault("riskCooldownAdaptiveCheckSec", 30)
